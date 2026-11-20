@@ -30,6 +30,7 @@ from .protocol import (
     Pong,
     Renew,
     Renewed,
+    Typing,
     Unpair,
     b64,
 )
@@ -179,7 +180,7 @@ class Tunnel:
         async with self._send_lock:
             await self.ws.send(frame.model_dump_json(exclude_none=True))
 
-    async def send_out(self, frame: Out) -> None:
+    async def send_out(self, frame: Out | Typing) -> None:
         try:
             await self._send(frame)
         except (ConnectionError, websockets.WebSocketException):

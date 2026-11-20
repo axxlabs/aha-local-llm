@@ -8,7 +8,7 @@ import logging
 import os
 import time
 
-from . import __version__
+from . import __version__, messages
 from .accounts import Accounts
 from .agent import Agent
 from .certs import load_or_create_key, public_b64
@@ -50,7 +50,7 @@ class Service:
     async def _paired(self, address: str) -> None:
         acct = self.accounts.get(address)
         if acct:
-            await self.agent.send(acct, "Hi! I'm aha, running on your computer. Ask me anything, or say *help*.")
+            await self.agent.send(acct, messages.WELCOME)
 
     async def run(self) -> None:
         self.browser.start()

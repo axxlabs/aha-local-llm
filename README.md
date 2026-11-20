@@ -1,6 +1,6 @@
 # aha-local-llm
 
-**aha** is a private personal assistant that runs on your own computer, and that you talk to from WhatsApp or
+**Aha! Your private agent.** It runs on your own computer, and you talk to it from WhatsApp or
 Telegram. The model, your memories, your documents and your conversation history never leave your computer.
 Before aha types anything into a website or saves something about you, it asks you in the chat, with
 buttons: Approve, Edit, Decline.

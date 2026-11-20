@@ -14,13 +14,14 @@ from .accounts import Account, Accounts
 from .approvals import Approvals
 from .config import Config
 from .llm import LLM, ModelUnavailable
-from .protocol import Button, Image, In, Out
+from .protocol import Button, Image, In, Out, Typing
 from .tools import memory
 from .tools.registry import Registry, TaskState, ToolContext
 
 log = logging.getLogger("aha.agent")
 
-SendOut = Callable[[Out], Awaitable[None]]
+SendOut = Callable[[Out | Typing], Awaitable[None]]
+TYPING_EVERY = 4.0  # seconds between `typing` frames while a reply is owed (SPEC §3.3)
 STOP_WORDS = {"stop", "cancel", "stop it", "stop that"}
 NEW_MESSAGE = "[New message from the user while you were working]\n{text}"
 
@@ -43,7 +44,8 @@ class Agent:
         self.running: dict[str, asyncio.Task] = {}
         # Messages that arrive while the account's task runs: the task reads them before its next model call.
         self.inbox: dict[str, list[str]] = defaultdict(list)
-        self.sent: dict[str, int] = defaultdict(int)  # messages sent per account, to skip "On it…"
+        self.sent: dict[str, int] = defaultdict(int)  # messages sent per account, to know if they've heard back
+        self.typing_every = TYPING_EVERY
 
     # ---- outbound
 
@@ -98,10 +100,7 @@ class Agent:
         if not text:
             return
         if account.address in self.running:
-            inbox = self.inbox[account.address]
-            inbox.append(text)
-            if len(inbox) == 1:  # one acknowledgement per batch, not one per message
-                await self.send(account, messages.NOTED)
+            self.inbox[account.address].append(text)  # the running task reads it; "typing…" already shows
             return
         self.running[account.address] = asyncio.create_task(self.run(account, text))
 
@@ -117,6 +116,7 @@ class Agent:
     # ---- tasks
 
     async def run(self, account: Account, text: str) -> None:
+        typing = asyncio.create_task(self._typing(account))
         try:
             while True:
                 await self._task(account, text)
@@ -127,12 +127,25 @@ class Agent:
                 text = "\n\n".join(pending)
         finally:
             self.running.pop(account.address, None)
+            typing.cancel()
+            await self._send_frame(Typing(to=account.address, on=False))
+
+    async def _typing(self, account: Account) -> None:
+        """While a reply is owed: "typing…", refreshed, except while the person owes us an approval answer."""
+        while True:
+            if self.approvals.pending_for(account.address) is None:
+                await self._send_frame(Typing(to=account.address))
+            await asyncio.sleep(self.typing_every)
+
+    async def _send_frame(self, frame: Typing) -> None:
+        try:
+            await self.send_out(frame)
+        except Exception:
+            log.warning("couldn't send a typing frame")
 
     async def _task(self, account: Account, text: str) -> None:
-        on_it = asyncio.create_task(self._on_it(account))
+        sent_before = self.sent[account.address]
         try:
-            if self.llm.lock.locked() and len(self.running) > 1:
-                await self.send(account, messages.BUSY)
             answer, checked, text = await asyncio.wait_for(
                 self.solve(account, text), timeout=self.config.max_task_seconds
             )
@@ -149,19 +162,14 @@ class Agent:
         except Exception:
             log.exception("task failed")
             answer, checked = messages.FAILED, False
-        finally:
-            on_it.cancel()
-        await self.send(account, answer)
+        if not answer.strip():
+            # After "✅ Save" there may be nothing to add; if they've heard nothing at all, say something.
+            answer = "" if self.sent[account.address] > sent_before else "…"
+        if answer:
+            await self.send(account, answer)
         account.transcript({"kind": "answer", "text": answer})
         conv = context.record_turn(account, text, answer, checked)
         await self._fold(account, conv)
-
-    async def _on_it(self, account: Account) -> None:
-        """Once, after a while, unless the person has already heard from this task (an approval, an update)."""
-        sent_before = self.sent[account.address]
-        await asyncio.sleep(self.config.on_it_after)
-        if self.sent[account.address] == sent_before:
-            await self.send(account, messages.ON_IT)
 
     async def solve(self, account: Account, text: str) -> tuple[str, bool, str]:
         """Returns the answer, whether it passed the checks, and everything the person said during the task."""
@@ -174,6 +182,8 @@ class Agent:
         tools = self.registry.specs()
         last = ""
         retried = False
+        memory_retried = False
+        called: set[str] = set()  # tools that ran without error in this task
         # Where numbers in the answer may come from: what the person said or saved, earlier answers, and pages
         # opened in this task. Search snippets don't count (SPEC §3.5).
         conv = account.load_context()
@@ -193,6 +203,12 @@ class Agent:
             reply = await self.llm.chat(msgs, tools)
             log.info("model call: %d prompt tokens, %d cached", reply.prompt_tokens, reply.cached_tokens)
             if not reply.tool_calls:
+                if not memory_retried and checks.unbacked_memory_claim(text, reply.content or "", called):
+                    memory_retried = True
+                    log.info("draft answer claimed a memory change no tool made; asking the model to fix it")
+                    task.append({"role": "assistant", "content": reply.content or ""})
+                    task.append({"role": "user", "content": checks.MEMORY_RETRY})
+                    continue
                 missing = checks.unverified(checks.chat_format(reply.content or ""), sources)
                 if missing and not retried:
                     # One more go: ask the model to confirm the numbers on a page, or drop them (SPEC §3.5).
@@ -201,7 +217,7 @@ class Agent:
                     task.append({"role": "assistant", "content": reply.content or ""})
                     task.append({"role": "user", "content": checks.retry_prompt(missing)})
                     continue
-                return (*finish(reply.content or "…", sources), text)
+                return (*finish(reply.content or "", sources), text)
             last = reply.content or last
             task.append(
                 {
@@ -226,6 +242,8 @@ class Agent:
                         "error": result.error,
                     }
                 )
+                if not result.error:
+                    called.add(call.name)
                 if call.name not in UNSOURCED_TOOLS and not result.error:
                     sources.append(result.text)
                 task.append(

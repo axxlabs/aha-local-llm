@@ -161,10 +161,10 @@ async def test_messages_during_a_task_reach_the_running_task(agent, llm, chat, r
     await asyncio.sleep(0.05)
     await agent.inbound(said("how is it going?"))
     await agent.inbound(said("also check Tuesday"))
-    assert chat.texts() == ["Got it, I'll take that into account."]  # one acknowledgement for the batch
+    assert chat.texts() == []  # no acknowledgement: "typing…" shows a reply is coming
     gate.set()
     await settle(agent)
-    assert chat.texts()[1:] == ["Halfway there.", "first done"]
+    assert chat.texts() == ["Halfway there.", "first done"]
     news = [m["content"] for m in llm.requests[1]["messages"] if str(m["content"]).startswith("[New message")]
     assert len(news) == 2 and "also check Tuesday" in news[1]
     turns = agent.accounts.get(ADDRESS).load_context()["turns"]
@@ -190,7 +190,7 @@ async def test_messages_after_the_last_step_become_one_follow_up(agent, llm, cha
         await agent.inbound(said(text))
     gate.set()
     await settle(agent)
-    assert chat.texts() == ["Got it, I'll take that into account.", "first done", "follow-up done"]
+    assert chat.texts() == ["first done", "follow-up done"]
     last_user = [m for m in llm.requests[-1]["messages"] if m["role"] == "user"][-1]["content"]
     assert last_user == "one\n\ntwo\n\nthree"
 
@@ -211,19 +211,20 @@ async def test_cancel_words_stop_the_task(agent, llm, chat, registry):
     assert chat.texts() == ["Stopped."]
 
 
-async def test_on_it_after_a_while(agent, llm, chat, registry, config):
-    object.__setattr__(config, "on_it_after", 0.05)
-
-    async def slow(args, ctx):
-        await asyncio.sleep(0.2)
-        return ToolResult("ok")
-
-    registry.add(Tool("slow", "slow", params(), slow))
-    llm.call("slow")
-    llm.answer("done")
-    await agent.inbound(said("go"))
+async def test_typing_while_a_reply_is_owed_but_not_while_an_approval_waits(agent, llm, chat):
+    agent.typing_every = 0.02
+    llm.call("memory_add", text="Wife is vegetarian")
+    llm.answer("Noted.")
+    await agent.inbound(said("my wife is vegetarian"))
+    ask = await chat.next()
+    await asyncio.sleep(0.05)  # waiting on the person: no new typing frames
+    during = len(chat.typing)
+    await asyncio.sleep(0.1)
+    assert len(chat.typing) == during
+    await agent.inbound(said("ok", button=ask.buttons[0].id))
     await settle(agent)
-    assert chat.texts() == ["On it…", "done"]
+    assert chat.typing[0] is True and chat.typing[-1] is False
+    assert chat.texts() == [ask.text, "Noted."]  # no "On it…", no "Busy…"
 
 
 async def test_unpaired_addresses_are_ignored(agent, chat):
@@ -247,13 +248,21 @@ async def test_documents_search_and_read(agent, llm, chat, config):
     assert "no such document" in tools[1]["content"]
 
 
-async def test_no_on_it_after_an_approval(agent, llm, chat, config):
-    object.__setattr__(config, "on_it_after", 0.1)
-    llm.call("memory_add", text="Wife is vegetarian")
-    llm.answer("Noted.")
-    await agent.inbound(said("my wife is vegetarian"))
-    ask = await chat.next()
-    await asyncio.sleep(0.2)
-    await agent.inbound(said("ok", button=ask.buttons[0].id))
+async def test_a_claimed_forget_without_the_tool_is_sent_back(agent, llm, chat):
+    llm.answer("Done, I've forgotten where you live.")
+    llm.answer("I haven't removed it yet. Shall I?")
+    await agent.inbound(said("forget where I live"))
     await settle(agent)
-    assert "On it…" not in chat.texts()
+    assert chat.texts() == ["I haven't removed it yet. Shall I?"]
+    assert "[aha check]" in llm.requests[1]["messages"][-1]["content"]
+
+
+async def test_an_empty_answer_after_an_approval_sends_nothing(agent, llm, chat):
+    llm.call("memory_add", text="Lives in Testville")
+    llm.answer("")
+    await agent.inbound(said("I live in Testville"))
+    approval = await chat.next()
+    await agent.inbound(said(approval.buttons[0].label, button=approval.buttons[0].id))
+    await settle(agent)
+    assert chat.texts() == [approval.text]  # no "…" after the save
+    assert agent.accounts.get(ADDRESS).load_memory()[0]["text"] == "Lives in Testville"

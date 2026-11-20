@@ -31,7 +31,6 @@ documents = "{documents}"
 dir = "{models_dir}"
 
 [agent]
-on_it_after_seconds = 20
 approval_expiry_hours = 24
 max_model_calls_per_task = 40
 max_task_minutes = 15
@@ -50,7 +49,6 @@ class Config:
     timezone: str = "Europe/London"
     documents: Path = Path.home() / "Documents" / "aha"
     models_dir: Path = Path.home() / "aha-models"
-    on_it_after: float = 20
     approval_expiry: float = 24 * 3600
     max_model_calls: int = 40
     max_task_seconds: float = 15 * 60
@@ -77,7 +75,6 @@ class Config:
             timezone=hh.get("timezone", "Europe/London"),
             documents=Path(hh.get("documents", "~/Documents/aha")).expanduser(),
             models_dir=Path(models.get("dir", "~/aha-models")).expanduser(),
-            on_it_after=float(agent.get("on_it_after_seconds", 20)),
             approval_expiry=float(agent.get("approval_expiry_hours", 24)) * 3600,
             max_model_calls=int(agent.get("max_model_calls_per_task", 40)),
             max_task_seconds=float(agent.get("max_task_minutes", 15)) * 60,

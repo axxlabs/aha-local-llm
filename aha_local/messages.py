@@ -1,8 +1,5 @@
 """Every text aha sends on its own (not written by the model). One place, so wording changes are one edit."""
 
-ON_IT = "On it…"
-BUSY = "Busy with another request, you're next."
-NOTED = "Got it, I'll take that into account."
 STOPPED = "Stopped."
 NOTHING_TO_STOP = "Nothing is running."
 FORGOT_LAST = "Done: I've dropped our last exchange from what I keep in mind."
@@ -16,7 +13,9 @@ EDIT_ONE = "Send the corrected value."
 EDIT_MANY = "Send the corrected fields, one per line, like:\n`{example}`"
 EDIT_UNCLEAR = "I couldn't match that to the fields. Send lines like `2: new value`, or tap Approve or Decline."
 
-HELP = """*aha* runs on your own computer. Ask me anything: I look things up, read web pages, book things on websites, \
+WELCOME = "Hi! I'm *Aha!*, your private agent, running on your own computer. Ask me anything, or say *help*."
+HELP = """*Aha!* is your private agent, and it runs on your own computer. Ask me anything: I look things up, \
+read web pages, book things on websites, \
 find things in your documents and remember what matters about you.
 
 Before I type anything into a website or save something about you, I'll ask you with buttons: *Approve*, \

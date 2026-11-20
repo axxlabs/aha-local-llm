@@ -83,13 +83,40 @@ def unverified(answer: str, sources: list[str]) -> list[str]:
 WARNING_MARK = "⚠️ _Not confirmed on a page I opened"
 
 
+MEMORY_REQUEST = re.compile(r"\b(forget|remember|memor\w*|save|saving|delete|remove|erase|update|change)\b", re.I)
+# Affirmative only: "I've forgotten", "Done, I deleted", "I'll no longer remember". "I haven't saved" and
+# "I never saved" don't match, because the verb must follow "I", "I've", "I have" directly.
+MEMORY_CLAIM = re.compile(
+    r"\b(?:I|I've|I have|I've now|I have now|I just)\s+(?:forgot|forgotten|removed|deleted|erased|saved|"
+    r"remembered|updated|stored|noted)\b|\bI(?:'ll| will) no longer remember\b",
+    re.I,
+)
+MEMORY_WRITE_TOOLS = {"memory_add", "memory_update", "memory_delete"}
+
+
+def unbacked_memory_claim(asked: str, answer: str, tools_called: set[str]) -> bool:
+    """The person asked about their memories, the answer says it's done, and no memory tool ran in this task.
+
+    Memories change only through the tools (and the person's approval), so such an answer is untrue.
+    """
+    return bool(MEMORY_REQUEST.search(asked) and MEMORY_CLAIM.search(answer) and not tools_called & MEMORY_WRITE_TOOLS)
+
+
+MEMORY_RETRY = (
+    "[aha check] Your draft says a memory was saved, changed or forgotten, but you haven't called memory_add, "
+    "memory_update or memory_delete in this task, so nothing changed. Memories are listed in the <context> block. "
+    "If the person wants a change, call the tool now (they'll approve it); if not, correct your answer. "
+    "Then write your reply to the person from scratch: they haven't seen your draft, and never mention this check."
+)
+
+
 def retry_prompt(values: list[str]) -> str:
     shown = ", ".join(values[:8])
     return (
         f"[aha check] Your draft answer contains numbers that aren't on any page you opened in this task: {shown}. "
         "Search snippets don't count. Open the page that shows them (fetch_url, or the browser if the site "
         "blocks it) and confirm them, or give the answer without them and say you couldn't confirm them. "
-        "Then reply to the person again; they haven't seen your draft."
+        "Then write your reply to the person from scratch: they haven't seen your draft, and never mention this check."
     )
 
 

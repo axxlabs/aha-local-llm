@@ -106,3 +106,16 @@ async def test_the_check_gives_the_model_one_chance_to_confirm(agent, llm, chat,
 
 def test_one_digit_times_are_checked():
     assert checks.numbers_in("closes at 5 pm, or 5pm") == ["5 pm"]
+
+
+def test_memory_claims_need_a_memory_tool():
+    from aha_local.checks import unbacked_memory_claim
+
+    assert unbacked_memory_claim("forget where I live", "Done, I've forgotten where you live.", set())
+    assert not unbacked_memory_claim("forget where I live", "Done, I've forgotten it.", {"memory_delete"})
+    assert not unbacked_memory_claim("compare razors", "I removed the filter and found two.", set())
+    assert not unbacked_memory_claim("forget it", "Sure, which one should I drop?", set())
+    assert not unbacked_memory_claim("forget where I live", "I never saved where you live, so there's nothing.", set())
+    assert not unbacked_memory_claim("forget where I live", "I haven't saved that, so nothing to forget.", set())
+    assert unbacked_memory_claim("remember my dentist", "Done, I've saved it.", set())
+    assert unbacked_memory_claim("forget that", "I'll no longer remember it.", set())

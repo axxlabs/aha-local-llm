@@ -13,7 +13,7 @@ from aha_local.accounts import Accounts
 from aha_local.agent import Agent
 from aha_local.config import Config
 from aha_local.llm import Reply, ToolCall
-from aha_local.protocol import Cert, In, Out
+from aha_local.protocol import Cert, In, Out, Typing
 from aha_local.tools import conversation, documents, memory
 from aha_local.tools.registry import Registry
 
@@ -44,9 +44,13 @@ class Chat:
     def __init__(self) -> None:
         self.sent: list[Out] = []
         self.read = 0  # messages already returned by next()
+        self.typing: list[bool] = []  # `typing` frames, in order
 
-    async def send(self, frame: Out) -> None:
-        self.sent.append(frame)
+    async def send(self, frame) -> None:
+        if isinstance(frame, Typing):
+            self.typing.append(frame.on)
+        else:
+            self.sent.append(frame)
 
     async def next(self, timeout: float = 3) -> Out:
         """The next message not read yet, waiting for it if needed."""
@@ -70,7 +74,6 @@ def config(tmp_path: Path) -> Config:
         gateway_pin="x",
         data_dir=tmp_path / "data",
         documents_mount=tmp_path / "docs",
-        on_it_after=30,
         approval_expiry=5,
         context_tokens=131072,
     )

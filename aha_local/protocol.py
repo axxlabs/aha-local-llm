@@ -107,6 +107,14 @@ class Out(Strict):
     image: Image | None = None
 
 
+class Typing(Strict):
+    """A reply to this person is coming (SPEC §3.3): sent every few seconds while it lasts; on=False ends it."""
+
+    t: Literal["typing"] = "typing"
+    to: Address
+    on: bool = True
+
+
 class PairStart(Strict):
     t: Literal["pair_start"] = "pair_start"
 
@@ -155,7 +163,7 @@ class Pong(Strict):
 
 
 ToComputer = Annotated[In | PairCode | Paired | Renewed | Notice | Ping | Pong, Field(discriminator="t")]
-ToGateway = Annotated[Out | PairStart | Unpair | Renew | Ping | Pong, Field(discriminator="t")]
+ToGateway = Annotated[Out | Typing | PairStart | Unpair | Renew | Ping | Pong, Field(discriminator="t")]
 TO_COMPUTER = TypeAdapter(ToComputer)
 TO_GATEWAY = TypeAdapter(ToGateway)
 HELLO = TypeAdapter(Hello)
