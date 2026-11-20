@@ -1,0 +1,4 @@
+# Containers on this network reach each other but not the internet or the LAN (SPEC §3.1).
+[Network]
+NetworkName=aha-internal
+Internal=true

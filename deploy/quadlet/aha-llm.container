@@ -1,0 +1,24 @@
+# The model server: on the internal network only, so it can't reach the internet or the LAN (SPEC §3.6).
+[Unit]
+Description=aha model server (llama.cpp)
+
+[Container]
+ContainerName=aha-llm
+Image=ghcr.io/ggml-org/llama.cpp:server-cuda
+Network=aha-internal.network
+AddDevice=nvidia.com/gpu=all
+SecurityLabelDisable=true
+DropCapability=ALL
+NoNewPrivileges=true
+ReadOnly=true
+Tmpfs=/tmp
+Volume=@MODELS@:/models:ro
+Volume=@DEPLOY@/models.ini:/config/models.ini:ro
+Exec=--host 0.0.0.0 --port 8081 --models-preset /config/models.ini --models-max 1
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target

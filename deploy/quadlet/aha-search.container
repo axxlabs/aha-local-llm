@@ -1,0 +1,22 @@
+# Web search (SearXNG): no accounts, no cookies; reachable only by the agent.
+[Unit]
+Description=aha web search (SearXNG)
+
+[Container]
+ContainerName=aha-search
+Image=docker.io/searxng/searxng:latest
+Network=aha-egress.network
+DropCapability=ALL
+AddCapability=CHOWN SETUID SETGID DAC_OVERRIDE
+NoNewPrivileges=true
+Volume=@DEPLOY@/searxng/settings.yml:/etc/searxng/settings.yml:ro
+Tmpfs=/var/cache/searxng
+Environment=GRANIAN_PORT=8080
+Environment=SEARXNG_SECRET=@SEARCH_SECRET@
+PodmanArgs=--memory=1g --pids-limit=256
+
+[Service]
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

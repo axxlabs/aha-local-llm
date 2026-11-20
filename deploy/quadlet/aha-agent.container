@@ -1,0 +1,28 @@
+# The agent: the only container on both networks. Holds the data volume; documents are read-only.
+[Unit]
+Description=aha agent
+Wants=aha-llm.service aha-search.service aha-browser.service
+After=aha-llm.service aha-search.service aha-browser.service
+
+[Container]
+ContainerName=aha-agent
+Image=@AGENT_IMAGE@
+Network=aha-internal.network
+Network=aha-egress.network
+SecurityLabelDisable=true
+DropCapability=ALL
+NoNewPrivileges=true
+ReadOnly=true
+Tmpfs=/tmp
+Volume=@DATA@:/data
+Volume=@CONFIG@:/config/config.toml:ro
+Volume=@DOCUMENTS@:/documents:ro
+@GATEWAY_VOLUME@
+PodmanArgs=--memory=2g --pids-limit=256
+
+[Service]
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

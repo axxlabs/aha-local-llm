@@ -1,0 +1,3 @@
+# Internet access for search, the browser and the agent's tunnel to the gateway.
+[Network]
+NetworkName=aha-egress

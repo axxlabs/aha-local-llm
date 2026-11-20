@@ -1,0 +1,47 @@
+[project]
+name = "aha-local-llm"
+version = "0.1.0"
+description = "aha: a private personal assistant that runs on your own computer and that you talk to from WhatsApp"
+license = "AGPL-3.0-or-later"
+requires-python = ">=3.12"
+dependencies = [
+    "cryptography>=44",
+    "httpx>=0.28",
+    "mcp>=1.20,<2",
+    "pydantic>=2.9",
+    "pypdf>=5",
+    "python-docx>=1.1",
+    "trafilatura>=2",
+    "websockets>=14",
+]
+
+[project.scripts]
+aha = "aha_local.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["aha_local"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]

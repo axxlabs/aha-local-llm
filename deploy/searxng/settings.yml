@@ -1,0 +1,13 @@
+# SearXNG for aha: defaults, plus JSON output for the agent (SPEC §3.4).
+# The secret key is replaced at start from SEARXNG_SECRET (set by the unit).
+use_default_settings: true
+general:
+  instance_name: "aha search"
+search:
+  safe_search: 0
+  formats: [html, json]
+server:
+  secret_key: "replaced-at-start"
+  limiter: false
+  public_instance: false
+  image_proxy: false
