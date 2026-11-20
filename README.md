@@ -6,8 +6,18 @@ Before aha types anything into a website or saves something about you, it asks y
 buttons: Approve, Edit, Decline.
 
 This repo is the part that runs on your computer. Messages reach it through an
-[aha gateway](../aha-gateway) (self-hosted, or the hosted one for $5/month), which relays them and keeps
-nothing. The full specification is `SPEC.md` in aha-root.
+[Aha! gateway](https://github.com/axxlabs/aha-gateway) (self-hosted, or the hosted one for $5/month per user),
+which relays them and keeps nothing. Website: https://axxlabs.ai/aha/
+
+## Install with a coding agent (easiest)
+
+Open Claude Code (or another coding agent) on the computer that will run aha and say:
+
+> Install Aha! for me from https://github.com/axxlabs/aha-local-llm. Follow its AGENTS.md, section "Setting up aha for a user".
+
+It checks your machine, asks you a few questions (which gateway, which documents folder), downloads the
+model and sets everything up. It suggests the hosted Aha! gateway ($5/month per user); you can host your own
+instead.
 
 ## What you need
 
