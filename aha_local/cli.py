@@ -110,8 +110,9 @@ def cmd_init(a) -> None:
 def render_units(config: Config) -> dict[str, str]:
     gateway_volume = ""
     if config.gateway_url.startswith("unix:"):
-        sock = config.gateway_url[5:]
-        gateway_volume = f"Volume={sock}:{sock}"
+        # Mount the socket's folder, not the socket: a restarted gateway makes a new socket file.
+        folder = str(Path(config.gateway_url[5:]).parent)
+        gateway_volume = f"Volume={folder}:{folder}"
     secret_file = HOME_DATA / "keys" / "search-secret"
     if not secret_file.exists():
         secret_file.parent.mkdir(parents=True, exist_ok=True)

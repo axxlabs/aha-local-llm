@@ -66,7 +66,7 @@ def test_units_render_with_sandboxing(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cli, "HOME_DATA", tmp_path / "data")
     config = Config(
-        gateway_url="unix:/run/user/1000/aha-gateway.sock",
+        gateway_url="unix:/run/user/1000/aha-gateway/gateway.sock",
         gateway_pin="x",
         models_dir=tmp_path / "models",
         documents=tmp_path / "docs",
@@ -78,7 +78,7 @@ def test_units_render_with_sandboxing(tmp_path, monkeypatch):
     agent = units["aha-agent.container"]
     assert "Network=aha-internal.network" in agent and "Network=aha-egress.network" in agent
     assert f"Volume={tmp_path / 'docs'}:/documents:ro" in agent
-    assert "Volume=/run/user/1000/aha-gateway.sock:/run/user/1000/aha-gateway.sock" in agent
+    assert "Volume=/run/user/1000/aha-gateway:/run/user/1000/aha-gateway" in agent
     assert "Internal=true" in units["aha-internal.network"]
     for text in units.values():
         assert "@DATA@" not in text and "@SEARCH_SECRET@" not in text

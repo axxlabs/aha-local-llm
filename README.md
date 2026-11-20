@@ -51,6 +51,6 @@ uv run ruff check . && uv run ruff format --check .
 ```
 
 For an end-to-end run on one machine, start a staging gateway from aha-gateway (`scripts/dev.sh`), then
-`aha init --gateway unix:$XDG_RUNTIME_DIR/aha-gateway.sock` and open http://127.0.0.1:8700/test.
+`aha init --gateway unix:$XDG_RUNTIME_DIR/aha-gateway/gateway.sock` and open http://127.0.0.1:8700/test.
 
 Licence: AGPL-3.0-or-later.
