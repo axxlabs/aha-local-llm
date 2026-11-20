@@ -113,13 +113,14 @@ def strip(m: dict) -> dict:
     return {k: v for k, v in m.items() if not k.startswith("_")}
 
 
-def record_turn(account: Account, user_text: str, answer: str) -> dict:
+def record_turn(account: Account, user_text: str, answer: str, checked: bool = False) -> dict:
+    """`checked`: the answer passed the number check, so its numbers may be quoted again later."""
     conv = account.load_context()
     stamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     conv.setdefault("turns", []).extend(
         [
             {"role": "user", "content": user_text, "ts": stamp},
-            {"role": "assistant", "content": answer, "ts": stamp},
+            {"role": "assistant", "content": answer, "ts": stamp, "checked": checked},
         ]
     )
     account.save_context(conv)

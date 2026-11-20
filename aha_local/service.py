@@ -41,7 +41,7 @@ class Service:
             self._inbound,
             self._paired,
         )
-        self.agent = Agent(config, self.accounts, self.llm, self.registry, self.tunnel.send_out)
+        self.agent = Agent(config, self.accounts, self.llm, self.registry, self.tunnel.send_out, self.browser)
         self.started = time.time()
 
     async def _inbound(self, frame) -> None:

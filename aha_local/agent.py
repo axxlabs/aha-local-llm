@@ -9,7 +9,7 @@ import uuid
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
 
-from . import context, messages
+from . import checks, context, messages
 from .accounts import Account, Accounts
 from .approvals import Approvals
 from .config import Config
@@ -29,12 +29,15 @@ class ApprovalExpired(Exception):
 
 
 class Agent:
-    def __init__(self, config: Config, accounts: Accounts, llm: LLM, registry: Registry, send_out: SendOut) -> None:
+    def __init__(
+        self, config: Config, accounts: Accounts, llm: LLM, registry: Registry, send_out: SendOut, browser=None
+    ) -> None:
         self.config = config
         self.accounts = accounts
         self.llm = llm
         self.registry = registry
         self.send_out = send_out
+        self.browser = browser
         self.approvals = Approvals(self.send, config.approval_expiry)
         self.running: dict[str, asyncio.Task] = {}
         self.queued: dict[str, deque[str]] = defaultdict(deque)
@@ -122,36 +125,45 @@ class Agent:
         try:
             if self.llm.lock.locked() and len(self.running) > 1:
                 await self.send(account, messages.BUSY)
-            answer = await asyncio.wait_for(self.solve(account, text), timeout=self.config.max_task_seconds)
+            answer, checked = await asyncio.wait_for(self.solve(account, text), timeout=self.config.max_task_seconds)
         except asyncio.CancelledError:
             account.transcript({"kind": "stopped"})
             raise
         except TimeoutError:
-            answer = messages.TOO_LONG
+            answer, checked = messages.TOO_LONG, False
         except ApprovalExpired:
-            answer = messages.APPROVAL_EXPIRED
+            answer, checked = messages.APPROVAL_EXPIRED, False
         except ModelUnavailable as e:
             log.error("model unavailable: %s", e)
-            answer = messages.MODEL_DOWN
+            answer, checked = messages.MODEL_DOWN, False
         except Exception:
             log.exception("task failed")
-            answer = messages.FAILED
+            answer, checked = messages.FAILED, False
         finally:
             on_it.cancel()
         await self.send(account, answer)
         account.transcript({"kind": "answer", "text": answer})
-        conv = context.record_turn(account, text, answer)
+        conv = context.record_turn(account, text, answer, checked)
         await self._fold(account, conv)
 
     async def _on_it(self, account: Account) -> None:
         await asyncio.sleep(self.config.on_it_after)
         await self.send(account, messages.ON_IT)
 
-    async def solve(self, account: Account, text: str) -> str:
+    async def solve(self, account: Account, text: str) -> tuple[str, bool]:
         task: list[dict] = [{"role": "user", "content": text}]
-        ctx = ToolContext(account, self.approvals, self.config, TaskState())
+        ctx = ToolContext(account, self.approvals, self.config, TaskState(), self.browser)
         tools = self.registry.specs()
         last = ""
+        retried = False
+        # Where numbers in the answer may come from: what the person said or saved, earlier answers, and pages
+        # opened in this task. Search snippets don't count (SPEC §3.5).
+        conv = account.load_context()
+        sources = [
+            text,
+            *(m["text"] for m in account.load_memory()),
+            *(t["content"] for t in conv.get("turns", []) if t["role"] == "user" or t.get("checked")),
+        ]
         for _ in range(self.config.max_model_calls):
             msgs = context.build(
                 account, task, self.config.timezone, self.config.household_name, self.config.context_tokens
@@ -159,7 +171,15 @@ class Agent:
             reply = await self.llm.chat(msgs, tools)
             log.info("model call: %d prompt tokens, %d cached", reply.prompt_tokens, reply.cached_tokens)
             if not reply.tool_calls:
-                return reply.content or "…"
+                missing = checks.unverified(checks.chat_format(reply.content or ""), sources)
+                if missing and not retried:
+                    # One more go: ask the model to confirm the numbers on a page, or drop them (SPEC §3.5).
+                    retried = True
+                    log.info("draft answer had %d unconfirmed number(s); asking the model to check", len(missing))
+                    task.append({"role": "assistant", "content": reply.content or ""})
+                    task.append({"role": "user", "content": checks.retry_prompt(missing)})
+                    continue
+                return finish(reply.content or "…", sources)
             last = reply.content or last
             task.append(
                 {
@@ -184,6 +204,8 @@ class Agent:
                         "error": result.error,
                     }
                 )
+                if call.name not in UNSOURCED_TOOLS and not result.error:
+                    sources.append(result.text)
                 task.append(
                     {
                         "role": "tool",
@@ -203,7 +225,7 @@ class Agent:
                             ],
                         }
                     )
-        return f"{messages.TOO_MANY_STEPS}\n{last}".strip()
+        return finish(f"{messages.TOO_MANY_STEPS}\n{last}".strip(), sources)
 
     async def _fold(self, account: Account, conv: dict) -> None:
         """Between tasks only: fold the oldest turns into the summary (SPEC §4.4)."""
@@ -216,6 +238,22 @@ class Agent:
             return
         if reply.content:
             context.apply_fold(account, folded, reply.content)
+
+
+UNSOURCED_TOOLS = {"web_search"}  # snippets are leads, not sources
+
+
+def finish(answer: str, sources: list[str]) -> tuple[str, bool]:
+    """WhatsApp formatting, and a visible warning for numbers no opened page supports.
+
+    Returns the answer and whether it passed: only answers that passed count as sources later.
+    """
+    answer = checks.chat_format(answer)
+    missing = checks.unverified(answer, sources)
+    if missing:
+        log.info("answer had %d unconfirmed number(s)", len(missing))
+        return f"{answer}\n\n{checks.warning(missing)}", False
+    return answer, True
 
 
 def _short(arguments: str) -> str:

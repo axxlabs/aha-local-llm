@@ -41,6 +41,7 @@ class ToolContext:
     approvals: Approvals
     config: Config
     task: TaskState
+    browser: Any = None  # tools.browser.BrowserSession, when the browser is available
 
 
 Handler = Callable[[dict, ToolContext], Awaitable[ToolResult]]

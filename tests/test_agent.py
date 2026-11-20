@@ -82,7 +82,7 @@ async def test_prefix_is_identical_across_accounts_and_days(accounts):
 
 async def test_tool_traffic_is_dropped_after_the_task(agent, llm, chat, accounts, registry):
     async def big(args, ctx):
-        return ToolResult("PAGE " * 5000, kind="page")
+        return ToolResult("PAGE " * 5000 + "Confirmed: Fri 27 Nov 14:00, ref FX12", kind="page")
 
     registry.add(Tool("big_page", "a page", params(), big))
     llm.call("big_page")

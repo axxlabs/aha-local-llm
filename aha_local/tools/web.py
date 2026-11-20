@@ -59,6 +59,23 @@ async def get_once(url: str) -> Fetched:
         return Fetched(str(r.url), r.status_code, r.headers.get("content-type", ""), bytes(body), None)
 
 
+BLOCKED_STATUSES = {401, 403, 405, 406, 429, 451, 503}
+
+
+async def read_with_browser(url: str, ctx: ToolContext, why: str) -> ToolResult:
+    """Many sites block plain HTTP clients but not a real browser. The URL was already checked."""
+    if ctx.browser is None:
+        return ToolResult(f"Couldn't read {url}: {why}. Try the browser tools.", error=True)
+    from .browser import to_result
+
+    result = to_result(await ctx.browser.call("browser_navigate", {"url": url}))
+    if result.error:
+        return ToolResult(f"Couldn't read {url}: {why}, and the browser failed too.", error=True)
+    ctx.task.approved_sites.add(check_url(url)[0] or "")
+    result.text = f"(Read with the browser because {why}.)\n{result.text}"
+    return result
+
+
 async def fetch_url(args: dict, ctx: ToolContext) -> ToolResult:
     url = str(args.get("url", "")).strip()
     page = None
@@ -74,6 +91,8 @@ async def fetch_url(args: dict, ctx: ToolContext) -> ToolResult:
         url = page.redirect  # checked again at the top of the loop
     if page is None or page.redirect is not None:
         return ToolResult("Too many redirects.", error=True)
+    if page.status in BLOCKED_STATUSES:
+        return await read_with_browser(url, ctx, f"the site refused a simple request (HTTP {page.status})")
     if page.status >= 400:
         return ToolResult(f"The page returned HTTP {page.status}.", error=True)
     final_url, ctype, body = page.url, page.ctype, page.body
@@ -83,7 +102,7 @@ async def fetch_url(args: dict, ctx: ToolContext) -> ToolResult:
     meta = trafilatura.extract_metadata(html)
     text = trafilatura.extract(html, url=final_url, include_tables=True, include_links=False, favor_recall=True)
     if not text:
-        return ToolResult(f"Couldn't extract readable text from {final_url}. Try the browser instead.", error=True)
+        return await read_with_browser(final_url, ctx, "the page has no readable text without JavaScript")
     title = (meta.title if meta and meta.title else "") or final_url
     date = f"\nPage date: {meta.date}" if meta and meta.date else ""
     cut = "\n[… page cut to fit]" if len(text) > MAX_PAGE_CHARS else ""
