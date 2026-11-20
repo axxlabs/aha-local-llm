@@ -96,6 +96,7 @@ def cmd_init(a) -> None:
         DEFAULT_TOML.format(
             gateway_url=a.gateway,
             pin=pin,
+            app_url=a.app,
             name=a.name,
             timezone=a.timezone,
             documents=Path(a.documents).expanduser(),
@@ -179,7 +180,8 @@ def cmd_status(a) -> None:
     if (HOME_DATA / "agent.sock").exists():
         st = admin({"cmd": "status"})
         print(
-            f"\ngateway  {st['gateway']}\ntunnel   {st['tunnel']}\naccounts {st['accounts']} paired"
+            f"\ngateway  {st['gateway']}\ntunnel   {st['tunnel']}\naccounts {st['accounts']}"
+            f"\ndevices  {st['devices']} ({st['online']} online)"
             f"\ntools    {st['tools']}\nrunning  {st['running']} task(s)\nversion  {st['version']}"
         )
 
@@ -188,55 +190,78 @@ def cmd_logs(a) -> None:
     os.execvp("journalctl", ["journalctl", "--user", "-u", f"aha-{a.service}.service", "-n", "100", "-f"])
 
 
+def print_qr(link: str) -> None:
+    import qrcode
+
+    qr = qrcode.QRCode(border=2, error_correction=qrcode.constants.ERROR_CORRECT_L)
+    qr.add_data(link)
+    qr.make(fit=True)
+    qr.print_ascii(invert=True)
+
+
 def cmd_pair(a) -> None:
-    code = admin({"cmd": "pair"})["code"]
-    print(f"\n  Send this from the phone to pair:\n\n      PAIR {code}\n\n  (valid for 10 minutes)\n")
+    reply = admin({"cmd": "pair", "name": a.name})
+    print(f"\n  Scan this with {a.name}'s phone (or open the link on their device) to pair it:\n")
+    if not a.no_qr:
+        print_qr(reply["link"])
+    print(f"\n  {reply['link']}\n\n  Valid for 10 minutes, for one device. Keep it private: it is the pairing key.\n")
     try:
-        address = admin({"cmd": "wait_paired", "timeout": 600}, timeout=610)["address"]
-        print(f"Paired {address}.")
-    except (TimeoutError, OSError):
-        print("No pairing yet; the code expires 10 minutes after it was made.")
+        name = admin({"cmd": "wait_paired", "code": reply["code"], "timeout": 600}, timeout=610)["name"]
+        print(f"Paired a device for {name}.")
+    except (TimeoutError, OSError, SystemExit):
+        print("No device paired; the link expires 10 minutes after it was made.")
 
 
 def cmd_accounts(a) -> None:
     accounts = admin({"cmd": "accounts"})["accounts"]
     if not accounts:
-        print("No accounts yet. Pair a phone with `aha pair`.")
+        print("No accounts yet. Pair someone's phone with `aha pair <name>`.")
     for x in accounts:
-        status = "paired" if x["paired"] else "not paired"
-        print(f"{x['address']:24} {x['name'] or '-':16} {status:11} {x['memories']} memories")
+        print(f"{x['id'][:8]}  {x['name'] or '-':20} {x['devices']} device(s)  {x['memories']} memories")
 
 
-def cmd_unpair(a) -> None:
-    admin({"cmd": "unpair", "address": a.address})
-    print(f"Unpaired {a.address}. Its memories and history stay (aha delete removes them).")
+def cmd_devices(a) -> None:
+    import time as _t
+
+    for d in admin({"cmd": "devices", "account": a.account})["devices"]:
+        seen = _t.strftime("%Y-%m-%d %H:%M", _t.localtime(d["last_seen"])) if d["last_seen"] else "never"
+        state = "online" if d["online"] else "offline"
+        print(f"{d['id'][:10]}  {d['name']:24} {state:8} last seen {seen}{'  push' if d['push'] else ''}")
+
+
+def cmd_revoke(a) -> None:
+    admin({"cmd": "revoke", "account": a.account, "device": a.device})
+    print("Revoked: that device can no longer talk to aha. Its keys on this computer are deleted.")
 
 
 def cmd_rename(a) -> None:
-    admin({"cmd": "rename", "address": a.address, "name": a.name})
+    admin({"cmd": "rename", "account": a.account, "name": a.name})
 
 
 def cmd_memory(a) -> None:
     if a.action == "list":
-        for m in admin({"cmd": "memory_list", "address": a.address})["memories"]:
+        for m in admin({"cmd": "memory_list", "account": a.account})["memories"]:
             print(f"[{m['id']}] {m['text']}  ({m['updated']})")
     elif a.action == "import":
         items = json.loads(Path(a.file).read_text())
-        n = admin({"cmd": "memory_import", "address": a.address, "memories": items})["added"]
+        n = admin({"cmd": "memory_import", "account": a.account, "memories": items})["added"]
         print(f"Imported {n} memories.")
     elif a.action == "export":
-        print(json.dumps(admin({"cmd": "memory_list", "address": a.address})["memories"], indent=1, ensure_ascii=False))
+        print(json.dumps(admin({"cmd": "memory_list", "account": a.account})["memories"], indent=1, ensure_ascii=False))
 
 
 def cmd_export(a) -> None:
-    name = admin({"cmd": "export", "address": a.address})["file"]
+    name = admin({"cmd": "export", "account": a.account})["file"]
     print(f"Exported to {HOME_DATA / 'exports' / name}")
 
 
 def cmd_delete(a) -> None:
-    if input(f"Delete everything aha keeps for {a.address}? Type 'delete': ") != "delete":
+    if (
+        not a.yes
+        and input(f"Delete everything aha keeps for {a.account}, and unpair its devices? Type 'delete': ") != "delete"
+    ):
         die("Not deleted.")
-    admin({"cmd": "delete", "address": a.address})
+    admin({"cmd": "delete", "account": a.account})
     print("Deleted.")
 
 
@@ -315,6 +340,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--timezone", default="Europe/London")
     s.add_argument("--documents", default="~/Documents/aha")
     s.add_argument("--models", default="~/aha-models")
+    s.add_argument("--app", default="https://app.aha.axxlabs.ai", help="where pairing links open the Aha! app")
     s.add_argument("--force", action="store_true")
     s.set_defaults(fn=cmd_init)
     sub.add_parser("install", help="build the agent and install the systemd units").set_defaults(fn=cmd_install)
@@ -325,19 +351,31 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("logs", help="follow a service's log")
     s.add_argument("service", nargs="?", default="agent", choices=["agent", "llm", "browser", "search"])
     s.set_defaults(fn=cmd_logs)
-    sub.add_parser("pair", help="pair a phone: prints a code to send from it").set_defaults(fn=cmd_pair)
+    s = sub.add_parser("pair", help="pair a person's device: shows a QR code to scan")
+    s.add_argument("name", help="the person, e.g. Ana (a new name creates their account)")
+    s.add_argument("--no-qr", action="store_true", help="print only the link")
+    s.set_defaults(fn=cmd_pair)
     sub.add_parser("accounts", help="list accounts").set_defaults(fn=cmd_accounts)
-    for name, fn in (("unpair", cmd_unpair), ("export", cmd_export), ("delete", cmd_delete)):
+    s = sub.add_parser("devices", help="list a person's devices")
+    s.add_argument("account", help="name or id (see `aha accounts`)")
+    s.set_defaults(fn=cmd_devices)
+    s = sub.add_parser("revoke", help="unpair one device")
+    s.add_argument("account")
+    s.add_argument("device", help="device id prefix or name (see `aha devices`)")
+    s.set_defaults(fn=cmd_revoke)
+    for name, fn in (("export", cmd_export), ("delete", cmd_delete)):
         s = sub.add_parser(name, help=f"{name} an account")
-        s.add_argument("address", help="e.g. wa:+447700900123 (see `aha accounts`)")
+        s.add_argument("account", help="name or id (see `aha accounts`)")
+        if name == "delete":
+            s.add_argument("--yes", action="store_true", help="don't ask for confirmation")
         s.set_defaults(fn=fn)
     s = sub.add_parser("rename", help="set an account's display name")
-    s.add_argument("address")
+    s.add_argument("account")
     s.add_argument("name")
     s.set_defaults(fn=cmd_rename)
     s = sub.add_parser("memory", help="list, import or export an account's memories")
     s.add_argument("action", choices=["list", "import", "export"])
-    s.add_argument("address")
+    s.add_argument("account")
     s.add_argument("file", nargs="?")
     s.set_defaults(fn=cmd_memory)
     s = sub.add_parser("doctor", help="check the setup")

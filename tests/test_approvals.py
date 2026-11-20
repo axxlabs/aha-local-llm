@@ -8,7 +8,7 @@ import json
 from aha_local.approvals import Field, apply_edit
 from aha_local.tools.registry import Tool, params
 
-from .conftest import ADDRESS, said, settle
+from .conftest import person, say, settle
 
 
 def add_typing_tool(registry, ran: list):
@@ -45,18 +45,18 @@ async def start_form_task(agent, llm, chat, registry, ran):
     add_typing_tool(registry, ran)
     llm.call("browser_fill_form", **FORM)
     llm.answer("Booked.")
-    await agent.inbound(said("book it"))
+    await say(agent, "book it")
     msg = await chat.next()
-    assert msg.text.startswith("✋ *Fill in 2 fields on example.com?*")
-    assert "1. Name: Felipe" in msg.text and "2. Phone: 07700 900123" in msg.text
-    assert [b.label for b in msg.buttons] == ["✅ Approve", "✏️ Edit", "❌ Decline"]
+    assert msg.card["title"] == "Fill in 2 fields on example.com?"
+    assert [(f["label"], f["value"]) for f in msg.card["fields"]] == [("Name", "Felipe"), ("Phone", "07700 900123")]
+    assert [b.label for b in msg.buttons] == ["Approve", "Edit", "Decline"]
     return msg
 
 
 async def test_approve_runs_exactly_what_was_shown(agent, llm, chat, registry):
     ran = []
     msg = await start_form_task(agent, llm, chat, registry, ran)
-    await agent.inbound(said("✅ Approve", button=msg.buttons[0].id))
+    await say(agent, "✅ Approve", button=msg.buttons[0].id)
     await settle(agent)
     assert ran == [FORM]
     assert chat.texts()[-1] == "Booked."
@@ -65,15 +65,15 @@ async def test_approve_runs_exactly_what_was_shown(agent, llm, chat, registry):
 async def test_edit_numbered_fields_then_approve(agent, llm, chat, registry):
     ran = []
     msg = await start_form_task(agent, llm, chat, registry, ran)
-    await agent.inbound(said("✏️ Edit", button=msg.buttons[1].id))
+    await say(agent, "✏️ Edit", button=msg.buttons[1].id)
     prompt = await chat.next()
     assert "1: Felipe" in prompt.text
-    await agent.inbound(said("2: 07700 900456"))
+    await say(agent, "2: 07700 900456")
     again = await chat.next()
-    assert "2. Phone: 07700 900456" in again.text
-    await agent.inbound(said("✅ Approve", button=msg.buttons[0].id))  # the old buttons no longer apply
+    assert "Phone: 07700 900456" in again.text
+    await say(agent, "✅ Approve", button=msg.buttons[0].id)  # the old buttons no longer apply
     assert (await chat.next()).text == "That approval isn't open any more."
-    await agent.inbound(said("✅ Approve", button=again.buttons[0].id))
+    await say(agent, "✅ Approve", button=again.buttons[0].id)
     await settle(agent)
     assert ran[0]["fields"][1]["value"] == "07700 900456"
     assert ran[0]["fields"][0]["value"] == "Felipe"
@@ -82,7 +82,7 @@ async def test_edit_numbered_fields_then_approve(agent, llm, chat, registry):
 async def test_free_text_declines_with_a_note(agent, llm, chat, registry):
     ran = []
     await start_form_task(agent, llm, chat, registry, ran)
-    await agent.inbound(said("no, use my work phone"))
+    await say(agent, "no, use my work phone")
     await settle(agent)
     assert ran == []
     tool_msg = [m for m in llm.requests[-1]["messages"] if m["role"] == "tool"][-1]
@@ -92,7 +92,7 @@ async def test_free_text_declines_with_a_note(agent, llm, chat, registry):
 async def test_decline_button(agent, llm, chat, registry):
     ran = []
     msg = await start_form_task(agent, llm, chat, registry, ran)
-    await agent.inbound(said("❌ Decline", button=msg.buttons[2].id))
+    await say(agent, "❌ Decline", button=msg.buttons[2].id)
     await settle(agent)
     assert ran == []
 
@@ -100,10 +100,10 @@ async def test_decline_button(agent, llm, chat, registry):
 async def test_stop_cancels_the_task_and_its_approval(agent, llm, chat, registry):
     ran = []
     await start_form_task(agent, llm, chat, registry, ran)
-    await agent.inbound(said("stop"))
+    await say(agent, "stop")
     await settle(agent)
     assert ran == [] and chat.texts()[-1] == "Stopped."
-    assert agent.approvals.pending_for(ADDRESS) is None
+    assert agent.approvals.pending_for(person(agent.accounts).address) is None
 
 
 async def test_expiry_declines(agent, llm, chat, registry):
@@ -117,9 +117,9 @@ async def test_expiry_declines(agent, llm, chat, registry):
 async def test_every_approval_is_audited(agent, llm, chat, registry, accounts):
     ran = []
     msg = await start_form_task(agent, llm, chat, registry, ran)
-    await agent.inbound(said("ok", button=msg.buttons[0].id))
+    await say(agent, "ok", button=msg.buttons[0].id)
     await settle(agent)
-    lines = [json.loads(x) for x in (accounts.get(ADDRESS).dir / "audit.jsonl").read_text().splitlines()]
+    lines = [json.loads(x) for x in (person(accounts).dir / "audit.jsonl").read_text().splitlines()]
     assert lines[0]["asked"] == ["Felipe", "07700 900123"]
     assert lines[1]["decision"] == "approved" and lines[1]["final"] == ["Felipe", "07700 900123"]
 
@@ -134,6 +134,6 @@ def test_apply_edit():
 
 
 async def test_unrelated_button_with_no_approval_open(agent, chat):
-    await agent.inbound(said("✅", button="ap-abcdef-yes"))
+    await say(agent, "✅", button="ap-abcdef-yes")
     assert chat.texts()[-1] == "That approval isn't open any more."
     await asyncio.sleep(0)

@@ -7,25 +7,52 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import uuid
 from collections import defaultdict
-from collections.abc import Awaitable, Callable
+from typing import Protocol
 
 from . import checks, context, messages
 from .accounts import Account, Accounts
 from .approvals import Approvals
 from .config import Config
+from .items import Image
 from .llm import LLM, ModelUnavailable
-from .protocol import Button, Image, In, Out, Typing
 from .tools import memory
 from .tools.registry import Registry, TaskState, ToolContext
 
 log = logging.getLogger("aha.agent")
 
-SendOut = Callable[[Out | Typing], Awaitable[None]]
+
+class AgentOut(Protocol):
+    """Where the agent's output goes: the end-to-end channel to the person's devices (e2e/channel.py)."""
+
+    async def message(self, account: Account, text: str, image: Image | None = None) -> None: ...
+    async def typing(self, account: Account, on: bool) -> None: ...
+    async def card(self, account: Account, card: dict) -> None: ...
+    async def state(self, account: Account, approval_id: str, state: str) -> None: ...
+    async def text(self, account: Account, text: str) -> None: ...
+
+
 TYPING_EVERY = 4.0  # seconds between `typing` frames while a reply is owed (SPEC §3.3)
 STOP_WORDS = {"stop", "cancel", "stop it", "stop that"}
 NEW_MESSAGE = "[New message from the user while you were working]\n{text}"
+
+
+class _Counted:
+    """The approvals' output, counted as "the person heard from this task" (so no stray "…" follows)."""
+
+    def __init__(self, agent: Agent) -> None:
+        self.agent = agent
+
+    async def card(self, account: Account, card: dict) -> None:
+        self.agent.sent[account.address] += 1
+        await self.agent.out.card(account, card)
+
+    async def state(self, account: Account, approval_id: str, state: str) -> None:
+        await self.agent.out.state(account, approval_id, state)
+
+    async def text(self, account: Account, text: str) -> None:
+        self.agent.sent[account.address] += 1
+        await self.agent.out.text(account, text)
 
 
 class ApprovalExpired(Exception):
@@ -34,15 +61,15 @@ class ApprovalExpired(Exception):
 
 class Agent:
     def __init__(
-        self, config: Config, accounts: Accounts, llm: LLM, registry: Registry, send_out: SendOut, browser=None
+        self, config: Config, accounts: Accounts, llm: LLM, registry: Registry, out: AgentOut, browser=None
     ) -> None:
         self.config = config
         self.accounts = accounts
         self.llm = llm
         self.registry = registry
-        self.send_out = send_out
+        self.out = out
         self.browser = browser
-        self.approvals = Approvals(self.send, config.approval_expiry)
+        self.approvals = Approvals(_Counted(self), config.approval_expiry)
         self.running: dict[str, asyncio.Task] = {}
         # Messages that arrive while the account's task runs: the task reads them before its next model call.
         self.inbox: dict[str, list[str]] = defaultdict(list)
@@ -51,37 +78,23 @@ class Agent:
 
     # ---- outbound
 
-    async def send(
-        self, account: Account, text: str, buttons: list[Button] | None = None, image: Image | None = None
-    ) -> None:
+    async def send(self, account: Account, text: str, image: Image | None = None) -> None:
         self.sent[account.address] += 1
-        account.transcript(
-            {"kind": "out", "text": text, "buttons": [b.label for b in buttons or []], "image": bool(image)}
-        )
-        await self.send_out(
-            Out(id=uuid.uuid4().hex, to=account.address, text=text[:4096], buttons=buttons or [], image=image)
-        )
+        account.transcript({"kind": "out", "text": text, "image": bool(image)})
+        await self.out.message(account, text[:20_000], image)
 
     # ---- inbound
 
-    async def inbound(self, frame: In) -> None:
-        account = self.accounts.get(frame.sender)
-        if account is None or account.cert is None:
-            log.warning("message for an address this computer doesn't hold; ignored")
-            return
-        if frame.name and not account.name:
-            self.accounts.upsert(account.address, name=frame.name)
-        text = frame.text.strip()
-        account.transcript({"kind": "user", "text": text, "button": frame.button})
-        command = text.lower().rstrip(".!") if frame.button is None else ""
+    async def inbound(self, account: Account, text: str) -> None:
+        """A message the person typed (already shown on their devices by the channel)."""
+        text = text.strip()
+        account.transcript({"kind": "user", "text": text})
+        command = text.lower().rstrip(".!")
 
         if command in STOP_WORDS:
             await self.stop(account)
             return
-        if await self.approvals.reply(account, text, frame.button):
-            return
-        if frame.button is not None:
-            await self.send(account, messages.APPROVAL_STALE)
+        if await self.approvals.reply_text(account, text):
             return
         if command == "help":
             await self.send(account, messages.HELP.format(source=self.config.source_url))
@@ -105,6 +118,12 @@ class Agent:
             self.inbox[account.address].append(text)  # the running task reads it; "typing…" already shows
             return
         self.running[account.address] = asyncio.create_task(self.run(account, text))
+
+    async def approval_reply(
+        self, account: Account, approval_id: str, decision: str, values: list | None = None, note: str = ""
+    ) -> None:
+        account.transcript({"kind": "approval_reply", "id": approval_id, "decision": decision})
+        await self.approvals.answer(account, approval_id, decision, values, note)
 
     async def stop(self, account: Account) -> None:
         task = self.running.get(account.address)
@@ -133,18 +152,18 @@ class Agent:
         """While a reply is owed: "typing…", refreshed, except while the person owes us an approval answer."""
         while True:
             if self.approvals.pending_for(account.address) is None:
-                await self._send_frame(Typing(to=account.address))
+                await self._typing_frame(account, True)
             await asyncio.sleep(self.typing_every)
 
     async def _stop_typing(self, account: Account, typing: asyncio.Task) -> None:
         typing.cancel()
-        await self._send_frame(Typing(to=account.address, on=False))
+        await self._typing_frame(account, False)
 
-    async def _send_frame(self, frame: Typing) -> None:
+    async def _typing_frame(self, account: Account, on: bool) -> None:
         try:
-            await self.send_out(frame)
+            await self.out.typing(account, on)
         except Exception:
-            log.warning("couldn't send a typing frame")
+            log.warning("couldn't send a typing message")
 
     async def _task(self, account: Account, text: str) -> None:
         sent_before = self.sent[account.address]

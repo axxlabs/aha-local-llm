@@ -17,7 +17,7 @@ from typing import Any
 from ..accounts import Account
 from ..approvals import Approvals
 from ..config import Config
-from ..protocol import Image
+from ..items import Image
 
 log = logging.getLogger("aha.tools")
 

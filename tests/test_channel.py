@@ -1,0 +1,245 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
+"""The end-to-end channel with a device played in Python (SPEC §6.4–§6.6, §11.5, §11.7)."""
+
+import asyncio
+import base64
+import json
+
+import http_ece
+import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+
+from aha_local.accounts import Accounts
+from aha_local.certs import issue_cert, new_key, public_b64
+from aha_local.e2e import crypto as c
+from aha_local.e2e.channel import Channel
+from aha_local.protocol import E2E, CertIssued, CertRequest, DeviceStatus, Pair, Push
+
+
+class FakeAgent:
+    def __init__(self) -> None:
+        self.said: list[str] = []
+        self.replies: list[tuple] = []
+        self.stopped = 0
+
+    async def inbound(self, account, text):
+        self.said.append(text)
+
+    async def approval_reply(self, account, approval_id, decision, values=None, note=""):
+        self.replies.append((approval_id, decision, values, note))
+
+    async def stop(self, account):
+        self.stopped += 1
+
+
+class Rig:
+    """A channel, a fake gateway that signs certificates, and helpers to play a device."""
+
+    def __init__(self, tmp_path) -> None:
+        self.gw = new_key()
+        self.instance = public_b64(new_key())
+        self.frames: list = []
+        self.accounts = Accounts(tmp_path / "data")
+        self.channel = Channel(
+            self.accounts,
+            tmp_path / "data" / "keys",
+            self.send,
+            "https://app.example",
+            "wss://gw.example/v1/device",
+            "Home",
+        )
+        self.agent = FakeAgent()
+        self.channel.agent = self.agent
+
+    async def send(self, frame) -> None:
+        self.frames.append(frame)
+        if isinstance(frame, CertRequest):
+            cert = issue_cert(self.gw, frame.device, self.instance, frame.tag)
+            asyncio.get_running_loop().call_soon(self.channel.on_cert, CertIssued(id=frame.id, cert=cert))
+
+    def take(self, kind):
+        found = [f for f in self.frames if isinstance(f, kind)]
+        self.frames = [f for f in self.frames if not isinstance(f, kind)]
+        return found
+
+    async def pair(self, name="Ana", psk_override=None):
+        acct = self.accounts.find(name) or self.accounts.create(name)
+        code = "ABC-DEF"
+        state = self.channel.new_pairing(code, acct)
+        link = self.channel.pairing_link(code, state, acct, public_b64(self.gw))
+        data = json.loads(c.b64url_d(link.split("#pair=")[1]))
+        assert data["gw"] == "wss://gw.example/v1/device" and data["name"] == name and data["code"] == code
+        await self.channel.on_pair(Pair(code=code, body={"t": "hello"}))
+        bundle = self.take(Pair)[0].body
+        keys = c.DeviceKeys.generate()
+        psk = psk_override or c.b64url_d(data["psk"])
+        msg, pk, kept = c.device_finish(bundle, c.b64url_d(data["fp"]), psk, keys)
+        await self.channel.on_pair(Pair(code=code, body={"t": "finish", **msg}))
+        reply = self.take(Pair)[0].body
+        if reply["t"] != "ok":
+            return reply, None
+        c.device_check_computer(pk, c.b64d(reply["mac"]))
+        ratchet = c.Ratchet.init_device(
+            pk.sk, c.session_ad(keys.ik_pub, kept["ikc"]), kept["ekc"], keys.kem_seed, kept["kemc"]
+        )
+        return reply, PyDevice(self, acct, keys, ratchet, pk)
+
+
+class PyDevice:
+    def __init__(self, rig, acct, keys, ratchet, pk) -> None:
+        self.rig, self.acct, self.keys, self.ratchet, self.pk = rig, acct, keys, ratchet, pk
+        self.dev = c.b64e(keys.sig_pub)
+
+    async def send(self, message: dict) -> None:
+        await self.rig.channel.on_e2e(E2E(dev=self.dev, box=c.encrypt_json(self.ratchet, message)))
+
+    def inbox(self) -> list[dict]:
+        out = []
+        for f in self.rig.take(E2E):
+            assert f.dev == self.dev
+            out.append(c.decrypt_json(self.ratchet, f.box))
+        return out
+
+
+async def test_pairing_then_messages_both_ways(tmp_path):
+    rig = Rig(tmp_path)
+    reply, phone = await rig.pair()
+    cert = json.loads(reply["cert"])
+    assert cert["device"] == phone.dev and cert["instance"] == rig.instance
+    acct = rig.accounts.find("Ana")
+    assert list(acct.devices) == [phone.dev] and acct.devices[phone.dev].name == "New device"
+    await phone.send({"t": "hello", "name": "Ana's phone"})
+    assert acct.devices[phone.dev].name == "Ana's phone"
+    welcome = phone.inbox()
+    assert welcome[0]["t"] == "msg" and "Aha!" in welcome[0]["text"] and welcome[0]["seq"] == 1
+    await phone.send({"t": "say", "text": "book a table", "cid": "c1"})
+    assert rig.agent.said == ["book a table"]
+    echo = phone.inbox()
+    assert echo[0]["role"] == "me" and echo[0]["cid"] == "c1" and echo[0]["seq"] == 2
+    await rig.channel.message(acct, "Which day?")
+    assert phone.inbox()[0]["text"] == "Which day?"
+    await rig.channel.typing(acct, True)
+    assert phone.inbox() == [{"t": "typing", "on": True}]
+
+
+async def test_a_wrong_pairing_secret_fails_and_closes_the_code(tmp_path):
+    rig = Rig(tmp_path)
+    reply, phone = await rig.pair(psk_override=b"\x00" * 32)
+    assert reply == {"t": "error", "code": "proof"} and phone is None
+    assert rig.accounts.find("Ana").devices == {}
+    assert "ABC-DEF" not in rig.channel.pairings
+    assert rig.take(CertRequest) == []  # no certificate was ever asked for
+
+
+async def test_unknown_devices_and_bad_boxes_are_dropped_without_changing_state(tmp_path):
+    rig = Rig(tmp_path)
+    _, phone = await rig.pair()
+    await phone.send({"t": "hello", "name": "P"})
+    phone.inbox()
+    stranger = public_b64(new_key())
+    await rig.channel.on_e2e(E2E(dev=stranger, box=c.b64e(b"x" * 2000)))
+    acct = rig.accounts.find("Ana")
+    before = json.dumps(acct.devices[phone.dev].ratchet, sort_keys=True)
+    box = bytearray(phone.ratchet.encrypt(b'{"t":"say","text":"x"}'))
+    box[-1] ^= 1
+    await rig.channel.on_e2e(E2E(dev=phone.dev, box=c.b64e(bytes(box))))
+    assert json.dumps(acct.devices[phone.dev].ratchet, sort_keys=True) == before
+    assert rig.agent.said == []
+
+
+async def test_sync_and_history(tmp_path):
+    rig = Rig(tmp_path)
+    _, phone = await rig.pair()
+    await phone.send({"t": "hello", "name": "P"})
+    acct = rig.accounts.find("Ana")
+    for i in range(5):
+        await rig.channel.message(acct, f"m{i}")
+    phone.inbox()
+    await phone.send({"t": "sync_request", "after": 3})
+    sync = phone.inbox()[0]
+    assert sync["t"] == "sync" and [x["seq"] for x in sync["items"]] == [4, 5, 6] and sync["last"] == 6
+    await phone.send({"t": "history_request", "before": 4, "limit": 2})
+    assert [x["seq"] for x in phone.inbox()[0]["items"]] == [2, 3]
+    await phone.send({"t": "sync_request", "after": 0, "days": 0})
+    assert phone.inbox()[0]["items"] == []  # this device keeps no cache
+
+
+async def test_approval_cards_and_replies(tmp_path):
+    rig = Rig(tmp_path)
+    _, phone = await rig.pair()
+    await phone.send({"t": "hello", "name": "P"})
+    phone.inbox()
+    acct = rig.accounts.find("Ana")
+    await rig.channel.card(
+        acct, {"t": "approval", "id": "abcd1234", "kind": "action", "title": "Fill in?", "fields": [], "buttons": []}
+    )
+    assert phone.inbox()[0]["t"] == "approval"
+    await phone.send({"t": "approval_reply", "id": "abcd1234", "decision": "approve", "values": ["x"]})
+    await phone.send({"t": "approval_reply", "id": "abcd1234", "decision": "hack"})  # unknown decisions are ignored
+    assert rig.agent.replies == [("abcd1234", "approve", ["x"], "")]
+    await phone.send({"t": "stop"})
+    assert rig.agent.stopped == 1
+    await phone.send({"t": "nonsense"})
+    assert phone.inbox()[-1] == {"t": "error", "code": "unknown_type"}
+
+
+async def test_offline_devices_get_a_sealed_push_without_content(tmp_path):
+    rig = Rig(tmp_path)
+    _, phone = await rig.pair()
+    sub_key = ec.generate_private_key(ec.SECP256R1())
+    point = sub_key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+    auth = b"\x05" * 16
+    b64u = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=").decode()  # noqa: E731
+    sub = {"endpoint": "https://fcm.googleapis.com/fcm/send/abc", "keys": {"p256dh": b64u(point), "auth": b64u(auth)}}
+    await phone.send({"t": "hello", "name": "P", "push": sub})
+    phone.inbox()
+    await rig.channel.on_device_status(DeviceStatus(dev=phone.dev, online=False))
+    acct = rig.accounts.find("Ana")
+    await rig.channel.message(acct, "Booked: ref FX7Q2")
+    assert rig.take(E2E) == []
+    (push,) = rig.take(Push)
+    assert push.endpoint == sub["endpoint"]
+    plain = http_ece.decrypt(base64.b64decode(push.body), private_key=sub_key, auth_secret=auth, version="aes128gcm")
+    payload = c.push_open(phone.pk.push_key, json.loads(plain))
+    assert payload == {"seq": acct.seq}  # no text unless push_preview is on
+    assert b"FX7Q2" not in plain
+
+
+async def test_a_bad_push_subscription_is_ignored(tmp_path):
+    rig = Rig(tmp_path)
+    _, phone = await rig.pair()
+    await phone.send({"t": "hello", "name": "P", "push": {"endpoint": "http://169.254.169.254/x", "keys": {}}})
+    assert rig.accounts.find("Ana").devices[phone.dev].push is None
+
+
+async def test_revoking_another_device(tmp_path):
+    rig = Rig(tmp_path)
+    _, phone = await rig.pair()
+    await phone.send({"t": "hello", "name": "Phone"})
+    phone.inbox()
+    _, laptop = await rig.pair()
+    await laptop.send({"t": "hello", "name": "Laptop"})
+    laptop.inbox()
+    rig.take(E2E)
+    await phone.send({"t": "revoke_device", "device": laptop.dev})
+    acct = rig.accounts.find("Ana")
+    assert list(acct.devices) == [phone.dev]
+    from aha_local.protocol import Revoke
+
+    assert rig.take(Revoke) == [Revoke(dev=laptop.dev)]
+    await laptop.send({"t": "say", "text": "still here?"})
+    assert rig.agent.said == []  # its frames are dropped now
+
+
+@pytest.mark.parametrize(
+    "bad", [{"t": "say", "text": 5}, {"t": "say", "text": "  "}, {"t": "sync_request", "after": -1}]
+)
+async def test_malformed_messages_do_nothing_harmful(tmp_path, bad):
+    rig = Rig(tmp_path)
+    _, phone = await rig.pair()
+    await phone.send({"t": "hello", "name": "P"})
+    phone.inbox()
+    await phone.send(bad)
+    assert rig.agent.said == []

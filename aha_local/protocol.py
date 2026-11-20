@@ -1,120 +1,119 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
-"""Tunnel frames between the gateway and an aha computer (SPEC §6).
+"""Frames between the gateway, aha computers and devices (SPEC §6.2, §6.3, §6.5).
 
-This file is identical in aha-gateway and aha-local-llm; tests in both repos check it against the shared
-fixtures, so the two stay in step without depending on each other.
+This file is identical in aha-gateway and aha-local-llm; a test in each repo compares them.
+Everything the gateway handles is here: it never sees message content, only these envelopes and opaque boxes.
 """
 
 from __future__ import annotations
 
 import base64
-import re
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 HANDSHAKE_CONTEXT = "aha-tunnel-v1"
-MAX_FRAME_BYTES = 1_000_000
-MAX_IMAGE_FRAME_BYTES = 2_000_000
-MAX_TEXT_CHARS = 4096
-MAX_BUTTONS = 3
-MAX_BUTTON_LABEL = 20
+DEVICE_CONTEXT = "aha-device-v1"
+MAX_BOX_B64 = 2_800_000  # a 2 MB ratchet message in base64
+MAX_FRAME_BYTES = 3_000_000
+MAX_PAIR_FIELD = 4_000
 
-# An address is "<channel>:<id>": sim:+447900000001, wa:+447700900123, tg:123456789.
-ADDRESS_PATTERN = r"^(sim|wa):\+[1-9]\d{6,14}$|^tg:\d{1,20}$"
 B64_PATTERN = r"^[A-Za-z0-9+/]+={0,2}$"
+KEY_PATTERN = r"^[A-Za-z0-9+/]{43}=$"  # 32 bytes
+TAG_PATTERN = r"^[A-Za-z0-9+/]{22}==$"  # 16 bytes
 ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
+CODE_PATTERN = r"^[A-Z2-9]{3}-[A-Z2-9]{3}$"
 
-Address = Annotated[str, Field(pattern=ADDRESS_PATTERN)]
-B64 = Annotated[str, Field(pattern=B64_PATTERN, max_length=2_800_000)]
+B64 = Annotated[str, Field(pattern=B64_PATTERN, max_length=MAX_BOX_B64)]
+Key = Annotated[str, Field(pattern=KEY_PATTERN)]
+Tag = Annotated[str, Field(pattern=TAG_PATTERN)]
 FrameId = Annotated[str, Field(pattern=ID_PATTERN)]
+Code = Annotated[str, Field(pattern=CODE_PATTERN)]
+PairBody = Annotated[
+    dict[Annotated[str, Field(pattern=r"^[a-z_]{1,16}$")], Annotated[str, Field(max_length=MAX_PAIR_FIELD)]],
+    Field(max_length=12),
+]
 
 
 class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class Button(Strict):
-    id: Annotated[str, Field(pattern=ID_PATTERN)]
-    label: Annotated[str, Field(min_length=1, max_length=MAX_BUTTON_LABEL)]
-
-
-class Image(Strict):
-    mime: Literal["image/png", "image/jpeg", "image/webp"]
-    b64: B64
-
-
 class Cert(Strict):
-    """A binding certificate: the gateway's signature that `address` belongs to `instance` (SPEC §6.4)."""
+    """A binding certificate: routes a device's frames to an instance (SPEC §6.4). Never grants trust."""
 
-    v: Literal[1] = 1
-    address: Address
-    instance: B64
+    v: Literal[2] = 2
+    device: Key  # the device's Ed25519 auth key (SIGd)
+    instance: Key
+    tag: Tag  # random per-account routing tag (billing counts tags, learns nothing else)
     issued: int
     expires: int
     sig: B64 = ""
 
 
-# ---- handshake
+# ---- handshakes
 
 
 class Hello(Strict):
+    """gateway → computer or device, first frame."""
+
     t: Literal["hello"] = "hello"
     v: int = PROTOCOL_VERSION
-    gateway: B64
+    gateway: Key
     nonce: B64
+    vapid: Annotated[str, Field(max_length=200)] = ""  # Web Push application server key (base64url), for devices
 
 
 class Auth(Strict):
     t: Literal["auth"] = "auth"
-    instance: B64
+    instance: Key
     nonce: B64
     sig: B64
-    certs: Annotated[list[Cert], Field(max_length=64)] = []
+    certs: Annotated[list[Cert], Field(max_length=1024)] = []
     name: Annotated[str, Field(max_length=60)] = ""
     version: Annotated[str, Field(max_length=40)] = ""
 
 
 class Ready(Strict):
+    """gateway → computer: handshake done; which device certificates it accepted."""
+
     t: Literal["ready"] = "ready"
     sig: B64
-    routes: list[Address] = []
-    rejected: list[Address] = []
+    routes: Annotated[list[Key], Field(max_length=1024)] = []
+    rejected: Annotated[list[Key], Field(max_length=1024)] = []
+
+
+class DevAuth(Strict):
+    t: Literal["dev_auth"] = "dev_auth"
+    cert: Cert
+    sig: B64
+
+
+class DeviceReady(Strict):
+    """gateway → device: authenticated; whether its computer is connected right now."""
+
+    t: Literal["ready"] = "ready"
+    online: bool
 
 
 # ---- after the handshake
 
 
-class In(Strict):
-    """A message from a person to their computer. Only ever treated as user input."""
+class E2E(Strict):
+    """An opaque ratchet message between a device and its computer, on the tunnel."""
 
-    t: Literal["in"] = "in"
-    id: FrameId
-    sender: Address
-    text: Annotated[str, Field(max_length=MAX_TEXT_CHARS)] = ""
-    button: Annotated[str, Field(pattern=ID_PATTERN)] | None = None
-    name: Annotated[str, Field(max_length=80)] = ""
+    t: Literal["e2e"] = "e2e"
+    dev: Key
+    box: B64
 
 
-class Out(Strict):
-    """A message from the computer to a person."""
+class DevE2E(Strict):
+    """The same, on the device's own connection (the gateway adds or strips `dev`)."""
 
-    t: Literal["out"] = "out"
-    id: FrameId
-    to: Address
-    text: Annotated[str, Field(max_length=MAX_TEXT_CHARS)] = ""
-    buttons: Annotated[list[Button], Field(max_length=MAX_BUTTONS)] = []
-    image: Image | None = None
-
-
-class Typing(Strict):
-    """A reply to this person is coming (SPEC §3.3): sent every few seconds while it lasts; on=False ends it."""
-
-    t: Literal["typing"] = "typing"
-    to: Address
-    on: bool = True
+    t: Literal["e2e"] = "e2e"
+    box: B64
 
 
 class PairStart(Strict):
@@ -123,34 +122,76 @@ class PairStart(Strict):
 
 class PairCode(Strict):
     t: Literal["pair_code"] = "pair_code"
-    code: Annotated[str, Field(pattern=r"^[A-Z2-9]{3}-[A-Z2-9]{3}$")]
+    code: Code
     expires_in: int
 
 
-class Paired(Strict):
-    t: Literal["paired"] = "paired"
+class PairHello(Strict):
+    """device → gateway: join the pairing with this rendezvous code instead of authenticating."""
+
+    t: Literal["pair_hello"] = "pair_hello"
+    code: Code
+
+
+class Pair(Strict):
+    """A pairing handshake message, on the tunnel (matched by code)."""
+
+    t: Literal["pair"] = "pair"
+    code: Code
+    body: PairBody
+
+
+class DevPair(Strict):
+    """The same, on the pairing device's connection."""
+
+    t: Literal["pair"] = "pair"
+    body: PairBody
+
+
+class CertRequest(Strict):
+    t: Literal["cert_request"] = "cert_request"
+    id: FrameId
+    device: Key
+    tag: Tag
+
+
+class CertIssued(Strict):
+    t: Literal["cert"] = "cert"
+    id: FrameId
     cert: Cert
-    name: Annotated[str, Field(max_length=80)] = ""
 
 
-class Unpair(Strict):
-    t: Literal["unpair"] = "unpair"
-    address: Address
+class Push(Strict):
+    """computer → gateway: deliver an RFC 8291-encrypted push; the gateway adds VAPID and POSTs it."""
+
+    t: Literal["push"] = "push"
+    endpoint: Annotated[str, Field(pattern=r"^https://[A-Za-z0-9.-]+(:\d+)?/\S*$", max_length=1024)]
+    body: Annotated[str, Field(pattern=B64_PATTERN, max_length=8_000)]
+    ttl: Annotated[int, Field(ge=0, le=2_419_200)] = 86_400
+    urgency: Literal["very-low", "low", "normal", "high"] = "normal"
 
 
-class Renew(Strict):
-    t: Literal["renew"] = "renew"
-    cert: Cert
+class Revoke(Strict):
+    t: Literal["revoke"] = "revoke"
+    dev: Key
 
 
-class Renewed(Strict):
-    t: Literal["renewed"] = "renewed"
-    cert: Cert
+class DeviceStatus(Strict):
+    """gateway → computer: a device connected or went away (so the computer knows when to push)."""
+
+    t: Literal["device"] = "device"
+    dev: Key
+    online: bool
+
+
+class ComputerStatus(Strict):
+    """gateway → device: its computer connected or went away."""
+
+    t: Literal["computer"] = "computer"
+    online: bool
 
 
 class Notice(Strict):
-    """Gateway → computer information, e.g. a rejected frame. Never user content."""
-
     t: Literal["notice"] = "notice"
     code: Annotated[str, Field(pattern=r"^[a-z_]{1,40}$")]
     detail: Annotated[str, Field(max_length=200)] = ""
@@ -164,13 +205,22 @@ class Pong(Strict):
     t: Literal["pong"] = "pong"
 
 
-ToComputer = Annotated[In | PairCode | Paired | Renewed | Notice | Ping | Pong, Field(discriminator="t")]
-ToGateway = Annotated[Out | Typing | PairStart | Unpair | Renew | Ping | Pong, Field(discriminator="t")]
+ToComputer = Annotated[
+    Hello | Ready | E2E | PairCode | Pair | CertIssued | DeviceStatus | Notice | Ping | Pong,
+    Field(discriminator="t"),
+]
+FromComputer = Annotated[
+    Auth | E2E | PairStart | Pair | CertRequest | Push | Revoke | Ping | Pong, Field(discriminator="t")
+]
+ToDevice = Annotated[
+    Hello | DeviceReady | DevE2E | DevPair | ComputerStatus | Notice | Ping | Pong, Field(discriminator="t")
+]
+FromDevice = Annotated[DevAuth | PairHello | DevE2E | DevPair | Ping | Pong, Field(discriminator="t")]
+
 TO_COMPUTER = TypeAdapter(ToComputer)
-TO_GATEWAY = TypeAdapter(ToGateway)
-HELLO = TypeAdapter(Hello)
-AUTH = TypeAdapter(Auth)
-READY = TypeAdapter(Ready)
+FROM_COMPUTER = TypeAdapter(FromComputer)
+TO_DEVICE = TypeAdapter(ToDevice)
+FROM_DEVICE = TypeAdapter(FromDevice)
 
 
 def b64(data: bytes) -> str:
@@ -179,21 +229,3 @@ def b64(data: bytes) -> str:
 
 def unb64(text: str) -> bytes:
     return base64.b64decode(text, validate=True)
-
-
-def frame_too_big(raw: str) -> bool:
-    """Frames carrying an image may be up to 2 MB; every other frame up to 1 MB (SPEC §6.2)."""
-    size = len(raw.encode())
-    if size > MAX_IMAGE_FRAME_BYTES:
-        return True
-    return size > MAX_FRAME_BYTES and '"image":{' not in raw
-
-
-def normalise_phone(text: str) -> str | None:
-    """'+44 7900 000001' or '447900000001' → '+447900000001'; None if it isn't an international number."""
-    digits = re.sub(r"[\s().-]", "", text.strip())
-    if digits.startswith("00"):
-        digits = "+" + digits[2:]
-    if not digits.startswith("+"):
-        digits = "+" + digits
-    return digits if re.fullmatch(r"\+[1-9]\d{6,14}", digits) else None

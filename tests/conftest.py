@@ -8,6 +8,7 @@ import asyncio
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,11 +16,8 @@ from aha_local.accounts import Accounts
 from aha_local.agent import Agent
 from aha_local.config import Config
 from aha_local.llm import Reply, ToolCall
-from aha_local.protocol import Cert, In, Out, Typing
 from aha_local.tools import conversation, documents, memory
 from aha_local.tools.registry import Registry
-
-ADDRESS = "sim:+447900000001"
 
 
 class FakeLLM:
@@ -43,18 +41,43 @@ class FakeLLM:
 
 
 class Chat:
+    """Records what the agent sends to the person (it implements agent.AgentOut, like the real channel).
+
+    Messages and approval cards are kept in order as objects with `.text` and `.buttons` (each with `.id` and
+    `.label`); a card's button ids are "ap-<approval id>-yes|edit|no", which `say(..., button=...)` turns back
+    into an approval reply.
+    """
+
     def __init__(self) -> None:
-        self.sent: list[Out] = []
+        self.sent: list[SimpleNamespace] = []
         self.read = 0  # messages already returned by next()
-        self.typing: list[bool] = []  # `typing` frames, in order
+        self.typed: list[bool] = []  # typing on/off, in order
+        self.states: list[tuple[str, str]] = []
 
-    async def send(self, frame) -> None:
-        if isinstance(frame, Typing):
-            self.typing.append(frame.on)
-        else:
-            self.sent.append(frame)
+    async def message(self, account, text, image=None) -> None:
+        self.sent.append(SimpleNamespace(text=text, buttons=[], image=image, card=None))
 
-    async def next(self, timeout: float = 3) -> Out:
+    async def text(self, account, text) -> None:
+        await self.message(account, text)
+
+    async def typing(self, account, on) -> None:
+        self.typed.append(on)
+
+    async def card(self, account, card) -> None:
+        icon = "🧠" if card["kind"] in ("memory", "forget") else "✋"
+        lines = [f"{icon} {card['title']}"] + [f"{f['label']}: {f['value']}" for f in card["fields"]]
+        actions = ["yes", "edit", "no"] if len(card["buttons"]) == 3 else ["yes", "no"]
+        buttons = [
+            SimpleNamespace(id=f"ap-{card['id']}-{a}", label=lbl)
+            for a, lbl in zip(actions, card["buttons"], strict=True)
+        ]
+        image = card.get("image")
+        self.sent.append(SimpleNamespace(text="\n".join(lines), buttons=buttons, image=image, card=card))
+
+    async def state(self, account, approval_id, state) -> None:
+        self.states.append((approval_id, state))
+
+    async def next(self, timeout: float = 3) -> SimpleNamespace:
         """The next message not read yet, waiting for it if needed."""
         deadline = time.monotonic() + timeout
         while len(self.sent) <= self.read:
@@ -84,7 +107,7 @@ def config(tmp_path: Path) -> Config:
 @pytest.fixture
 def accounts(config) -> Accounts:
     accts = Accounts(config.data_dir)
-    accts.upsert(ADDRESS, cert=Cert(address=ADDRESS, instance="AAAA", issued=1, expires=2**40, sig="AAAA"), name="Fe")
+    accts.create("Fe")
     return accts
 
 
@@ -108,11 +131,22 @@ def chat() -> Chat:
 
 @pytest.fixture
 def agent(config, accounts, llm, registry, chat) -> Agent:
-    return Agent(config, accounts, llm, registry, chat.send)
+    return Agent(config, accounts, llm, registry, chat)
 
 
-def said(text: str = "", button: str | None = None, sender: str = ADDRESS) -> In:
-    return In(id=f"m{time.monotonic_ns()}", sender=sender, text=text, button=button)
+def person(accounts: Accounts):
+    return accounts.all()[0]
+
+
+async def say(agent: Agent, text: str = "", button: str | None = None) -> None:
+    """What the channel does with a device's message: a typed text, or a tap on an approval card's button."""
+    account = person(agent.accounts)
+    if button is not None:
+        _, approval_id, action = button.split("-")
+        decision = {"yes": "approve", "no": "decline", "edit": "edit"}[action]
+        await agent.approval_reply(account, approval_id, decision)
+    else:
+        await agent.inbound(account, text)
 
 
 async def settle(agent: Agent, timeout: float = 3) -> None:

@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
-"""Approvals in the chat (SPEC §5.1, §5.3).
+"""Approvals (SPEC §5.1, §5.3).
 
-A tool call that needs approval becomes a chat message with three buttons. The task waits on a future that
-only the person's reply can resolve: the model has no tool, message or argument that reaches this module.
-Declines, expiry, `stop` and errors never run the action (default deny), and what the person approved,
-edits included, is exactly what runs.
+A tool call that needs approval becomes an approval card in the app. The task waits on a future that only the
+person's reply can resolve: the model has no tool, message or argument that reaches this module. Declines,
+expiry, `stop` and errors never run the action (default deny), and what the person approved, edits included,
+is exactly what runs.
 """
 
 from __future__ import annotations
@@ -13,15 +13,15 @@ from __future__ import annotations
 import asyncio
 import re
 import secrets
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from . import messages
 from .accounts import Account
-from .protocol import Button, Image
+from .items import Image
 
-BUTTON_PATTERN = re.compile(r"^ap-([a-z0-9]{6})-(yes|edit|no)$")
 EDIT_LINE = re.compile(r"^\s*(\d{1,2})\s*[:.)-]\s*(.*)$")
+MAX_VALUE = 2000
 
 
 @dataclass
@@ -51,36 +51,39 @@ class Pending:
     editing: bool = False
 
 
-Send = Callable[[Account, str, list[Button], Image | None], Awaitable[None]]
+class Out(Protocol):
+    """Where approvals are shown (the channel to the person's devices)."""
+
+    async def card(self, account: Account, card: dict) -> None: ...
+    async def state(self, account: Account, approval_id: str, state: str) -> None: ...
+    async def text(self, account: Account, text: str) -> None: ...
 
 
-def render(p: Pending) -> tuple[str, list[Button]]:
-    icon = "🧠" if p.kind in ("memory", "forget") else "✋"
-    lines = [f"{icon} *{p.title}*"]
-    if len(p.fields) == 1:
-        f = p.fields[0]
-        lines.append(f"_{f.value}_" if p.kind in ("memory", "forget") else f"{f.label}: {f.value}")
-    else:
-        lines += [f"{i}. {f.label}: {shown(f.value)}" for i, f in enumerate(p.fields, 1)]
+def card(p: Pending) -> dict:
     yes, edit, no = messages.APPROVE_LABELS.get(p.kind, messages.APPROVE_LABELS["action"])
-    buttons = [Button(id=f"ap-{p.id}-yes", label=yes), Button(id=f"ap-{p.id}-no", label=no)]
-    if any(f.kind == "text" for f in p.fields):
-        buttons.insert(1, Button(id=f"ap-{p.id}-edit", label=edit))
-    return "\n".join(lines), buttons
-
-
-def shown(value: str) -> str:
-    """Checkbox values read better as yes/no; the value itself is unchanged."""
-    return {"true": "yes ☑️", "false": "no ☐"}.get(value.strip().lower(), value)
+    editable = any(f.kind == "text" for f in p.fields)
+    out = {
+        "t": "approval",
+        "id": p.id,
+        "kind": p.kind,
+        "title": p.title,
+        "fields": [
+            {"label": f.label, "value": f.value, "editable": f.kind == "text", "kind": f.kind} for f in p.fields
+        ],
+        "buttons": [yes, edit, no] if editable else [yes, no],
+    }
+    if p.image is not None:
+        out["image"] = p.image.to_dict()
+    return out
 
 
 def apply_edit(fields: list[Field], text: str) -> list[Field] | None:
-    """One field: the whole text. Several: lines of '<n>: <value>'. None if nothing matched."""
+    """Text fallback. One field: the whole text. Several: lines of '<n>: <value>'. None if nothing matched."""
     text = text.strip()
     if not text:
         return None
     if len(fields) == 1:
-        return [Field(fields[0].label, text, fields[0].kind)]
+        return [Field(fields[0].label, text[:MAX_VALUE], fields[0].kind)]
     new = [Field(f.label, f.value, f.kind) for f in fields]
     matched = False
     for line in text.splitlines():
@@ -89,16 +92,35 @@ def apply_edit(fields: list[Field], text: str) -> list[Field] | None:
             continue
         i = int(m.group(1)) - 1
         if 0 <= i < len(new) and new[i].kind == "text":
-            new[i].value = m.group(2).strip()
+            new[i].value = m.group(2).strip()[:MAX_VALUE]
             matched = True
     return new if matched else None
 
 
+def checked_values(fields: list[Field], values: list) -> list[str] | None:
+    """Values edited in the card: same count; only text fields may change; booleans stay booleans."""
+    if not isinstance(values, list) or len(values) != len(fields):
+        return None
+    out = []
+    for f, v in zip(fields, values, strict=True):
+        if not isinstance(v, str) or len(v) > MAX_VALUE:
+            return None
+        if f.kind == "text":
+            out.append(v)
+        elif f.kind == "bool" and v.lower() in ("true", "false"):
+            out.append(v.lower())
+        elif v == f.value:
+            out.append(v)
+        else:
+            return None
+    return out
+
+
 class Approvals:
-    def __init__(self, send: Send, expiry: float) -> None:
-        self.send = send
+    def __init__(self, out: Out, expiry: float) -> None:
+        self.out = out
         self.expiry = expiry
-        self._pending: dict[str, Pending] = {}  # by account address
+        self._pending: dict[str, Pending] = {}  # by account id
 
     def pending_for(self, address: str) -> Pending | None:
         return self._pending.get(address)
@@ -107,22 +129,25 @@ class Approvals:
         self, account: Account, kind: str, title: str, fields: list[Field], image: Image | None = None
     ) -> Decision:
         p = Pending(
-            secrets.token_hex(3), account, kind, title, fields, image, asyncio.get_running_loop().create_future()
+            secrets.token_hex(4), account, kind, title, fields, image, asyncio.get_running_loop().create_future()
         )
         self._pending[account.address] = p
-        text, buttons = render(p)
         account.audit({"approval": p.id, "kind": kind, "title": title, "asked": [f.value for f in fields]})
+        state = "stopped"
         try:
-            await self.send(account, text, buttons, image)
+            await self.out.card(account, card(p))
             decision = await asyncio.wait_for(asyncio.shield(p.future), timeout=self.expiry)
+            state = "approved" if decision.approved else ("expired" if decision.reason == "expired" else "declined")
         except TimeoutError:
             decision = Decision(False, reason="expired")
+            state = "expired"
         except asyncio.CancelledError:
             account.audit({"approval": p.id, "decision": "stopped"})
             raise
         finally:
             if self._pending.get(account.address) is p:
                 del self._pending[account.address]
+            await asyncio.shield(self.out.state(account, p.id, state))
         account.audit(
             {
                 "approval": p.id,
@@ -133,42 +158,46 @@ class Approvals:
         )
         return decision
 
-    async def reply(self, account: Account, text: str, button: str | None) -> bool:
-        """Route a person's message to their open approval. Returns False if they have none."""
+    async def answer(
+        self, account: Account, approval_id: str, decision: str, values: list | None = None, note: str = ""
+    ) -> None:
+        """A tap on a card: approve (with the card's possibly edited values), edit (text fallback) or decline."""
         p = self._pending.get(account.address)
-        if button is not None:
-            m = BUTTON_PATTERN.match(button)
-            if m is None:
-                return False
-            if p is None or m.group(1) != p.id:
-                await self.send(account, messages.APPROVAL_STALE, [], None)
-                return True
-            action = m.group(2)
-            if action == "yes":
-                self._resolve(p, Decision(True, [f.value for f in p.fields]))
-            elif action == "no":
-                self._resolve(p, Decision(False, reason="declined"))
+        if p is None or approval_id != p.id:
+            await self.out.text(account, messages.APPROVAL_STALE)
+            return
+        if decision == "approve":
+            final = [f.value for f in p.fields] if values is None else checked_values(p.fields, values)
+            if final is None:
+                await self.out.text(account, messages.EDIT_UNCLEAR)
+                return
+            self._resolve(p, Decision(True, final))
+        elif decision == "decline":
+            self._resolve(p, Decision(False, note=str(note)[:MAX_VALUE].strip(), reason="declined"))
+        elif decision == "edit":
+            p.editing = True
+            text_fields = [i for i, f in enumerate(p.fields, 1) if f.kind == "text"]
+            if len(p.fields) == 1:
+                prompt = messages.EDIT_ONE
             else:
-                p.editing = True
-                text_fields = [i for i, f in enumerate(p.fields, 1) if f.kind == "text"]
-                if len(p.fields) == 1:
-                    prompt = messages.EDIT_ONE
-                else:
-                    i = text_fields[0]
-                    prompt = messages.EDIT_MANY.format(example=f"{i}: {p.fields[i - 1].value}")
-                await self.send(account, prompt, [], None)
-            return True
+                i = text_fields[0]
+                prompt = messages.EDIT_MANY.format(example=f"{i}: {p.fields[i - 1].value}")
+            await self.out.text(account, prompt)
+
+    async def reply_text(self, account: Account, text: str) -> bool:
+        """A typed message while an approval is open. Returns False if there is none."""
+        p = self._pending.get(account.address)
         if p is None:
             return False
         if p.editing:
             edited = apply_edit(p.fields, text)
             if edited is None:
-                await self.send(account, messages.EDIT_UNCLEAR, [], None)
+                await self.out.text(account, messages.EDIT_UNCLEAR)
                 return True
+            await self.out.state(account, p.id, "replaced")
             p.fields, p.editing = edited, False
-            p.id = secrets.token_hex(3)  # buttons of the old version no longer apply
-            body, buttons = render(p)
-            await self.send(account, body, buttons, None)
+            p.id = secrets.token_hex(4)  # the old card no longer applies
+            await self.out.card(account, card(p))
             return True
         # Free text while an approval is open: decline, and pass the text to the model as a note.
         self._resolve(p, Decision(False, note=text.strip(), reason="declined"))

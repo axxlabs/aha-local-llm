@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Axxlabs Limited
 """Checks on the model's final answer, in code (SPEC §3.5, "numbers come from sources").
 
-1. chat_format: Markdown that chat apps don't render becomes WhatsApp formatting.
+1. chat_format: Markdown the app doesn't render (headings) is normalised; everything else is left as Markdown.
 2. unverified: times, prices, dates, phone numbers and reference-like numbers in the answer that appear in no
    page aha opened during the task (fetch_url or the browser), in the person's own messages, in their memories
    or in their documents. Search-result snippets don't count. Those numbers get a visible warning, so a
@@ -13,21 +13,12 @@ from __future__ import annotations
 
 import re
 
-BOLD = re.compile(r"\*\*(.+?)\*\*", re.S)
-UNDERLINE_BOLD = re.compile(r"__(.+?)__", re.S)
-LINK = re.compile(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)")
 HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*#*$", re.M)
-BULLET = re.compile(r"^(\s*)[-*]\s+", re.M)
-TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{3,}.*$", re.M)
 
 
 def chat_format(text: str) -> str:
-    text = HEADING.sub(r"*\1*", text)
-    text = BOLD.sub(r"*\1*", text)
-    text = UNDERLINE_BOLD.sub(r"*\1*", text)
-    text = LINK.sub(lambda m: m.group(2) if m.group(1).strip() == m.group(2) else f"{m.group(1)}: {m.group(2)}", text)
-    text = BULLET.sub(r"\1• ", text)
-    text = TABLE_RULE.sub("", text)
+    """The app renders a safe subset of Markdown (SPEC §7.4); headings become bold lines."""
+    text = HEADING.sub(r"**\1**", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
-"""Ed25519 keys, binding certificates and handshake signatures (SPEC §6.1, §6.2, §6.4).
+"""Ed25519 keys, binding certificates and handshake signatures (SPEC §6.1–§6.4).
 
 This file is identical in aha-gateway and aha-local-llm.
 """
@@ -16,7 +16,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
-from .protocol import HANDSHAKE_CONTEXT, Cert, b64, unb64
+from .protocol import DEVICE_CONTEXT, HANDSHAKE_CONTEXT, Cert, b64, unb64
 
 CERT_LIFETIME = 365 * 24 * 3600
 RENEW_BEFORE = 30 * 24 * 3600
@@ -55,39 +55,45 @@ def verify(public: str, message: bytes, signature: str) -> bool:
         return False
 
 
-# ---- handshake
+# ---- handshakes
 
 
 def handshake_message(nonce: str, instance: str = "") -> bytes:
-    """What each side signs: the other side's nonce (and, for the computer, its own public key)."""
+    """Tunnel: what each side signs (the other side's nonce and, for the computer, its own public key)."""
     return f"{HANDSHAKE_CONTEXT}|{nonce}|{instance}".encode()
 
 
-# ---- binding certificates
+def device_message(nonce: str, device: str) -> bytes:
+    """Device connection: what the device signs with its auth key (SPEC §6.3)."""
+    return f"{DEVICE_CONTEXT}|{nonce}|{device}".encode()
+
+
+# ---- binding certificates (routing only, SPEC §6.4)
 
 
 def cert_body(cert: Cert) -> bytes:
     fields = {
         "v": cert.v,
-        "address": cert.address,
+        "device": cert.device,
         "instance": cert.instance,
+        "tag": cert.tag,
         "issued": cert.issued,
         "expires": cert.expires,
     }
-    return ("aha-cert-v1|" + json.dumps(fields, sort_keys=True, separators=(",", ":"))).encode()
+    return ("aha-cert-v2|" + json.dumps(fields, sort_keys=True, separators=(",", ":"))).encode()
 
 
-def issue_cert(gateway_key: Ed25519PrivateKey, address: str, instance: str, now: int | None = None) -> Cert:
+def issue_cert(gateway_key: Ed25519PrivateKey, device: str, instance: str, tag: str, now: int | None = None) -> Cert:
     now = int(time.time()) if now is None else now
-    unsigned = Cert(address=address, instance=instance, issued=now, expires=now + CERT_LIFETIME)
+    unsigned = Cert(device=device, instance=instance, tag=tag, issued=now, expires=now + CERT_LIFETIME)
     return unsigned.model_copy(update={"sig": sign(gateway_key, cert_body(unsigned))})
 
 
-def cert_valid(cert: Cert, gateway_public: str, instance: str, now: int | None = None) -> bool:
-    """Signed by this gateway, for this instance, and not expired."""
+def cert_valid(cert: Cert, gateway_public: str, instance: str | None = None, now: int | None = None) -> bool:
+    """Signed by this gateway, not expired, and (if given) for this instance."""
     now = int(time.time()) if now is None else now
     return (
-        cert.instance == instance
+        (instance is None or cert.instance == instance)
         and cert.issued <= now + 300
         and now < cert.expires
         and verify(gateway_public, cert_body(cert), cert.sig)

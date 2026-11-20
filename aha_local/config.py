@@ -23,6 +23,7 @@ DEFAULT_TOML = """\
 [gateway]
 url = "{gateway_url}"
 pin = "{pin}"
+app = "{app_url}"          # where pairing links open the Aha! app
 
 [household]
 name = "{name}"
@@ -36,6 +37,8 @@ dir = "{models_dir}"
 approval_expiry_hours = 24
 max_model_calls_per_task = 40
 max_task_minutes = 15
+history_sync_days = 30     # the most a device may cache or re-sync
+push_preview = false       # true: notifications show the first line of the reply
 
 [browser]
 # true: any public site opens without asking; typing and forms still need approval (SPEC §5.2).
@@ -56,6 +59,10 @@ class Config:
     max_task_seconds: float = 15 * 60
     allow_all_sites: bool = True
     source_url: str = "https://github.com/axxlabs/aha-local-llm"  # named in `help` (AGPL §13, SPEC §10.1)
+    app_url: str = "https://app.aha.axxlabs.ai"  # where pairing links open the app (SPEC §6.4)
+    device_url: str = ""  # the gateway's device endpoint, for the pairing link; derived from gateway_url if empty
+    history_sync_days: int = 30
+    push_preview: bool = False
     # Service addresses (inside the containers' networks; overridable for development and tests).
     data_dir: Path = field(default_factory=lambda: Path(os.environ.get("AHA_DATA_DIR", "/data")))
     documents_mount: Path = field(default_factory=lambda: Path(os.environ.get("AHA_DOCUMENTS_DIR", "/documents")))
@@ -83,4 +90,17 @@ class Config:
             max_task_seconds=float(agent.get("max_task_minutes", 15)) * 60,
             allow_all_sites=bool(browser.get("allow_all_sites", True)),
             source_url=str(agent.get("source_url", "https://github.com/axxlabs/aha-local-llm")),
+            app_url=str(gw.get("app", "https://app.aha.axxlabs.ai")),
+            device_url=str(gw.get("device_url", "")),
+            history_sync_days=int(agent.get("history_sync_days", 30)),
+            push_preview=bool(agent.get("push_preview", False)),
         )
+
+    @property
+    def gateway_device_url(self) -> str:
+        """The URL devices connect to. For a unix-socket gateway (development), the local TCP endpoint."""
+        if self.device_url:
+            return self.device_url
+        if self.gateway_url.startswith("unix:"):
+            return "ws://127.0.0.1:8700/v1/device"
+        return self.gateway_url.rsplit("/v1/", 1)[0] + "/v1/device"

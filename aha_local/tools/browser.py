@@ -21,9 +21,9 @@ import mcp.types as mt
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
+from ..items import Image
 from ..policy.browser import decide, form_for, offered
 from ..policy.urls import check_url, site_of
-from ..protocol import Image
 from .registry import Registry, Tool, ToolContext, ToolResult
 
 log = logging.getLogger("aha.browser")

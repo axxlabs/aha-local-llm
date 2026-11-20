@@ -29,7 +29,7 @@ last exchange) · *help*
 Open source (AGPL-3.0): {source}"""
 
 APPROVE_LABELS = {
-    "action": ("✅ Approve", "✏️ Edit", "❌ Decline"),
-    "memory": ("✅ Save", "✏️ Edit", "❌ Don't"),
-    "forget": ("✅ Forget it", "✏️ Edit", "❌ Keep it"),
+    "action": ("Approve", "Edit", "Decline"),
+    "memory": ("Save", "Edit", "Don't"),
+    "forget": ("Forget it", "Edit", "Keep it"),
 }

@@ -10,11 +10,12 @@ import logging
 import os
 import time
 
-from . import __version__, messages
+from . import __version__
 from .accounts import Accounts
 from .agent import Agent
 from .certs import load_or_create_key, public_b64
 from .config import Config
+from .e2e.channel import Channel
 from .llm import LLM
 from .tools import browser, conversation, documents, memory, web
 from .tools.registry import Registry
@@ -34,25 +35,25 @@ class Service:
             module.register(self.registry)
         self.browser = browser.BrowserSession(config.browser_url)
         self.llm = LLM(config.llm_url, config.llm_model)
-        self.tunnel = Tunnel(
-            config.gateway_url,
-            config.gateway_pin,
-            self.key,
+        self.channel = Channel(
             self.accounts,
+            data / "keys",
+            self._send_frame,
+            config.app_url,
+            config.gateway_device_url,
             config.household_name,
-            self._inbound,
-            self._paired,
+            config.history_sync_days,
+            config.push_preview,
         )
-        self.agent = Agent(config, self.accounts, self.llm, self.registry, self.tunnel.send_out, self.browser)
+        self.tunnel = Tunnel(
+            config.gateway_url, config.gateway_pin, self.key, self.accounts, config.household_name, self.channel
+        )
+        self.agent = Agent(config, self.accounts, self.llm, self.registry, self.channel, self.browser)
+        self.channel.agent = self.agent
         self.started = time.time()
 
-    async def _inbound(self, frame) -> None:
-        await self.agent.inbound(frame)
-
-    async def _paired(self, address: str) -> None:
-        acct = self.accounts.get(address)
-        if acct:
-            await self.agent.send(acct, messages.WELCOME)
+    async def _send_frame(self, frame) -> None:
+        await self.tunnel.send(frame)
 
     async def run(self) -> None:
         self.browser.start()
@@ -88,40 +89,73 @@ class Service:
                 "instance": public_b64(self.key),
                 "gateway": self.config.gateway_url,
                 "tunnel": self.tunnel.status,
-                "accounts": len(self.accounts.paired()),
+                "accounts": len(self.accounts.all()),
+                "devices": sum(len(a.devices) for a in self.accounts.all()),
+                "online": len(self.channel.online),
                 "tools": len(self.registry.names()),
                 "running": len(self.agent.running),
                 "uptime": int(time.time() - self.started),
             }
         if cmd == "pair":
-            return {"ok": True, "code": await self.tunnel.pair()}
+            name = str(req.get("name", "")).strip()
+            if not name:
+                return {"ok": False, "error": "give the person's name: aha pair <name>"}
+            acct = self.accounts.find(name) or self.accounts.create(name)
+            code = await self.tunnel.pair_code()
+            state = self.channel.new_pairing(code, acct)
+            return {
+                "ok": True,
+                "code": code,
+                "account": acct.id,
+                "link": self.channel.pairing_link(code, state, acct, self.config.gateway_pin),
+            }
         if cmd == "wait_paired":
-            address = await self.tunnel.wait_paired(float(req.get("timeout", 600)))
-            return {"ok": True, "address": address}
+            code = str(req.get("code", ""))
+            state = self.channel.pairings.get(code)
+            if state is None:
+                return {"ok": False, "error": "no such pairing (it may have finished or expired)"}
+            name = await asyncio.wait_for(asyncio.shield(state.done), float(req.get("timeout", 600)))
+            return {"ok": True, "name": name}
         if cmd == "accounts":
             return {
                 "ok": True,
                 "accounts": [
                     {
-                        "address": a.address,
+                        "id": a.id,
                         "name": a.name,
-                        "paired": a.cert is not None,
-                        "expires": a.cert.expires if a.cert else None,
+                        "devices": len(a.devices),
                         "memories": len(a.load_memory()),
                     }
                     for a in self.accounts.all()
                 ],
             }
-        address = req.get("address", "")
-        acct = self.accounts.get(address)
-        if cmd in ("unpair", "memory_list", "memory_import", "export", "rename") and acct is None:
+        acct = self.accounts.find(str(req.get("account", "")))
+        if cmd in ("devices", "revoke", "memory_list", "memory_import", "export", "rename", "delete") and acct is None:
             return {"ok": False, "error": "no such account (see `aha accounts`)"}
-        if cmd == "unpair":
-            await self.tunnel.unpair(address)
+        if cmd == "devices":
+            return {
+                "ok": True,
+                "devices": [
+                    {
+                        "id": d.dev,
+                        "name": d.name,
+                        "created": d.created,
+                        "last_seen": d.last_seen,
+                        "online": d.dev in self.channel.online,
+                        "push": bool(d.push),
+                    }
+                    for d in acct.devices.values()
+                ],
+            }
+        if cmd == "revoke":
+            dev = str(req.get("device", ""))
+            matches = [d for d in acct.devices if d == dev or d.startswith(dev) or acct.devices[d].name == dev]
+            if len(matches) != 1:
+                return {"ok": False, "error": "no single device matches (see `aha devices <account>`)"}
+            await self.channel.revoke(acct, matches[0])
             return {"ok": True}
         if cmd == "rename":
-            acct.name = str(req.get("name", ""))[:60]
-            acct.save()
+            self.accounts.rename(acct, str(req.get("name", "")))
             return {"ok": True}
         if cmd == "memory_list":
             return {"ok": True, "memories": acct.load_memory()}
@@ -131,12 +165,12 @@ class Service:
         if cmd == "export":
             target = self.config.data_dir / "exports" / f"{acct.id}.zip"
             target.parent.mkdir(exist_ok=True)
-            self.accounts.export(address, target)
+            self.accounts.export(acct.id, target)
             return {"ok": True, "file": target.name}
         if cmd == "delete":
-            if acct and acct.cert:
-                await self.tunnel.unpair(address)
-            return {"ok": self.accounts.delete(address)}
+            for dev in list(acct.devices):
+                await self.channel.revoke(acct, dev)
+            return {"ok": self.accounts.delete(acct.id) is not None}
         return {"ok": False, "error": f"unknown command {cmd!r}"}
 
 
