@@ -27,9 +27,9 @@ def seed(label: str, n: int = 32) -> bytes:
 
 
 def pairing() -> dict:
-    ikc_p, ikc = c.x25519_keypair(seed("ikc"))
+    _ikc_p, ikc = c.x25519_keypair(seed("ikc"))
     kemc_s, kemc = c.kem_keypair(seed("kemc", 64))
-    ekc_p, ekc = c.x25519_keypair(seed("ekc"))
+    _ekc_p, ekc = c.x25519_keypair(seed("ekc"))
     ikd_p, ikd = c.x25519_keypair(seed("ikd"))
     _, kemd = c.kem_keypair(seed("kemd", 64))
     from cryptography.hazmat.primitives.asymmetric import ed25519

@@ -179,9 +179,9 @@ VECTORS = __import__("pathlib").Path(__file__).parent / "vectors"
 def check_vectors(v: dict) -> None:
     p = v["pairing"]
     s = {k: c.b64d(x) for k, x in p["seeds"].items()}
-    ikc_p, ikc = c.x25519_keypair(s["ikc"])
+    _ikc_p, ikc = c.x25519_keypair(s["ikc"])
     kemc_s, kemc = c.kem_keypair(s["kemc"])
-    ekc_p, ekc = c.x25519_keypair(s["ekc"])
+    _ekc_p, ekc = c.x25519_keypair(s["ekc"])
     ikd_p, ikd = c.x25519_keypair(s["ikd"])
     _, kemd = c.kem_keypair(s["kemd"])
     from cryptography.hazmat.primitives.asymmetric import ed25519
