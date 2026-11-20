@@ -200,3 +200,15 @@ async def test_documents_search_and_read(agent, llm, chat, config):
     tools = [m for m in llm.requests[-1]["messages"] if m["role"] == "tool"]
     assert "[home/appliances.md]" in tools[0]["content"] and "2027-08-02" in tools[0]["content"]
     assert "no such document" in tools[1]["content"]
+
+
+async def test_no_on_it_after_an_approval(agent, llm, chat, config):
+    object.__setattr__(config, "on_it_after", 0.1)
+    llm.call("memory_add", text="Wife is vegetarian")
+    llm.answer("Noted.")
+    await agent.inbound(said("my wife is vegetarian"))
+    ask = await chat.next()
+    await asyncio.sleep(0.2)
+    await agent.inbound(said("ok", button=ask.buttons[0].id))
+    await settle(agent)
+    assert "On it…" not in chat.texts()

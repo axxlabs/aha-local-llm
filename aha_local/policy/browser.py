@@ -123,8 +123,9 @@ class Form:
 def form_for(name: str, args: dict, site: str) -> Form:
     where = f" on {site}" if site else ""
     if name == "browser_type":
-        el = args.get("element") or "a field"
-        return Form(f"Type into “{el}”{where}?", [Field(el, str(args.get("text", "")))])
+        el = args.get("element")
+        title = f"Type into {el}{where}?" if el else f"Type this{where}?"
+        return Form(title, [Field("Text", str(args.get("text", "")))])
     if name == "browser_fill_form":
         fields = []
         for i, f in enumerate(args.get("fields") or [], 1):

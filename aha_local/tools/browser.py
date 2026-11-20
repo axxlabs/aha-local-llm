@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -25,7 +26,7 @@ from .registry import Registry, Tool, ToolContext, ToolResult
 
 log = logging.getLogger("aha.browser")
 
-MAX_SNAPSHOT_CHARS = 60_000
+MAX_SNAPSHOT_CHARS = 30_000
 APPROVED_NOTE = (
     "The user approved this action; that approval is their go-ahead. "
     "Continue the task without asking for confirmation in the chat."
@@ -121,13 +122,74 @@ async def current_site(session: BrowserSession) -> str:
     return ""
 
 
+SNAPSHOT_LINK = re.compile(r"### Snapshot\s*\n- \[Snapshot\]\([^)]*\)")
+REF_TARGET = re.compile(r"^\[?ref=(e\d+)\]?$")
+YAML_BLOCK = re.compile(r"```yaml\n(.*?)(?:```|\Z)", re.S)  # tolerant of a snapshot cut to fit
+
+
+def normalise_targets(args: dict) -> dict:
+    """The model often writes "[ref=e23]" where the browser wants "e23"."""
+
+    def fix(v):
+        m = REF_TARGET.match(v.strip()) if isinstance(v, str) else None
+        return m.group(1) if m else v
+
+    out = {k: fix(v) if k in ("target", "ref") else v for k, v in args.items()}
+    if isinstance(out.get("fields"), list):
+        out["fields"] = [{**f, "target": fix(f.get("target"))} if isinstance(f, dict) else f for f in out["fields"]]
+    return out
+
+
+def element_label(snapshot: str, ref: str) -> str:
+    """The element as the page describes it, e.g. 'searchbox "Search Wikipedia"' (not the model's words)."""
+    for line in snapshot.splitlines():
+        if f"[ref={ref}]" in line:
+            label = re.sub(r"\[[^\]]*\]", "", line).strip().lstrip("- ").rstrip(":").strip()
+            if m := re.match(r'^[\w-]+\s+"(.+)"', label):  # 'textbox "Customer name:"' → 'Customer name'
+                label = m.group(1).strip().rstrip(":").strip()
+            return label[:80]
+    return ""
+
+
+async def call_with_snapshot(session: BrowserSession, name: str, args: dict, ctx: ToolContext) -> ToolResult:
+    """Run a browser tool; when the result only links to its snapshot file, fetch the snapshot inline."""
+    result = to_result(await session.call(name, args))
+    if SNAPSHOT_LINK.search(result.text):
+        snap = to_result(await session.call("browser_snapshot", {}))
+        if not snap.error:
+            result.text = SNAPSHOT_LINK.sub(
+                "### Snapshot\n" + snap.text.split("### Snapshot", 1)[-1].strip(), result.text
+            )
+    if m := YAML_BLOCK.search(result.text):
+        ctx.task.last_snapshot = m.group(1)
+    return result
+
+
+def labelled(name: str, args: dict, ctx: ToolContext) -> dict:
+    """Replace the model's element descriptions with the page's own labels, for the approval."""
+    snap = ctx.task.last_snapshot
+    out = dict(args)
+    if name in ("browser_type", "browser_select_option") and (
+        label := element_label(snap, str(args.get("target", "")))
+    ):
+        out["element"] = label
+    if name == "browser_fill_form" and isinstance(args.get("fields"), list):
+        fields = []
+        for f in args["fields"]:
+            label = element_label(snap, str(f.get("target", ""))) if isinstance(f, dict) else ""
+            fields.append({**f, "name": label} if label else f)
+        out["fields"] = fields
+    return out
+
+
 def make_handler(session: BrowserSession, name: str):
     async def handler(args: dict, ctx: ToolContext) -> ToolResult:
+        args = normalise_targets(args)
         verdict = decide(name, args, ctx.config.allow_all_sites, ctx.task.approved_sites)
         if verdict.outcome == "block":
             return ToolResult(f"Blocked by aha's safety policy: {verdict.reason}.", error=True)
         if verdict.outcome == "auto":
-            result = to_result(await session.call(name, args))
+            result = await call_with_snapshot(session, name, args, ctx)
             if verdict.site and not result.error:
                 ctx.task.approved_sites.add(verdict.site)
             return result
@@ -143,7 +205,7 @@ def make_handler(session: BrowserSession, name: str):
             shot = shot_result.images[0] if shot_result.images else None
         except Exception:
             log.warning("couldn't take a screenshot for the approval")
-        form = form_for(name, args, site)
+        form = form_for(name, labelled(name, args, ctx), site)
         decision = await ctx.approvals.ask(ctx.account, "action", form.title, form.fields, shot)
         if not decision.approved:
             return declined(decision)
@@ -153,7 +215,7 @@ def make_handler(session: BrowserSession, name: str):
             if why:
                 return ToolResult(f"Blocked by aha's safety policy: {why}.", error=True)
             ctx.task.approved_sites.add(new_site)
-        result = to_result(await session.call(name, final))
+        result = await call_with_snapshot(session, name, final, ctx)
         notes = [APPROVED_NOTE]
         if final != args:
             notes.append(

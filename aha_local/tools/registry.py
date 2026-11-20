@@ -33,6 +33,7 @@ class TaskState:
     """What tools may remember during one task."""
 
     approved_sites: set[str] = field(default_factory=set)
+    last_snapshot: str = ""  # the latest page snapshot, to label approvals from the page itself
 
 
 @dataclass

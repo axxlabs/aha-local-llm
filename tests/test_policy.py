@@ -92,3 +92,24 @@ def test_forms_carry_the_real_values_and_edits_land_in_the_arguments():
         "text": "Porto",
         "submit": True,
     }
+
+
+def test_targets_are_normalised_and_labels_come_from_the_page():
+    from aha_local.tools.browser import element_label, normalise_targets
+
+    assert normalise_targets({"target": "[ref=e23]", "text": "x"}) == {"target": "e23", "text": "x"}
+    assert normalise_targets({"fields": [{"target": "ref=e5", "value": "a"}]})["fields"][0]["target"] == "e5"
+    snap = (
+        '- banner [ref=e4]:\n  - searchbox "Search Wikipedia" [ref=e23]\n  - button "Search" [ref=e24] [cursor=pointer]'
+    )
+    assert element_label(snap, "e23") == "Search Wikipedia"
+    assert element_label(snap, "e24") == "Search"
+    assert element_label('- textbox "Customer name:" [ref=e7]', "e7") == "Customer name"
+    assert element_label(snap, "e99") == ""
+
+
+def test_label_found_in_a_snapshot_cut_to_fit():
+    from aha_local.tools.browser import YAML_BLOCK, element_label
+
+    text = '### Snapshot\n```yaml\n- searchbox "Search Wikipedia" [ref=e23]\n- link "x" [ref=e24]\n[… snapshot cut'
+    assert element_label(YAML_BLOCK.search(text).group(1), "e23") == "Search Wikipedia"

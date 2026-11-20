@@ -59,12 +59,17 @@ def render(p: Pending) -> tuple[str, list[Button]]:
         f = p.fields[0]
         lines.append(f"_{f.value}_" if p.kind in ("memory", "forget") else f"{f.label}: {f.value}")
     else:
-        lines += [f"{i}. {f.label}: {f.value}" for i, f in enumerate(p.fields, 1)]
+        lines += [f"{i}. {f.label}: {shown(f.value)}" for i, f in enumerate(p.fields, 1)]
     yes, edit, no = messages.APPROVE_LABELS.get(p.kind, messages.APPROVE_LABELS["action"])
     buttons = [Button(id=f"ap-{p.id}-yes", label=yes), Button(id=f"ap-{p.id}-no", label=no)]
     if any(f.kind == "text" for f in p.fields):
         buttons.insert(1, Button(id=f"ap-{p.id}-edit", label=edit))
     return "\n".join(lines), buttons
+
+
+def shown(value: str) -> str:
+    """Checkbox values read better as yes/no; the value itself is unchanged."""
+    return {"true": "yes ☑️", "false": "no ☐"}.get(value.strip().lower(), value)
 
 
 def apply_edit(fields: list[Field], text: str) -> list[Field] | None:
@@ -92,6 +97,7 @@ class Approvals:
         self.send = send
         self.expiry = expiry
         self._pending: dict[str, Pending] = {}  # by account address
+        self.asked: dict[str, int] = {}  # approvals asked per account, ever (the agent reads it to skip "On it…")
 
     def pending_for(self, address: str) -> Pending | None:
         return self._pending.get(address)
@@ -103,6 +109,7 @@ class Approvals:
             secrets.token_hex(3), account, kind, title, fields, image, asyncio.get_running_loop().create_future()
         )
         self._pending[account.address] = p
+        self.asked[account.address] = self.asked.get(account.address, 0) + 1
         text, buttons = render(p)
         account.audit({"approval": p.id, "kind": kind, "title": title, "asked": [f.value for f in fields]})
         try:

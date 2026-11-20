@@ -147,8 +147,11 @@ class Agent:
         await self._fold(account, conv)
 
     async def _on_it(self, account: Account) -> None:
+        """Once, after a while, unless the person has already heard from this task (an approval)."""
+        asked_before = self.approvals.asked.get(account.address, 0)
         await asyncio.sleep(self.config.on_it_after)
-        await self.send(account, messages.ON_IT)
+        if self.approvals.asked.get(account.address, 0) == asked_before:
+            await self.send(account, messages.ON_IT)
 
     async def solve(self, account: Account, text: str) -> tuple[str, bool]:
         task: list[dict] = [{"role": "user", "content": text}]
