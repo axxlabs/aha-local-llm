@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import uuid
-from collections import defaultdict, deque
+from collections import defaultdict
 from collections.abc import Awaitable, Callable
 
 from . import checks, context, messages
@@ -21,7 +21,8 @@ from .tools.registry import Registry, TaskState, ToolContext
 log = logging.getLogger("aha.agent")
 
 SendOut = Callable[[Out], Awaitable[None]]
-COMMANDS = {"stop", "help", "memories", "forget last"}
+STOP_WORDS = {"stop", "cancel", "stop it", "stop that"}
+NEW_MESSAGE = "[New message from the user while you were working]\n{text}"
 
 
 class ApprovalExpired(Exception):
@@ -40,13 +41,16 @@ class Agent:
         self.browser = browser
         self.approvals = Approvals(self.send, config.approval_expiry)
         self.running: dict[str, asyncio.Task] = {}
-        self.queued: dict[str, deque[str]] = defaultdict(deque)
+        # Messages that arrive while the account's task runs: the task reads them before its next model call.
+        self.inbox: dict[str, list[str]] = defaultdict(list)
+        self.sent: dict[str, int] = defaultdict(int)  # messages sent per account, to skip "On it…"
 
     # ---- outbound
 
     async def send(
         self, account: Account, text: str, buttons: list[Button] | None = None, image: Image | None = None
     ) -> None:
+        self.sent[account.address] += 1
         account.transcript(
             {"kind": "out", "text": text, "buttons": [b.label for b in buttons or []], "image": bool(image)}
         )
@@ -67,7 +71,7 @@ class Agent:
         account.transcript({"kind": "user", "text": text, "button": frame.button})
         command = text.lower().rstrip(".!") if frame.button is None else ""
 
-        if command == "stop":
+        if command in STOP_WORDS:
             await self.stop(account)
             return
         if await self.approvals.reply(account, text, frame.button):
@@ -94,14 +98,16 @@ class Agent:
         if not text:
             return
         if account.address in self.running:
-            self.queued[account.address].append(text)
-            await self.send(account, messages.QUEUED)
+            inbox = self.inbox[account.address]
+            inbox.append(text)
+            if len(inbox) == 1:  # one acknowledgement per batch, not one per message
+                await self.send(account, messages.NOTED)
             return
         self.running[account.address] = asyncio.create_task(self.run(account, text))
 
     async def stop(self, account: Account) -> None:
         task = self.running.get(account.address)
-        self.queued.pop(account.address, None)
+        self.inbox.pop(account.address, None)
         if task is None:
             await self.send(account, messages.NOTHING_TO_STOP)
             return
@@ -114,9 +120,11 @@ class Agent:
         try:
             while True:
                 await self._task(account, text)
-                if not self.queued.get(account.address):
+                # Messages that came in after the task's last model call: one follow-up task for all of them.
+                pending = self.inbox.pop(account.address, [])
+                if not pending:
                     break
-                text = self.queued[account.address].popleft()
+                text = "\n\n".join(pending)
         finally:
             self.running.pop(account.address, None)
 
@@ -125,7 +133,9 @@ class Agent:
         try:
             if self.llm.lock.locked() and len(self.running) > 1:
                 await self.send(account, messages.BUSY)
-            answer, checked = await asyncio.wait_for(self.solve(account, text), timeout=self.config.max_task_seconds)
+            answer, checked, text = await asyncio.wait_for(
+                self.solve(account, text), timeout=self.config.max_task_seconds
+            )
         except asyncio.CancelledError:
             account.transcript({"kind": "stopped"})
             raise
@@ -147,15 +157,20 @@ class Agent:
         await self._fold(account, conv)
 
     async def _on_it(self, account: Account) -> None:
-        """Once, after a while, unless the person has already heard from this task (an approval)."""
-        asked_before = self.approvals.asked.get(account.address, 0)
+        """Once, after a while, unless the person has already heard from this task (an approval, an update)."""
+        sent_before = self.sent[account.address]
         await asyncio.sleep(self.config.on_it_after)
-        if self.approvals.asked.get(account.address, 0) == asked_before:
+        if self.sent[account.address] == sent_before:
             await self.send(account, messages.ON_IT)
 
-    async def solve(self, account: Account, text: str) -> tuple[str, bool]:
+    async def solve(self, account: Account, text: str) -> tuple[str, bool, str]:
+        """Returns the answer, whether it passed the checks, and everything the person said during the task."""
         task: list[dict] = [{"role": "user", "content": text}]
-        ctx = ToolContext(account, self.approvals, self.config, TaskState(), self.browser)
+
+        async def send(message: str) -> None:
+            await self.send(account, checks.chat_format(message))
+
+        ctx = ToolContext(account, self.approvals, self.config, TaskState(), self.browser, send)
         tools = self.registry.specs()
         last = ""
         retried = False
@@ -168,6 +183,10 @@ class Agent:
             *(t["content"] for t in conv.get("turns", []) if t["role"] == "user" or t.get("checked")),
         ]
         for _ in range(self.config.max_model_calls):
+            for extra in self.inbox.pop(account.address, []):
+                task.append({"role": "user", "content": NEW_MESSAGE.format(text=extra)})
+                sources.append(extra)
+                text = f"{text}\n\n{extra}"
             msgs = context.build(
                 account, task, self.config.timezone, self.config.household_name, self.config.context_tokens
             )
@@ -182,7 +201,7 @@ class Agent:
                     task.append({"role": "assistant", "content": reply.content or ""})
                     task.append({"role": "user", "content": checks.retry_prompt(missing)})
                     continue
-                return finish(reply.content or "…", sources)
+                return (*finish(reply.content or "…", sources), text)
             last = reply.content or last
             task.append(
                 {
@@ -228,7 +247,7 @@ class Agent:
                             ],
                         }
                     )
-        return finish(f"{messages.TOO_MANY_STEPS}\n{last}".strip(), sources)
+        return (*finish(f"{messages.TOO_MANY_STEPS}\n{last}".strip(), sources), text)
 
     async def _fold(self, account: Account, conv: dict) -> None:
         """Between tasks only: fold the oldest turns into the summary (SPEC §4.4)."""

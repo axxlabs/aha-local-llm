@@ -2,7 +2,7 @@
 
 ON_IT = "On it…"
 BUSY = "Busy with another request, you're next."
-QUEUED = "Got it. I'll do that right after the current request."
+NOTED = "Got it, I'll take that into account."
 STOPPED = "Stopped."
 NOTHING_TO_STOP = "Nothing is running."
 FORGOT_LAST = "Done: I've dropped our last exchange from what I keep in mind."

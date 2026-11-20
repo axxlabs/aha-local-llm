@@ -146,7 +146,7 @@ async def test_commands(agent, llm, chat, accounts):
     assert accounts.get(ADDRESS).load_context()["turns"] == []
 
 
-async def test_messages_during_a_task_are_queued(agent, llm, chat, registry):
+async def test_messages_during_a_task_reach_the_running_task(agent, llm, chat, registry):
     gate = asyncio.Event()
 
     async def slow(args, ctx):
@@ -155,15 +155,60 @@ async def test_messages_during_a_task_are_queued(agent, llm, chat, registry):
 
     registry.add(Tool("slow", "slow", params(), slow))
     llm.call("slow")
+    llm.call("message_user", text="Halfway there.")
     llm.answer("first done")
-    llm.answer("second done")
     await agent.inbound(said("first"))
     await asyncio.sleep(0.05)
-    await agent.inbound(said("second"))
-    assert chat.texts()[-1] == "Got it. I'll do that right after the current request."
+    await agent.inbound(said("how is it going?"))
+    await agent.inbound(said("also check Tuesday"))
+    assert chat.texts() == ["Got it, I'll take that into account."]  # one acknowledgement for the batch
     gate.set()
     await settle(agent)
-    assert chat.texts()[-2:] == ["first done", "second done"]
+    assert chat.texts()[1:] == ["Halfway there.", "first done"]
+    news = [m["content"] for m in llm.requests[1]["messages"] if str(m["content"]).startswith("[New message")]
+    assert len(news) == 2 and "also check Tuesday" in news[1]
+    turns = agent.accounts.get(ADDRESS).load_context()["turns"]
+    assert "also check Tuesday" in turns[-2]["content"]  # the turn records everything the person said
+    assert len(llm.requests) == 3  # no extra task: the running one took the messages
+
+
+async def test_messages_after_the_last_step_become_one_follow_up(agent, llm, chat, registry):
+    gate = asyncio.Event()
+    real_chat = llm.chat
+
+    async def slow_answer(messages, tools=None, max_tokens=4096):
+        if len(llm.requests) == 0:
+            await gate.wait()
+        return await real_chat(messages, tools, max_tokens)
+
+    llm.chat = slow_answer
+    llm.answer("first done")
+    llm.answer("follow-up done")
+    await agent.inbound(said("first"))
+    await asyncio.sleep(0.05)
+    for text in ("one", "two", "three"):
+        await agent.inbound(said(text))
+    gate.set()
+    await settle(agent)
+    assert chat.texts() == ["Got it, I'll take that into account.", "first done", "follow-up done"]
+    last_user = [m for m in llm.requests[-1]["messages"] if m["role"] == "user"][-1]["content"]
+    assert last_user == "one\n\ntwo\n\nthree"
+
+
+async def test_cancel_words_stop_the_task(agent, llm, chat, registry):
+    gate = asyncio.Event()
+
+    async def slow(args, ctx):
+        await gate.wait()
+        return ToolResult("done")
+
+    registry.add(Tool("slow", "slow", params(), slow))
+    llm.call("slow")
+    await agent.inbound(said("first"))
+    await asyncio.sleep(0.05)
+    await agent.inbound(said("Cancel!"))
+    await settle(agent)
+    assert chat.texts() == ["Stopped."]
 
 
 async def test_on_it_after_a_while(agent, llm, chat, registry, config):

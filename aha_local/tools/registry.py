@@ -43,6 +43,7 @@ class ToolContext:
     config: Config
     task: TaskState
     browser: Any = None  # tools.browser.BrowserSession, when the browser is available
+    send: Callable[[str], Awaitable[None]] | None = None  # message the person now, without ending the task
 
 
 Handler = Callable[[dict, ToolContext], Awaitable[ToolResult]]

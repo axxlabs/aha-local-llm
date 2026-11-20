@@ -97,7 +97,6 @@ class Approvals:
         self.send = send
         self.expiry = expiry
         self._pending: dict[str, Pending] = {}  # by account address
-        self.asked: dict[str, int] = {}  # approvals asked per account, ever (the agent reads it to skip "On it…")
 
     def pending_for(self, address: str) -> Pending | None:
         return self._pending.get(address)
@@ -109,7 +108,6 @@ class Approvals:
             secrets.token_hex(3), account, kind, title, fields, image, asyncio.get_running_loop().create_future()
         )
         self._pending[account.address] = p
-        self.asked[account.address] = self.asked.get(account.address, 0) + 1
         text, buttons = render(p)
         account.audit({"approval": p.id, "kind": kind, "title": title, "asked": [f.value for f in fields]})
         try:
