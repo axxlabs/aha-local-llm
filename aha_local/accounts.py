@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """Accounts and their files (SPEC §3.8). An account is one chat address; nothing here is ever uploaded."""
 
 from __future__ import annotations

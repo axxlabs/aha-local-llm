@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """The browser: Playwright MCP behind the policy (SPEC §3.4, §5.2).
 
 One persistent MCP session to aha-browser, owned by a background task, so the page survives between calls

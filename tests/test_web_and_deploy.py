@@ -1,5 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """fetch_url's address checks (SPEC §5.2) and the rendered Quadlet units (SPEC §3.6)."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -82,3 +85,14 @@ def test_units_render_with_sandboxing(tmp_path, monkeypatch):
     assert "Internal=true" in units["aha-internal.network"]
     for text in units.values():
         assert "@DATA@" not in text and "@SEARCH_SECRET@" not in text
+
+
+def test_every_source_file_carries_the_licence_header():
+    root = Path(__file__).resolve().parents[1]
+    missing = [
+        str(f)
+        for d in ("aha_local", "tests")
+        for f in (root / d).rglob("*.py")
+        if "SPDX-License-Identifier: AGPL-3.0-or-later" not in f.read_text()
+    ]
+    assert missing == []

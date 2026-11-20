@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """Approvals in the chat (SPEC §5.1, §5.3).
 
 A tool call that needs approval becomes a chat message with three buttons. The task waits on a future that

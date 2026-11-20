@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """The agent: memory approvals, context layers, commands, queueing, documents (SPEC §3.3, §4, §5.4, §11.3–11.4)."""
 
 import asyncio
@@ -135,6 +137,7 @@ async def test_summary_folding_happens_between_tasks(agent, llm, chat, accounts)
 async def test_commands(agent, llm, chat, accounts):
     await agent.inbound(said("help"))
     assert "Commands" in chat.texts()[-1]
+    assert "Open source (AGPL-3.0): https://github.com/axxlabs/aha-local-llm" in chat.texts()[-1]
     await agent.inbound(said("memories"))
     assert chat.texts()[-1] == "I don't remember anything about you yet."
     await agent.inbound(said("stop"))
@@ -266,3 +269,36 @@ async def test_an_empty_answer_after_an_approval_sends_nothing(agent, llm, chat)
     await settle(agent)
     assert chat.texts() == [approval.text]  # no "…" after the save
     assert agent.accounts.get(ADDRESS).load_memory()[0]["text"] == "Lives in Testville"
+
+
+async def test_typing_ends_before_the_answer_and_stays_off_during_the_summary(agent, llm, chat, accounts):
+    from aha_local import context
+
+    agent.typing_every = 0.01
+    acct = accounts.get(ADDRESS)
+    conv = acct.load_context()
+    conv["turns"] = [{"role": "user", "content": "x" * 4000}, {"role": "assistant", "content": "y"}] * 30
+    acct.save_context(conv)
+    gate = asyncio.Event()
+    real_chat = llm.chat
+
+    async def slow_summary(messages, tools=None, max_tokens=4096):
+        if len(llm.requests) == 1:  # the fold, after the answer
+            await gate.wait()
+        return await real_chat(messages, tools, max_tokens)
+
+    llm.chat = slow_summary
+    llm.answer("Fine.")
+    llm.answer("- summary")
+    await agent.inbound(said("hello"))
+    for _ in range(100):
+        if chat.texts():
+            break
+        await asyncio.sleep(0.01)
+    assert chat.typing[-1] is False  # off, sent before "Fine."
+    count = len(chat.typing)
+    await asyncio.sleep(0.05)
+    assert len(chat.typing) == count  # no typing while the summary is written
+    gate.set()
+    await settle(agent)
+    assert context.estimate(acct.load_context()["turns"]) <= context.TURNS_BUDGET

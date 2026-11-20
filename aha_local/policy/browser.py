@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """Browser policy (SPEC §5.2): which browser tool calls run, need approval, or are blocked.
 
 Decided from the real arguments of each call, never from the model's descriptions. Clicks and reading can't

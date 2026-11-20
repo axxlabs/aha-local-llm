@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """SPEC §5.3, §11.2: approve, edit, decline, free-text decline, stop, expiry; what runs is what was approved."""
 
 import asyncio

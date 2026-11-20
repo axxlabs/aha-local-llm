@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """The model server client: OpenAI-compatible /v1/chat/completions on llama.cpp (SPEC §3.2, §3.3)."""
 
 from __future__ import annotations

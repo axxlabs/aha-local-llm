@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """A scripted model, a recorded chat and a paired account, so the agent can be tested without a GPU."""
 
 from __future__ import annotations

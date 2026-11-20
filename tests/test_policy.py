@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """SPEC §5.2: every row of the browser policy, from the real arguments."""
 
 import pytest

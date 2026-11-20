@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """The household's documents folder: search (BM25 over text chunks) and read (SPEC §3.4).
 
 The folder is mounted read-only. The index is rebuilt when any file changes; it lives in memory only.

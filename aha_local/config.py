@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """Configuration (SPEC §3.7).
 
 The host keeps `~/.config/aha/config.toml`; the agent container reads the same file mounted at
@@ -53,6 +55,7 @@ class Config:
     max_model_calls: int = 40
     max_task_seconds: float = 15 * 60
     allow_all_sites: bool = True
+    source_url: str = "https://github.com/axxlabs/aha-local-llm"  # named in `help` (AGPL §13, SPEC §10.1)
     # Service addresses (inside the containers' networks; overridable for development and tests).
     data_dir: Path = field(default_factory=lambda: Path(os.environ.get("AHA_DATA_DIR", "/data")))
     documents_mount: Path = field(default_factory=lambda: Path(os.environ.get("AHA_DOCUMENTS_DIR", "/documents")))
@@ -79,4 +82,5 @@ class Config:
             max_model_calls=int(agent.get("max_model_calls_per_task", 40)),
             max_task_seconds=float(agent.get("max_task_minutes", 15)) * 60,
             allow_all_sites=bool(browser.get("allow_all_sites", True)),
+            source_url=str(agent.get("source_url", "https://github.com/axxlabs/aha-local-llm")),
         )

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """The answer checks: chat formatting and numbers that no opened page supports."""
 
 from aha_local import checks

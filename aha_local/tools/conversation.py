@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """conversation_search over the account's own full transcript (SPEC §4.4) and current_time."""
 
 from __future__ import annotations

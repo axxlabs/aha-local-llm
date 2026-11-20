@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """Every text aha sends on its own (not written by the model). One place, so wording changes are one edit."""
 
 STOPPED = "Stopped."
@@ -22,7 +24,9 @@ Before I type anything into a website or save something about you, I'll ask you 
 *Edit* or *Decline*.
 
 Commands: *stop* (cancel what I'm doing) · *memories* (what I remember about you) · *forget last* (drop our \
-last exchange) · *help*"""
+last exchange) · *help*
+
+Open source (AGPL-3.0): {source}"""
 
 APPROVE_LABELS = {
     "action": ("✅ Approve", "✏️ Edit", "❌ Decline"),

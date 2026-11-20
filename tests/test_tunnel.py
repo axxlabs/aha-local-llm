@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """The tunnel client against a small fake gateway (SPEC §6, §11.5)."""
 
 import asyncio

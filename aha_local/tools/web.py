@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """web_search (SearXNG) and fetch_url (SPEC §3.4)."""
 
 from __future__ import annotations

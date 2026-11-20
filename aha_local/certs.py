@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """Ed25519 keys, binding certificates and handshake signatures (SPEC §6.1, §6.2, §6.4).
 
 This file is identical in aha-gateway and aha-local-llm.

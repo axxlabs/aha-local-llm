@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """The `aha` command (SPEC §3.9).
 
 Host side: init, install, start/stop, pairing, accounts, memories, export, doctor. They talk to the running

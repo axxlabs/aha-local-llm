@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """Tunnel frames between the gateway and an aha computer (SPEC §6).
 
 This file is identical in aha-gateway and aha-local-llm; tests in both repos check it against the shared

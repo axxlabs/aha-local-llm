@@ -53,4 +53,8 @@ uv run ruff check . && uv run ruff format --check .
 For an end-to-end run on one machine, start a staging gateway from aha-gateway (`scripts/dev.sh`), then
 `aha init --gateway unix:$XDG_RUNTIME_DIR/aha-gateway/gateway.sock` and open http://127.0.0.1:8700/test.
 
-Licence: AGPL-3.0-or-later.
+## Licence
+
+Copyright (C) 2026 Axxlabs Limited. Licensed under the GNU Affero General Public License, version 3 or (at your
+option) any later version: see `LICENSE`. If you run a modified version for other people, including over a
+network, you must offer them its source (AGPL §13; set `source_url` under `[agent]` in the config).

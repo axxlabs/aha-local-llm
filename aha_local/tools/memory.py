@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """Memory (SPEC §5.4): approved facts about each person. Reading is free; every change is an approval."""
 
 from __future__ import annotations

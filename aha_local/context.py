@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """Building the model's context for one continuous chat (SPEC §4).
 
 Layers, in this order:

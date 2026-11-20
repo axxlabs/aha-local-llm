@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """The computer's side of the tunnel (SPEC §6): outbound only, mutual key authentication, reconnects."""
 
 from __future__ import annotations

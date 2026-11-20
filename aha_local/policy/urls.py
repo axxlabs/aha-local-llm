@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """Which URLs the browser and fetch_url may open (SPEC §5.2). Decided from the URL itself, in code."""
 
 from __future__ import annotations

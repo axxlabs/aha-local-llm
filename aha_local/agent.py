@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """The agent loop (SPEC §3.3): one continuous chat per account, tasks, approvals, commands."""
 
 from __future__ import annotations
@@ -82,7 +84,7 @@ class Agent:
             await self.send(account, messages.APPROVAL_STALE)
             return
         if command == "help":
-            await self.send(account, messages.HELP)
+            await self.send(account, messages.HELP.format(source=self.config.source_url))
             return
         if command == "memories":
             items = account.load_memory()
@@ -116,7 +118,6 @@ class Agent:
     # ---- tasks
 
     async def run(self, account: Account, text: str) -> None:
-        typing = asyncio.create_task(self._typing(account))
         try:
             while True:
                 await self._task(account, text)
@@ -127,8 +128,6 @@ class Agent:
                 text = "\n\n".join(pending)
         finally:
             self.running.pop(account.address, None)
-            typing.cancel()
-            await self._send_frame(Typing(to=account.address, on=False))
 
     async def _typing(self, account: Account) -> None:
         """While a reply is owed: "typing…", refreshed, except while the person owes us an approval answer."""
@@ -136,6 +135,10 @@ class Agent:
             if self.approvals.pending_for(account.address) is None:
                 await self._send_frame(Typing(to=account.address))
             await asyncio.sleep(self.typing_every)
+
+    async def _stop_typing(self, account: Account, typing: asyncio.Task) -> None:
+        typing.cancel()
+        await self._send_frame(Typing(to=account.address, on=False))
 
     async def _send_frame(self, frame: Typing) -> None:
         try:
@@ -145,12 +148,14 @@ class Agent:
 
     async def _task(self, account: Account, text: str) -> None:
         sent_before = self.sent[account.address]
+        typing = asyncio.create_task(self._typing(account))
         try:
             answer, checked, text = await asyncio.wait_for(
                 self.solve(account, text), timeout=self.config.max_task_seconds
             )
         except asyncio.CancelledError:
             account.transcript({"kind": "stopped"})
+            await self._stop_typing(account, typing)
             raise
         except TimeoutError:
             answer, checked = messages.TOO_LONG, False
@@ -165,6 +170,7 @@ class Agent:
         if not answer.strip():
             # After "✅ Save" there may be nothing to add; if they've heard nothing at all, say something.
             answer = "" if self.sent[account.address] > sent_before else "…"
+        await self._stop_typing(account, typing)  # before the answer, so no refresh can land after it
         if answer:
             await self.send(account, answer)
         account.transcript({"kind": "answer", "text": answer})

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """Checks on the model's final answer, in code (SPEC §3.5, "numbers come from sources").
 
 1. chat_format: Markdown that chat apps don't render becomes WhatsApp formatting.

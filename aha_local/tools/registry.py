@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
 """Tool definitions and dispatch (SPEC §3.4).
 
 Definitions are static and in a fixed order, identical for every request and account, so they stay inside
