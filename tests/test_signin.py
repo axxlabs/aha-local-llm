@@ -15,6 +15,7 @@ import re
 import mcp.types as mt
 import pytest
 
+from aha_local import checks
 from aha_local.agent import Agent
 from aha_local.tools import browser, signins
 from aha_local.tools.browser import BrowserPool, BrowserSession
@@ -267,3 +268,30 @@ async def test_pointing_at_a_sign_in_card_without_showing_one_goes_back_once(set
     assert "haven't called browser_sign_in" in json.dumps(llm.requests[2]["messages"])
     await agent.approval_reply(fe, card.card["id"], "decline")
     await settle(agent)
+
+
+async def test_claims_without_the_tool_go_back_once(setup, llm, chat, accounts):
+    """Seen with the real model: 'Scheduled…' with no schedule_add; 'Here is the page' with no screenshot sent."""
+    from aha_local.tools import schedule
+
+    agent, _, _ = setup
+    schedule.register(agent.registry)
+    fe = person(accounts)
+    llm.answer("Scheduled. Every weekday at 08:00 I'll check the forecast.")
+    llm.answer("I can't run things on a schedule yet.")
+    await agent.inbound(fe, "every weekday at 8am tell me if it will rain")
+    await settle(agent)
+    assert "haven't called schedule_add" in json.dumps(llm.requests[1]["messages"])
+    assert chat.texts()[-1] == "I can't run things on a schedule yet."
+
+    llm.call("browser_navigate", url="https://news.example.com/")
+    llm.answer("Here is the news homepage.")
+    llm.call("show_screenshot")
+    llm.answer("There it is.")
+    await agent.inbound(fe, "show me a screenshot of the news homepage")
+    await settle(agent)
+    assert "only shows the page to you" in json.dumps(llm.requests[-2]["messages"])
+    assert any(m.image is not None and m.card is None for m in chat.sent)
+
+    for request in ("show me how to cook rice", "what time is it?"):
+        assert not checks.unshown_screenshot(request, {"browser_navigate"})

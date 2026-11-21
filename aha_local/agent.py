@@ -306,7 +306,7 @@ class Agent:
         last = ""
         retried = False
         memory_retried = False
-        signin_retried = False
+        signin_retried = schedule_retried = screenshot_retried = False
         called: set[str] = set()  # tools that ran without error in this task
         # Where numbers in the answer may come from: what the person said or saved, earlier answers, and pages
         # opened in this task. Search snippets don't count (SPEC §3.5).
@@ -339,6 +339,18 @@ class Agent:
                     log.info("draft answer pointed at a sign-in card no tool showed; asking the model to call it")
                     task.append({"role": "assistant", "content": reply.content or ""})
                     task.append({"role": "user", "content": checks.SIGNIN_RETRY})
+                    continue
+                if not schedule_retried and checks.unbacked_schedule_claim(reply.content or "", called):
+                    schedule_retried = True
+                    log.info("draft answer claimed something was scheduled; no schedule_add ran")
+                    task.append({"role": "assistant", "content": reply.content or ""})
+                    task.append({"role": "user", "content": checks.SCHEDULE_RETRY})
+                    continue
+                if not screenshot_retried and checks.unshown_screenshot(text, called):
+                    screenshot_retried = True
+                    log.info("the person asked to see a page and nothing was sent; asking for show_screenshot")
+                    task.append({"role": "assistant", "content": reply.content or ""})
+                    task.append({"role": "user", "content": checks.SCREENSHOT_RETRY})
                     continue
                 if has_photo:
                     # Numbers in the person's photo can't be matched as text: no retry, no warning, and the

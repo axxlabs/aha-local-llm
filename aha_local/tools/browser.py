@@ -481,7 +481,10 @@ async def browser_sign_in(args: dict, ctx: ToolContext) -> ToolResult:
     if not decision.approved:
         if decision.reason == "expired":
             return ToolResult("", error=True, kind="expired")
-        text = "The person didn't sign in. Don't ask for their password or code in the chat."
+        text = (
+            "The person didn't sign in. Don't show the sign-in card again unless they ask, and don't ask for their "
+            "password or code in the chat."
+        )
         if decision.note:
             text += f" They said: “{decision.note}”. Follow that."
         return ToolResult(text, error=True)
@@ -521,6 +524,11 @@ async def browser_sign_in(args: dict, ctx: ToolContext) -> ToolResult:
     return page
 
 
+# Added to a browser tool's own description (static, so the prompt prefix stays cached).
+SEEN_ONLY_BY_YOU = {
+    "browser_take_screenshot": " Only you see this screenshot; to show the page to the user, use show_screenshot."
+}
+
 HARNESS_TOOLS = (
     Tool(
         "show_screenshot",
@@ -556,7 +564,9 @@ async def register(reg: Registry, pool: BrowserPool, pin_file: Path, wait: float
     for t in pinned(tools, pin_file):
         if not offered(t.name):
             continue
-        reg.add(Tool(t.name, t.description or "", t.inputSchema, make_handler(t.name)))
+        reg.add(
+            Tool(t.name, (t.description or "") + SEEN_ONLY_BY_YOU.get(t.name, ""), t.inputSchema, make_handler(t.name))
+        )
         count += 1
     if count:
         for tool in HARNESS_TOOLS:

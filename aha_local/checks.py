@@ -122,6 +122,48 @@ SIGNIN_RETRY = (
 )
 
 
+SCHEDULE_CLAIM = re.compile(
+    r"\b(?:scheduled|i'?ll remind you|i will remind you|reminder (?:is )?set|set (?:a|the|your) reminder|"
+    r"i'?ll (?:check|look|let you know)[^.]{0,60}\b(?:every|each|daily|tomorrow|at \d))",
+    re.I,
+)
+
+
+def unbacked_schedule_claim(answer: str, tools_called: set[str]) -> bool:
+    """The answer says something is scheduled or will be done later, but schedule_add didn't run."""
+    return bool(SCHEDULE_CLAIM.search(answer)) and "schedule_add" not in tools_called
+
+
+SCHEDULE_RETRY = (
+    "[aha check] Your draft says a reminder or task is scheduled, but you haven't called schedule_add in this "
+    "task, so nothing is: you can't act later on your own. Call schedule_add now (a scheduled task shows the "
+    "person a card to approve), or correct your answer. Then write your reply to the person from scratch: they "
+    "haven't seen your draft, and never mention this check."
+)
+
+SCREENSHOT_REQUEST = re.compile(
+    r"\bscreen ?shot|\b(?:show|send) me (?:the|a|that|this) (?:page|site|website|screen|picture)\b|"
+    r"\blet me see (?:it|the page|the site)\b",
+    re.I,
+)
+
+
+def unshown_screenshot(asked: str, tools_called: set[str]) -> bool:
+    """The person asked to see something, and nothing was sent to them."""
+    return (
+        bool(SCREENSHOT_REQUEST.search(asked))
+        and "browser_navigate" in tools_called
+        and ("show_screenshot" not in tools_called)
+    )
+
+
+SCREENSHOT_RETRY = (
+    "[aha check] The person asked to see it, but you haven't sent them anything: browser_take_screenshot only "
+    "shows the page to you. Call show_screenshot to send it to their chat, then answer briefly. Never mention "
+    "this check."
+)
+
+
 def retry_prompt(values: list[str]) -> str:
     shown = ", ".join(values[:8])
     return (
