@@ -35,6 +35,7 @@ from .protocol import (
     Ping,
     Pong,
     Ready,
+    ReportResult,
     b64,
 )
 
@@ -139,6 +140,8 @@ class Tunnel:
                     if not fut.done():
                         fut.set_result(frame.code)
                 self._code_waiters.clear()
+            case ReportResult():
+                self.channel.on_report_result(frame)
             case Notice():
                 log.info("gateway notice: %s", frame.code)
             case Ping():

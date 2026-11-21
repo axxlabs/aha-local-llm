@@ -3,7 +3,8 @@
 """Frames between the gateway, aha computers and devices (SPEC §6.2, §6.3, §6.5).
 
 This file is identical in aha-gateway and aha-local-llm; a test in each repo compares them.
-Everything the gateway handles is here: it never sees message content, only these envelopes and opaque boxes.
+Everything the gateway handles is here: it never sees message content, only these envelopes and opaque boxes,
+apart from a problem report the person reviewed and chose to send (`Report`, SPEC §7.7).
 """
 
 from __future__ import annotations
@@ -197,6 +198,22 @@ class Notice(Strict):
     detail: Annotated[str, Field(max_length=200)] = ""
 
 
+class Report(Strict):
+    """computer → gateway: a problem report the person previewed and chose to send (SPEC §7.7)."""
+
+    t: Literal["report"] = "report"
+    id: FrameId
+    title: Annotated[str, Field(min_length=1, max_length=120)]
+    body: Annotated[str, Field(min_length=1, max_length=60_000)]
+
+
+class ReportResult(Strict):
+    t: Literal["report_result"] = "report_result"
+    id: FrameId
+    ok: bool
+    code: Annotated[str, Field(pattern=r"^[a-z_]{0,40}$")] = ""
+
+
 class Ping(Strict):
     t: Literal["ping"] = "ping"
 
@@ -206,11 +223,11 @@ class Pong(Strict):
 
 
 ToComputer = Annotated[
-    Hello | Ready | E2E | PairCode | Pair | CertIssued | DeviceStatus | Notice | Ping | Pong,
+    Hello | Ready | E2E | PairCode | Pair | CertIssued | DeviceStatus | ReportResult | Notice | Ping | Pong,
     Field(discriminator="t"),
 ]
 FromComputer = Annotated[
-    Auth | E2E | PairStart | Pair | CertRequest | Push | Revoke | Ping | Pong, Field(discriminator="t")
+    Auth | E2E | PairStart | Pair | CertRequest | Push | Revoke | Report | Ping | Pong, Field(discriminator="t")
 ]
 ToDevice = Annotated[
     Hello | DeviceReady | DevE2E | DevPair | ComputerStatus | Notice | Ping | Pong, Field(discriminator="t")

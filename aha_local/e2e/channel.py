@@ -27,11 +27,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import messages
+from .. import __version__, messages, reports
 from ..accounts import Account, Accounts, Device
 from ..certs import needs_renewal
 from ..items import Image
-from ..protocol import E2E, Cert, CertIssued, CertRequest, DeviceStatus, Pair, Push, Revoke, b64
+from ..protocol import E2E, Cert, CertIssued, CertRequest, DeviceStatus, Pair, Push, Report, ReportResult, Revoke, b64
 from . import crypto, webpush
 
 log = logging.getLogger("aha.channel")
@@ -81,6 +81,7 @@ class Channel:
         household: str,
         history_days: int = 30,
         push_preview: bool = False,
+        model: str = "",
     ) -> None:
         self.accounts = accounts
         self.identity = load_or_create_identity(keys_dir / "e2e.json")
@@ -96,6 +97,9 @@ class Channel:
         self._cert_waiters: dict[str, asyncio.Future] = {}
         self._tasks: set[asyncio.Task] = set()
         self.gateway_pin = ""
+        self.model = model
+        self.drafts: dict[str, reports.Draft] = {}  # by account id: the report the person is looking at (§7.7)
+        self._report_waiters: dict[str, asyncio.Future] = {}
 
     # ---- output for the agent (agent.AgentOut, approvals.Out)
 
@@ -262,8 +266,56 @@ class Channel:
                     await reply({"t": "devices", "items": self._device_list(account, device)})
                 else:
                     await self.revoke(account, dev)
+        elif t == "report_preview":
+            note = clean_text(msg.get("note"), reports.MAX_NOTE) or ""
+            app = clean_text(msg.get("app"), 20) or ""
+            versions = reports.versions(app, __version__, self.model)
+            draft = reports.build(
+                account.read_transcript(),
+                reports.parse_count(msg.get("count")),
+                note,
+                msg.get("details") is True,
+                versions,
+            )
+            self.drafts[account.id] = draft
+            await reply({"t": "report_draft", "id": draft.id, "text": draft.text})
+        elif t == "report_send":
+            draft = self.drafts.get(account.id)
+            if draft is None or draft.id != msg.get("id") or draft.expires < time.time():
+                await reply(
+                    {"t": "report_sent", "id": clean_text(msg.get("id"), 32) or "", "ok": False, "code": "expired"}
+                )
+                return
+            del self.drafts[account.id]
+            self._spawn(self._send_report(account, device, draft))
         else:
             await reply({"t": "error", "code": "unknown_type"})
+
+    async def _send_report(self, account: Account, device: Device, draft: reports.Draft) -> None:
+        """To the gateway, which opens a private issue and keeps nothing (SPEC §7.7)."""
+        fut = asyncio.get_running_loop().create_future()
+        self._report_waiters[draft.id] = fut
+        try:
+            await self.send_frame(Report(id=draft.id, title=draft.title, body=draft.text))
+            result: ReportResult = await asyncio.wait_for(fut, 30)
+            ok, code = result.ok, result.code
+        except (ConnectionError, TimeoutError):
+            ok, code = False, "gateway_unreachable"
+        finally:
+            self._report_waiters.pop(draft.id, None)
+        log.info("problem report %s", "sent" if ok else f"not sent ({code})")
+        out = {"t": "report_sent", "id": draft.id, "ok": ok}
+        await self._send(account, device, out if ok else {**out, "code": code})
+
+    def _spawn(self, coro) -> None:
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    def on_report_result(self, frame: ReportResult) -> None:
+        fut = self._report_waiters.get(frame.id)
+        if fut is not None and not fut.done():
+            fut.set_result(frame)
 
     def _device_list(self, account: Account, current: Device) -> list[dict]:
         return [

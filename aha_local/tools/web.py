@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 import httpx
 import trafilatura
 
+from .. import __version__
 from ..policy.urls import check_url, resolves_publicly
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
@@ -16,7 +17,14 @@ MAX_RESULTS = 6
 MAX_PAGE_BYTES = 5_000_000
 MAX_PAGE_CHARS = 12_000
 MAX_REDIRECTS = 5
-USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
+# Say what we are (SPEC §3.4): a client that claims to be Chrome without Chrome's TLS handshake is what bot
+# protection looks for, and gets refused where an honest one is let in.
+USER_AGENT = f"Aha/{__version__} (+https://github.com/axxlabs/aha-local-llm)"
+HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-GB,en;q=0.9",
+}
 
 
 async def web_search(args: dict, ctx: ToolContext) -> ToolResult:
@@ -46,9 +54,8 @@ class Fetched:
 
 async def get_once(url: str) -> Fetched:
     """One request, no redirects followed, the body capped at MAX_PAGE_BYTES."""
-    headers = {"User-Agent": USER_AGENT}
     async with (
-        httpx.AsyncClient(timeout=20, follow_redirects=False, headers=headers) as c,
+        httpx.AsyncClient(timeout=20, follow_redirects=False, headers=HEADERS) as c,
         c.stream("GET", url) as r,
     ):
         if r.is_redirect and "location" in r.headers:
@@ -61,18 +68,20 @@ async def get_once(url: str) -> Fetched:
         return Fetched(str(r.url), r.status_code, r.headers.get("content-type", ""), bytes(body), None)
 
 
-BLOCKED_STATUSES = {401, 403, 405, 406, 429, 451, 503}
+BLOCKED_STATUSES = {401, 403, 405, 406, 408, 429, 451, 503}
 
 
 async def read_with_browser(url: str, ctx: ToolContext, why: str) -> ToolResult:
     """Many sites block plain HTTP clients but not a real browser. The URL was already checked."""
     if ctx.browser is None:
         return ToolResult(f"Couldn't read {url}: {why}. Try the browser tools.", error=True)
-    from .browser import to_result
+    from .browser import CANT_TELL, http_status, to_result
 
     result = to_result(await ctx.browser.call("browser_navigate", {"url": url}))
-    if result.error:
-        return ToolResult(f"Couldn't read {url}: {why}, and the browser failed too.", error=True)
+    status = http_status(result.text)
+    if result.error or (status and status >= 400):
+        also = f"answered HTTP {status} to the browser too" if status else "and the browser failed too"
+        return ToolResult(f"Couldn't read {url}: {why}, {also}. {CANT_TELL}", error=True)
     ctx.task.approved_sites.add(check_url(url)[0] or "")
     result.text = f"(Read with the browser because {why}.)\n{result.text}"
     return result

@@ -29,6 +29,11 @@ from .registry import Registry, Tool, ToolContext, ToolResult
 log = logging.getLogger("aha.browser")
 
 MAX_SNAPSHOT_CHARS = 30_000
+HTTP_STATUS = re.compile(r"^- HTTP status: (\d{3})", re.M)
+CANT_TELL = (
+    "From here you can't tell why: tell the person you couldn't load the page and give the link; "
+    "don't guess at a cause (region, IP, outage) the page didn't state."
+)
 APPROVED_NOTE = (
     "The user approved this action; that approval is their go-ahead. "
     "Continue the task without asking for confirmation in the chat."
@@ -87,9 +92,18 @@ def to_result(r: mt.CallToolResult) -> ToolResult:
         elif isinstance(c, mt.ImageContent) and c.mimeType in ("image/png", "image/jpeg", "image/webp"):
             images.append(Image(mime=c.mimeType, b64=c.data))
     text = "\n".join(texts)
+    status = http_status(text)
+    if status and status >= 400:
+        text = f"The site answered HTTP {status}. {CANT_TELL}\n{text}"
     if len(text) > MAX_SNAPSHOT_CHARS:
         text = text[:MAX_SNAPSHOT_CHARS] + "\n[… snapshot cut to fit; use browser_find to look for something specific]"
     return ToolResult(text, images, kind="page", error=bool(r.isError))
+
+
+def http_status(text: str) -> int | None:
+    """The page's HTTP status as Playwright MCP reports it, if it did."""
+    m = HTTP_STATUS.search(text)
+    return int(m.group(1)) if m else None
 
 
 def tool_hash(t: mt.Tool) -> str:

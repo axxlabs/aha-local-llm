@@ -44,6 +44,7 @@ class Service:
             config.household_name,
             config.history_sync_days,
             config.push_preview,
+            config.llm_model,
         )
         self.tunnel = Tunnel(
             config.gateway_url, config.gateway_pin, self.key, self.accounts, config.household_name, self.channel

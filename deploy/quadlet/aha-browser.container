@@ -5,13 +5,15 @@ Description=aha browser (Playwright MCP)
 
 [Container]
 ContainerName=aha-browser
-Image=mcr.microsoft.com/playwright/mcp:latest
+# Pinned (SPEC §3.4): @playwright/mcp 0.0.86 with Chromium 159. When you update the digest, update the Chrome
+# version in --user-agent to match: headless Chromium's own "HeadlessChrome" UA is refused by many sites.
+Image=mcr.microsoft.com/playwright/mcp@sha256:a5e6a24e8caf6493a0edd144dd15df5535b8255c3cea5b53a51a22a3abd2c2f0
 Network=aha-egress.network
 SecurityLabelDisable=true
 NoNewPrivileges=true
 ShmSize=1g
 PodmanArgs=--memory=4g --pids-limit=1024
-Exec=--host 0.0.0.0 --port 8931 --allowed-hosts aha-browser:8931 --caps vision --image-responses allow --isolated --viewport-size 1280,800 --blocked-origins "http://aha-search:8080;http://aha-llm:8081;http://aha-browser:8931"
+Exec=--host 0.0.0.0 --port 8931 --allowed-hosts aha-browser:8931 --caps vision --image-responses allow --isolated --viewport-size 1280,800 --user-agent "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/159.0.0.0 Safari/537.36" --blocked-origins "http://aha-search:8080;http://aha-llm:8081;http://aha-browser:8931"
 
 [Service]
 Restart=on-failure
