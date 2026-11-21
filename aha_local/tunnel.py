@@ -115,8 +115,7 @@ class Tunnel:
             self.ws = ws
             self.channel.gateway_pin = self.pin
             self.connected.set()
-            devices = sum(len(a.devices) for a in self.accounts.all())
-            self.status = f"connected ({devices} device{'s' if devices != 1 else ''})"
+            self.status = "connected"  # device counts are reported live by `aha status`
             log.info("tunnel up")
             async for raw in ws:
                 await self._frame(TO_COMPUTER.validate_json(raw))

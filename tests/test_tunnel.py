@@ -86,7 +86,7 @@ async def test_presents_device_certificates_and_routes_frames(fake, tmp_path):
     task = asyncio.create_task(tunnel.run())
     await asyncio.wait_for(tunnel.connected.wait(), 3)
     assert [c.device for c in fake.auth.certs] == [dev]
-    assert tunnel.status == "connected (1 device)"
+    assert tunnel.status == "connected"
     await fake.ws.send(E2E(dev=dev, box="AAAA").model_dump_json())
     assert (await asyncio.wait_for(channel.frames.get(), 3)) == E2E(dev=dev, box="AAAA")
     await fake.ws.send(DeviceStatus(dev=dev, online=True).model_dump_json())
