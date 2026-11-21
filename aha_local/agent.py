@@ -40,7 +40,8 @@ PHOTO_ONLY = "(sent a photo)"
 SCHEDULED = (
     "[Scheduled task the user set up earlier{late}; they aren't necessarily looking at the chat]\n{text}\n\n"
     "{last}Do it now. If it says to tell them only when something happens and it hasn't, answer "
-    "NOTHING_TO_REPORT: followed by one line on what you found (kept for next time, not sent)."
+    "NOTHING_TO_REPORT: followed by one line on what you found. That line is kept for the next run "
+    "automatically (and not sent), so don't save it as a memory."
 )
 LAST_TIME = "Last time you found: {note}\n\n"
 
