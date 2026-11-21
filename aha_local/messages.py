@@ -18,13 +18,15 @@ EDIT_UNCLEAR = "I couldn't match that to the fields. Send lines like `2: new val
 WELCOME = "Hi! I'm **Aha!**, your private agent, running on your own computer. Ask me anything, or say **help**."
 HELP = """**Aha!** is your private agent, and it runs on your own computer. Ask me anything: I look things up, \
 read web pages, book things on websites (signing in when you want: you type your password on a card, and I \
-never see it), search and write your email (once it's connected) and remember what matters about you.
+never see it), search and write your email (once it's connected), remind you of things, do tasks on a schedule \
+or keep an eye on something for you, and remember what matters about you.
 
 Before anything leaves this computer with your words or data in it (typing into a website, an email) and before \
 I save something about you, I'll show it to you with buttons: **Approve**, **Edit** or **Decline**.
 
 Commands: **stop** (cancel what I'm doing) · **memories** (what I remember about you) · **sign-ins** (sites \
-you stay signed in on) · **forget last** (drop our last exchange) · **help**
+you stay signed in on) · **reminders** (reminders and scheduled tasks) · **forget last** (drop our last \
+exchange) · **help**
 
 Open source (AGPL-3.0): {source}"""
 
@@ -44,3 +46,7 @@ SIGNINS = (
 NO_SIGNINS = "You aren't kept signed in on any site. When a site asks you to sign in, I'll show you a sign-in card."
 SIGNIN_FORGOTTEN = "Signed out of {site}: I no longer keep you signed in there."
 SIGNIN_UNKNOWN = "You weren't kept signed in on {site}. Say **sign-ins** to see the list."
+REMINDERS = "Your reminders and scheduled tasks:\n{items}\n\nTo remove one: **cancel reminder** and its id."
+NO_REMINDERS = 'You have no reminders or scheduled tasks. Ask me, e.g. "remind me at 6 to call Sam".'
+REMINDER_CANCELLED = "Cancelled."
+REMINDER_UNKNOWN = "I couldn't find that one. Say **reminders** to see the list with ids."

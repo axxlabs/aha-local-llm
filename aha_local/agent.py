@@ -17,7 +17,7 @@ from .approvals import Approvals
 from .config import Config
 from .items import Image
 from .llm import LLM, ModelUnavailable
-from .tools import memory, signins
+from .tools import memory, schedule, signins
 from .tools.registry import Registry, TaskState, ToolContext
 
 log = logging.getLogger("aha.agent")
@@ -36,6 +36,11 @@ class AgentOut(Protocol):
 TYPING_EVERY = 4.0  # seconds between `typing` frames while a reply is owed (SPEC §3.3)
 STOP_WORDS = {"stop", "cancel", "stop it", "stop that"}
 NEW_MESSAGE = "[New message from the user while you were working]\n{text}"
+SCHEDULED = (
+    "[Scheduled task the user set up earlier{late}; they aren't necessarily looking at the chat]\n{text}\n\n"
+    "Do it now. If it says to tell them only when something happens and it hasn't, answer exactly "
+    "NOTHING_TO_REPORT and nothing else."
+)
 
 
 class _Counted:
@@ -125,6 +130,22 @@ class Agent:
             reply = messages.SIGNIN_FORGOTTEN if found else messages.SIGNIN_UNKNOWN
             await self.send(account, reply.format(site=site))
             return
+        if command in ("reminders", "schedule", "scheduled", "scheduled tasks"):
+            tz = schedule.tz_of(self.config.timezone)
+            entries = sorted(schedule.load(account), key=lambda e: e["next"])
+            await self.send(
+                account,
+                messages.REMINDERS.format(items="\n".join(f"- {schedule.describe(e, tz)}" for e in entries))
+                if entries
+                else messages.NO_REMINDERS,
+            )
+            return
+        if command.startswith(("cancel reminder ", "cancel task ")):
+            entry_id = command.split(" ", 2)[2].strip().strip("`")
+            found = any(e["id"] == entry_id for e in schedule.load(account))
+            schedule.update(account, entry_id, lambda e: None)
+            await self.send(account, messages.REMINDER_CANCELLED if found else messages.REMINDER_UNKNOWN)
+            return
         if command == "forget last":
             context.forget_last(account)
             await self.send(account, messages.FORGOT_LAST)
@@ -153,11 +174,20 @@ class Agent:
 
     # ---- tasks
 
-    async def run(self, account: Account, text: str) -> None:
+    def is_running(self, account: Account) -> bool:
+        return account.address in self.running
+
+    def start_scheduled(self, account: Account, instruction: str, late: bool = False) -> None:
+        """A scheduled task is due (SPEC §3.4): run it as this account, like a message from them."""
+        account.transcript({"kind": "scheduled", "text": instruction})
+        text = SCHEDULED.format(text=instruction, late=", running late: the computer was off" if late else "")
+        self.running[account.address] = asyncio.create_task(self.run(account, text, scheduled=True))
+
+    async def run(self, account: Account, text: str, scheduled: bool = False) -> None:
         held = self.browser.hold(account.id) if self.browser else contextlib.nullcontext()
         try:
             with held:
-                await self._run(account, text)
+                await self._run(account, text, scheduled)
         finally:
             self.running.pop(account.address, None)
             await self._refresh_sign_ins(account)
@@ -171,9 +201,10 @@ class Agent:
         except Exception:
             log.warning("couldn't refresh kept sign-ins")
 
-    async def _run(self, account: Account, text: str) -> None:
+    async def _run(self, account: Account, text: str, scheduled: bool = False) -> None:
         while True:
-            await self._task(account, text)
+            await self._task(account, text, scheduled)
+            scheduled = False  # a follow-up is the person's own message
             # Messages that came in after the task's last model call: one follow-up task for all of them.
             pending = self.inbox.pop(account.address, [])
             if not pending:
@@ -197,7 +228,7 @@ class Agent:
         except Exception:
             log.warning("couldn't send a typing message")
 
-    async def _task(self, account: Account, text: str) -> None:
+    async def _task(self, account: Account, text: str, scheduled: bool = False) -> None:
         sent_before = self.sent[account.address]
         typing = asyncio.create_task(self._typing(account))
         try:
@@ -222,6 +253,11 @@ class Agent:
             # After "✅ Save" there may be nothing to add; if they've heard nothing at all, say something.
             answer = "" if self.sent[account.address] > sent_before else "…"
         await self._stop_typing(account, typing)  # before the answer, so no refresh can land after it
+        if scheduled and schedule.NOTHING in answer and len(answer) < len(schedule.NOTHING) + 40:
+            account.transcript({"kind": "answer", "text": "", "scheduled": "nothing to report"})
+            return  # watching for a change, and there's none: say nothing, keep the chat clean
+        if scheduled and answer:
+            answer = f"⏰ {answer}"
         if answer:
             await self.send(account, answer)
         account.transcript({"kind": "answer", "text": answer})

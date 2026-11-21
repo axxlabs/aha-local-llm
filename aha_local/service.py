@@ -21,7 +21,7 @@ from .e2e import crypto
 from .e2e.channel import Channel
 from .llm import LLM
 from .rest import RestError, Vault, load_or_create_instance_key
-from .tools import browser, conversation, mail, memory, signins, web
+from .tools import browser, conversation, mail, memory, schedule, signins, web
 from .tools.registry import Registry
 from .tunnel import Tunnel
 
@@ -36,7 +36,7 @@ class Service:
         self.key = load_or_create_instance_key(self.vault, data / "keys" / "instance.key")
         self.accounts = Accounts(self.vault)
         self.registry = Registry()
-        for module in (web, memory, mail, conversation):
+        for module in (web, memory, mail, schedule, conversation):
             module.register(self.registry)
         self.browser = browser.BrowserPool(config.browser_url, config.browser_idle_seconds)
         self.browser.on_open = self._browser_opened
@@ -57,6 +57,7 @@ class Service:
         )
         self.agent = Agent(config, self.accounts, self.llm, self.registry, self.channel, self.browser)
         self.channel.agent = self.agent
+        self.scheduler = schedule.Scheduler(self.accounts, self.agent, config.timezone)
         self.started = time.time()
 
     async def _browser_opened(self, account_id: str, session) -> None:
@@ -73,6 +74,7 @@ class Service:
             self.registry, self.browser, self.config.data_dir / "browser" / "pinned-tools.json"
         )
         self.browser.start()
+        self.scheduler.start()
         log.info("aha %s: %d tools (%d browser)", __version__, len(self.registry.names()), count)
         sock = self.config.data_dir / "agent.sock"
         sock.unlink(missing_ok=True)
@@ -82,6 +84,7 @@ class Service:
             async with admin:
                 await self.tunnel.run()
         finally:
+            await self.scheduler.stop()
             await self.browser.stop()
 
     # ---- admin socket: one JSON request per connection, one JSON reply
