@@ -295,3 +295,18 @@ async def test_claims_without_the_tool_go_back_once(setup, llm, chat, accounts):
 
     for request in ("show me how to cook rice", "what time is it?"):
         assert not checks.unshown_screenshot(request, {"browser_navigate"})
+
+
+def test_asking_for_a_password_in_the_chat_is_caught():
+    for bad in (
+        "Tell me your email and password and I'll walk you through the sign-in.",
+        "Please send me the verification code from the text message.",
+        "You can share your Waitrose password here.",
+    ):
+        assert checks.asks_for_secret(bad), bad
+    for fine in (
+        "I'll show you the sign-in card again: type your password there.",
+        "Your password is never shown to me.",
+        "What time should I book?",
+    ):
+        assert not checks.asks_for_secret(fine), fine

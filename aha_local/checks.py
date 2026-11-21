@@ -141,6 +141,28 @@ SCHEDULE_RETRY = (
     "haven't seen your draft, and never mention this check."
 )
 
+SECRET = r"(?:password|passcode|one-time code|verification code|2fa code|security code|pin)"
+PASSWORD_ASK = re.compile(
+    # "tell me your password", "send me the code", or "type/share your password here / in the chat"
+    rf"\b(?:tell|send|give|share|provide|text)\s+me\b[^.?!\n]{{0,40}}\b{SECRET}\b|"
+    rf"\b(?:type|share|send|paste|write|post|enter|put)\s+(?:your|the)\b[^.?!\n]{{0,30}}\b{SECRET}\b"
+    rf"[^.?!\n]{{0,30}}\b(?:here|in (?:the|this) chat)\b",
+    re.I,
+)
+
+
+def asks_for_secret(answer: str) -> bool:
+    """The answer asks the person to give a password or code in the chat (the sign-in card is the only way)."""
+    return bool(PASSWORD_ASK.search(answer))
+
+
+SECRET_RETRY = (
+    "[aha check] Your draft asks the person for a password or code in the chat. Never do that: passwords and codes "
+    "go only through browser_sign_in, where they type them on a card you never see. Offer to show the sign-in card "
+    "again instead, or another way forward. Then write your reply to the person from scratch: they haven't seen "
+    "your draft, and never mention this check."
+)
+
 SCREENSHOT_REQUEST = re.compile(
     r"\bscreen ?shot|\b(?:show|send) me (?:the|a|that|this) (?:page|site|website|screen|picture)\b|"
     r"\blet me see (?:it|the page|the site)\b",

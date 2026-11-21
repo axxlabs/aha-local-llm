@@ -230,14 +230,16 @@ def register(reg: Registry) -> None:
         Tool(
             "schedule_add",
             "Set a reminder (a message to the user at a time) or a scheduled task (something you'll do for them "
-            "at a time, once or repeating: a daily email summary, checking a page). To watch for a change "
-            "(a price drop, tickets on sale), schedule a repeating task whose text says what to check and to "
-            "tell them only when it happens. Use the time in the <context> block to work out `at`.",
+            "at a time, once or repeating: a daily email summary, checking a page). `at` is the first time it "
+            "happens: for 'every weekday at 8am' asked on a Saturday evening, that's Monday 08:00, not now. "
+            "To watch for a change (rain, a price drop, tickets on sale), write the text as the user asked, "
+            "e.g. 'Check X; tell me only if Y' with no 'otherwise' part: on runs with nothing to tell, nothing is "
+            "sent. Work out times from the time in the <context> block.",
             params(
                 ["kind", "text"],
                 kind={"type": "string", "enum": list(KINDS)},
                 text=string("The reminder's words, or the task's instruction, written so it makes sense later"),
-                at=string("Local date and time, YYYY-MM-DD HH:MM"),
+                at=string("The first time, local, YYYY-MM-DD HH:MM"),
                 in_minutes={"type": "number", "description": "Instead of `at`: this many minutes from now"},
                 repeat={"type": "string", "enum": list(REPEATS)},
             ),

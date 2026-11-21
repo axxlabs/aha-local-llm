@@ -306,7 +306,7 @@ class Agent:
         last = ""
         retried = False
         memory_retried = False
-        signin_retried = schedule_retried = screenshot_retried = False
+        signin_retried = schedule_retried = screenshot_retried = secret_retried = False
         called: set[str] = set()  # tools that ran without error in this task
         # Where numbers in the answer may come from: what the person said or saved, earlier answers, and pages
         # opened in this task. Search snippets don't count (SPEC §3.5).
@@ -339,6 +339,12 @@ class Agent:
                     log.info("draft answer pointed at a sign-in card no tool showed; asking the model to call it")
                     task.append({"role": "assistant", "content": reply.content or ""})
                     task.append({"role": "user", "content": checks.SIGNIN_RETRY})
+                    continue
+                if not secret_retried and checks.asks_for_secret(reply.content or ""):
+                    secret_retried = True
+                    log.info("draft answer asked for a password or code in the chat")
+                    task.append({"role": "assistant", "content": reply.content or ""})
+                    task.append({"role": "user", "content": checks.SECRET_RETRY})
                     continue
                 if not schedule_retried and checks.unbacked_schedule_claim(reply.content or "", called):
                     schedule_retried = True
