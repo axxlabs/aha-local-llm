@@ -4,6 +4,7 @@
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -213,3 +214,14 @@ def test_vectors_written_by_the_app_verify():
     if not path.exists():
         pytest.skip("aha-app not checked out next to aha-local-llm")
     check_vectors(json.loads(path.read_text()))
+
+
+def test_stored_formats_from_v1_still_load():
+    """Frozen state from the first release (SPEC §9.2): a format change must ship with migration code."""
+    fx = json.loads((Path(__file__).parent / "fixtures" / "state-v1.json").read_text())
+    bob = c.Ratchet.from_dict(fx["computer_ratchet"])
+    assert bob.decrypt(c.b64d(fx["box_from_device"])) == b"after the snapshot"
+    alice = c.Ratchet.from_dict(fx["device_ratchet"])
+    assert alice.decrypt(bob.encrypt(b"and back")) == b"and back"
+    identity = c.ComputerIdentity.from_dict(fx["identity"])
+    assert c.b64e(identity.fingerprint()) == fx["fingerprint"]

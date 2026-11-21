@@ -183,6 +183,7 @@ def cmd_status(a) -> None:
             f"\ngateway  {st['gateway']}\ntunnel   {st['tunnel']}\naccounts {st['accounts']}"
             f"\ndevices  {st['devices']} ({st['online']} online)"
             f"\ntools    {st['tools']}\nrunning  {st['running']} task(s)\nversion  {st['version']}"
+            f"\ncomputer {st.get('fingerprint', '?')}  (fingerprint: compare with the app's Settings)"
         )
 
 

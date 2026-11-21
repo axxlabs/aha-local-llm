@@ -15,6 +15,7 @@ from .accounts import Accounts
 from .agent import Agent
 from .certs import load_or_create_key, public_b64
 from .config import Config
+from .e2e import crypto
 from .e2e.channel import Channel
 from .llm import LLM
 from .tools import browser, conversation, documents, memory, web
@@ -88,6 +89,7 @@ class Service:
                 "ok": True,
                 "version": __version__,
                 "instance": public_b64(self.key),
+                "fingerprint": crypto.short_fingerprint(self.channel.identity.fingerprint()),
                 "gateway": self.config.gateway_url,
                 "tunnel": self.tunnel.status,
                 "accounts": len(self.accounts.all()),

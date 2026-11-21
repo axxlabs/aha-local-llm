@@ -255,3 +255,18 @@ async def test_a_corrupted_ratchet_state_drops_messages_but_keeps_the_channel_al
     await phone.send({"t": "say", "text": "hello?"})  # must not raise into the tunnel loop
     await rig.channel.message(acct, "still alive")
     assert rig.agent.said == []
+
+
+async def test_a_new_device_certificate_names_its_pairing_code(tmp_path):
+    """The gateway signs only for a device that joined this computer's code (SPEC §6.4)."""
+    rig = Rig(tmp_path)
+    await rig.pair()
+    requests = rig.take(CertRequest)
+    assert len(requests) == 1 and requests[0].code == "ABC-DEF"
+
+
+def test_short_fingerprint_is_what_people_compare():
+    fp = bytes(range(32))
+    short = c.short_fingerprint(fp)
+    assert len(short) == 19 and short.count(" ") == 3 and short.replace(" ", "").isalnum()
+    assert short == "AAAQ EAYE AUDA OCAJ"

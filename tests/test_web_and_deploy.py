@@ -166,3 +166,17 @@ def test_every_source_file_carries_the_licence_header():
         if "SPDX-License-Identifier: AGPL-3.0-or-later" not in f.read_text()
     ]
     assert missing == []
+
+
+def test_every_image_is_pinned_by_digest():
+    """No moving tags (SPEC §9.2): an upstream tag change can't slip into an install."""
+    import re
+
+    deploy = Path(__file__).resolve().parents[1] / "deploy"
+    refs = []
+    for f in [*(deploy / "quadlet").glob("*.container"), deploy / "Containerfile"]:
+        refs += re.findall(r"^(?:Image=|FROM |COPY --from=)(\S+)", f.read_text(), re.M)
+    refs = [r for r in refs if r != "@AGENT_IMAGE@"]
+    assert len(refs) >= 5
+    for r in refs:
+        assert re.search(r"@sha256:[0-9a-f]{64}$", r), r

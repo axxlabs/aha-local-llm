@@ -16,7 +16,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
-from .protocol import DEVICE_CONTEXT, HANDSHAKE_CONTEXT, Cert, b64, unb64
+from .protocol import DEVICE_CONTEXT, GATEWAY_PROOF_CONTEXT, HANDSHAKE_CONTEXT, Cert, b64, unb64
 
 CERT_LIFETIME = 365 * 24 * 3600
 RENEW_BEFORE = 30 * 24 * 3600
@@ -69,6 +69,11 @@ def device_message(nonce: str, device: str) -> bytes:
 
 
 # ---- binding certificates (routing only, SPEC §6.4)
+
+
+def gateway_proof_message(device_nonce: str) -> bytes:
+    """What the gateway signs to prove to a device that it holds the pinned key (SPEC §6.3)."""
+    return f"{GATEWAY_PROOF_CONTEXT}|{device_nonce}".encode()
 
 
 def cert_body(cert: Cert) -> bytes:

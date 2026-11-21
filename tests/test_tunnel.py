@@ -30,7 +30,7 @@ class FakeGateway:
     async def handler(self, ws):
         self.ws = ws
         nonce = b64(os.urandom(32))
-        await ws.send(Hello(gateway=self.pin, nonce=nonce).model_dump_json())
+        await ws.send(Hello(gateway=self.pin, nonce=nonce, features=["report"]).model_dump_json())
         self.auth = FROM_COMPUTER.validate_json(await ws.recv())
         assert verify(self.auth.instance, handshake_message(nonce, self.auth.instance), self.auth.sig)
         routes = [c.device for c in self.auth.certs]
@@ -87,8 +87,10 @@ async def test_presents_device_certificates_and_routes_frames(fake, tmp_path):
     await asyncio.wait_for(tunnel.connected.wait(), 3)
     assert [c.device for c in fake.auth.certs] == [dev]
     assert tunnel.status == "connected"
+    assert channel.gateway_features == frozenset({"report"})
     await fake.ws.send(E2E(dev=dev, box="AAAA").model_dump_json())
     assert (await asyncio.wait_for(channel.frames.get(), 3)) == E2E(dev=dev, box="AAAA")
+    await fake.ws.send('{"t": "from_a_newer_gateway", "x": 1}')  # ignored, not fatal (SPEC §6.5)
     await fake.ws.send(DeviceStatus(dev=dev, online=True).model_dump_json())
     assert (await asyncio.wait_for(channel.frames.get(), 3)).online
     await tunnel.send(E2E(dev=dev, box="BBBB"))

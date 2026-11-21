@@ -10,13 +10,18 @@ apart from a problem report the person reviewed and chose to send (`Report`, SPE
 from __future__ import annotations
 
 import base64
-from typing import Annotated, Literal
+import json
+from typing import Annotated, Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 PROTOCOL_VERSION = 2
 HANDSHAKE_CONTEXT = "aha-tunnel-v1"
 DEVICE_CONTEXT = "aha-device-v1"
+GATEWAY_PROOF_CONTEXT = "aha-gateway-v1"  # the gateway signs a device's nonce (SPEC §6.3)
+# What each side supports (SPEC §6.5). Optional frames are only sent to a side that lists them.
+GATEWAY_FEATURES = ("report", "cert_code", "ready_sig")
+COMPUTER_FEATURES: tuple[str, ...] = ()
 MAX_BOX_B64 = 2_800_000  # a 2 MB ratchet message in base64
 MAX_FRAME_BYTES = 3_000_000
 MAX_PAIR_FIELD = 4_000
@@ -26,12 +31,15 @@ KEY_PATTERN = r"^[A-Za-z0-9+/]{43}=$"  # 32 bytes
 TAG_PATTERN = r"^[A-Za-z0-9+/]{22}==$"  # 16 bytes
 ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
 CODE_PATTERN = r"^[A-Z2-9]{3}-[A-Z2-9]{3}$"
+FEATURE_PATTERN = r"^[a-z_]{1,24}$"
 
 B64 = Annotated[str, Field(pattern=B64_PATTERN, max_length=MAX_BOX_B64)]
 Key = Annotated[str, Field(pattern=KEY_PATTERN)]
 Tag = Annotated[str, Field(pattern=TAG_PATTERN)]
 FrameId = Annotated[str, Field(pattern=ID_PATTERN)]
 Code = Annotated[str, Field(pattern=CODE_PATTERN)]
+Features = Annotated[list[Annotated[str, Field(pattern=FEATURE_PATTERN)]], Field(max_length=32)]
+Nonce = Annotated[str, Field(pattern=B64_PATTERN, max_length=64)]
 PairBody = Annotated[
     dict[Annotated[str, Field(pattern=r"^[a-z_]{1,16}$")], Annotated[str, Field(max_length=MAX_PAIR_FIELD)]],
     Field(max_length=12),
@@ -65,6 +73,7 @@ class Hello(Strict):
     gateway: Key
     nonce: B64
     vapid: Annotated[str, Field(max_length=200)] = ""  # Web Push application server key (base64url), for devices
+    features: Features = []
 
 
 class Auth(Strict):
@@ -75,6 +84,7 @@ class Auth(Strict):
     certs: Annotated[list[Cert], Field(max_length=1024)] = []
     name: Annotated[str, Field(max_length=60)] = ""
     version: Annotated[str, Field(max_length=40)] = ""
+    features: Features = []
 
 
 class Ready(Strict):
@@ -90,6 +100,7 @@ class DevAuth(Strict):
     t: Literal["dev_auth"] = "dev_auth"
     cert: Cert
     sig: B64
+    nonce: Nonce | None = None  # the gateway signs it in `ready` to prove it holds the pinned key
 
 
 class DeviceReady(Strict):
@@ -97,6 +108,7 @@ class DeviceReady(Strict):
 
     t: Literal["ready"] = "ready"
     online: bool
+    sig: B64 | None = None  # over GATEWAY_PROOF_CONTEXT|<device nonce>
 
 
 # ---- after the handshake
@@ -132,6 +144,7 @@ class PairHello(Strict):
 
     t: Literal["pair_hello"] = "pair_hello"
     code: Code
+    nonce: Nonce | None = None
 
 
 class Pair(Strict):
@@ -154,6 +167,7 @@ class CertRequest(Strict):
     id: FrameId
     device: Key
     tag: Tag
+    code: Code | None = None  # the rendezvous code the device joined (new devices; SPEC §6.4)
 
 
 class CertIssued(Strict):
@@ -234,10 +248,32 @@ ToDevice = Annotated[
 ]
 FromDevice = Annotated[DevAuth | PairHello | DevE2E | DevPair | Ping | Pong, Field(discriminator="t")]
 
-TO_COMPUTER = TypeAdapter(ToComputer)
-FROM_COMPUTER = TypeAdapter(FromComputer)
-TO_DEVICE = TypeAdapter(ToDevice)
-FROM_DEVICE = TypeAdapter(FromDevice)
+
+class Frames:
+    """A parser for one direction. Known frame types are validated strictly; a frame type this version doesn't
+    know returns None, to be ignored: never a reason to close the connection (SPEC §6.5)."""
+
+    def __init__(self, union: Any) -> None:
+        self.adapter = TypeAdapter(union)
+        members = get_args(get_args(union)[0])
+        self.tags = frozenset(m.model_fields["t"].default for m in members)
+        self.unknown = 0
+
+    def validate_json(self, raw: str | bytes):
+        try:
+            tag = json.loads(raw).get("t")
+        except (ValueError, AttributeError):
+            tag = None
+        if isinstance(tag, str) and tag not in self.tags:
+            self.unknown += 1
+            return None
+        return self.adapter.validate_json(raw)
+
+
+TO_COMPUTER = Frames(ToComputer)
+FROM_COMPUTER = Frames(FromComputer)
+TO_DEVICE = Frames(ToDevice)
+FROM_DEVICE = Frames(FromDevice)
 
 
 def b64(data: bytes) -> str:

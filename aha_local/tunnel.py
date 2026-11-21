@@ -21,6 +21,7 @@ from . import __version__
 from .accounts import Accounts
 from .certs import handshake_message, public_b64, sign, verify
 from .protocol import (
+    COMPUTER_FEATURES,
     E2E,
     MAX_FRAME_BYTES,
     TO_COMPUTER,
@@ -110,6 +111,7 @@ class Tunnel:
                     name=self.name,
                     version=__version__,
                     sig=sign(self.key, handshake_message(hello.nonce, self.instance)),
+                    features=list(COMPUTER_FEATURES),
                 ).model_dump_json()
             )
             ready = TO_COMPUTER.validate_json(await asyncio.wait_for(ws.recv(), 15))
@@ -119,6 +121,7 @@ class Tunnel:
                 log.warning("gateway rejected %d device certificate(s)", len(ready.rejected))
             self.ws = ws
             self.channel.gateway_pin = self.pin
+            self.channel.gateway_features = frozenset(hello.features)
             self.connected.set()
             self.status = "connected"  # device counts are reported live by `aha status`
             log.info("tunnel up")
@@ -150,7 +153,7 @@ class Tunnel:
                 log.info("gateway notice: %s", frame.code)
             case Ping():
                 await self.send(Pong())
-            case Pong():
+            case Pong() | None:  # None: a frame type this version doesn't know (SPEC §6.5)
                 pass
 
     def _spawn(self, coro) -> None:

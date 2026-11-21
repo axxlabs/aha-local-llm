@@ -97,6 +97,7 @@ class Channel:
         self._cert_waiters: dict[str, asyncio.Future] = {}
         self._tasks: set[asyncio.Task] = set()
         self.gateway_pin = ""
+        self.gateway_features: frozenset[str] = frozenset()  # from the gateway's hello (SPEC §6.5)
         self.model = model
         self.drafts: dict[str, reports.Draft] = {}  # by account id: the report the person is looking at (§7.7)
         self._report_waiters: dict[str, asyncio.Future] = {}
@@ -287,6 +288,9 @@ class Channel:
                 )
                 return
             del self.drafts[account.id]
+            if "report" not in self.gateway_features:  # an older or self-hosted gateway without reports
+                await reply({"t": "report_sent", "id": draft.id, "ok": False, "code": "reports_off"})
+                return
             self._spawn(self._send_report(account, device, draft))
         else:
             await reply({"t": "error", "code": "unknown_type"})
@@ -380,7 +384,7 @@ class Channel:
             ratchet = crypto.Ratchet.init_computer(
                 paired.keys.sk, ad, state.offer.ek_priv, state.offer.ek_pub, self.identity.kem_seed, paired.kemd
             )
-            cert = await self.request_cert(dev, account.tag)
+            cert = await self.request_cert(dev, account.tag, code=frame.code)
             device = Device(
                 dev=dev,
                 name="New device",
@@ -397,12 +401,12 @@ class Channel:
                 state.done.set_result(account.label)
             log.info("a device was paired")
 
-    async def request_cert(self, dev: str, tag: str, timeout: float = 15) -> Cert:
+    async def request_cert(self, dev: str, tag: str, timeout: float = 15, code: str | None = None) -> Cert:
         request_id = secrets.token_hex(8)
         waiter = asyncio.get_running_loop().create_future()
         self._cert_waiters[request_id] = waiter
         try:
-            await self.send_frame(CertRequest(id=request_id, device=dev, tag=tag))
+            await self.send_frame(CertRequest(id=request_id, device=dev, tag=tag, code=code))
             return await asyncio.wait_for(waiter, timeout)
         finally:
             self._cert_waiters.pop(request_id, None)

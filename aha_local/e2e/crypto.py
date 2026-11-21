@@ -159,6 +159,12 @@ def unpad(data: bytes) -> bytes:
 # ---- pairing (SPEC §6.4, §6.8)
 
 
+def short_fingerprint(fp: bytes) -> str:
+    """What people compare (SPEC §6.4): the first 16 base32 characters of the fingerprint, in groups of 4."""
+    text = base64.b32encode(fp).decode()[:16]
+    return " ".join(text[i : i + 4] for i in range(0, 16, 4))
+
+
 def fingerprint(ik_pub: bytes, kem_pub: bytes) -> bytes:
     return sha256(ik_pub + kem_pub)
 

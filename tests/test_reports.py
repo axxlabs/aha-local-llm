@@ -68,6 +68,13 @@ async def test_nothing_is_sent_without_the_draft_then_the_gateway_answers(tmp_pa
     assert draft["t"] == "report_draft" and "hello there" in draft["text"] and "Ana" not in draft["text"]
     assert rig.take(Report) == []
 
+    await phone.send({"t": "report_send", "id": draft["id"]})  # a gateway that doesn't list "report"
+    assert phone.inbox() == [{"t": "report_sent", "id": draft["id"], "ok": False, "code": "reports_off"}]
+    assert rig.take(Report) == []
+
+    rig.channel.gateway_features = frozenset({"report"})
+    await phone.send({"t": "report_preview", "count": 1, "note": "it broke", "details": False, "app": "0.2.0"})
+    draft = phone.inbox()[0]
     await phone.send({"t": "report_send", "id": draft["id"]})
     for _ in range(20):
         await asyncio.sleep(0.01)
