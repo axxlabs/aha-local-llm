@@ -65,6 +65,7 @@ class Tunnel:
         self.connected = asyncio.Event()
         self._code_waiters: list[asyncio.Future] = []
         self._send_lock = asyncio.Lock()
+        self._background: set[asyncio.Task] = set()
         self.status = "starting"
 
     async def run(self) -> None:
@@ -127,7 +128,9 @@ class Tunnel:
             case E2E():
                 await self.channel.on_e2e(frame)
             case Pair():
-                await self.channel.on_pair(frame)
+                # In the background: a pairing waits for the gateway's certificate, which arrives through this
+                # same read loop. Ratchet messages (E2E) stay in order, inline.
+                self._spawn(self.channel.on_pair(frame))
             case CertIssued():
                 self.channel.on_cert(frame)
             case DeviceStatus():
@@ -143,6 +146,17 @@ class Tunnel:
                 await self.send(Pong())
             case Pong():
                 pass
+
+    def _spawn(self, coro) -> None:
+        task = asyncio.create_task(coro)
+        self._background.add(task)
+
+        def done(t: asyncio.Task) -> None:
+            self._background.discard(t)
+            if not t.cancelled() and t.exception() is not None:
+                log.warning("background task failed: %s", type(t.exception()).__name__)
+
+        task.add_done_callback(done)
 
     async def send(self, frame) -> None:
         if self.ws is None:

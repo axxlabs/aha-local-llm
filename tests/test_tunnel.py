@@ -125,3 +125,58 @@ def test_shared_files_match_the_gateway(name):
     if not gateway.exists():
         pytest.skip("aha-gateway is not checked out next to this repo")
     assert (ROOT / "aha_local" / name).read_text() == gateway.read_text()
+
+
+async def test_pairing_through_the_tunnel_does_not_deadlock(tmp_path):
+    """Regression: a pairing waits for the gateway's certificate, which comes through the same read loop."""
+    from aha_local.certs import issue_cert as issue
+    from aha_local.e2e import crypto as c
+    from aha_local.e2e.channel import Channel
+    from aha_local.protocol import CertIssued, CertRequest, Pair, PairCode
+
+    gw = FakeGateway()
+    replies: asyncio.Queue = asyncio.Queue()
+
+    async def handler(ws):
+        gw.ws = ws
+        nonce = b64(os.urandom(32))
+        await ws.send(Hello(gateway=gw.pin, nonce=nonce).model_dump_json())
+        gw.auth = FROM_COMPUTER.validate_json(await ws.recv())
+        await ws.send(Ready(sig=sign(gw.key, handshake_message(gw.auth.nonce))).model_dump_json())
+        async for raw in ws:
+            f = FROM_COMPUTER.validate_json(raw)
+            if f.t == "pair_start":
+                await ws.send(PairCode(code="ABC-DEF", expires_in=600).model_dump_json())
+            elif isinstance(f, CertRequest):
+                cert = issue(gw.key, f.device, gw.auth.instance, f.tag)
+                await ws.send(CertIssued(id=f.id, cert=cert).model_dump_json())
+            elif isinstance(f, Pair):
+                await replies.put(f.body)
+
+    sock = str(tmp_path / "gw.sock")
+    server = await websockets.unix_serve(handler, sock)
+    accounts = Accounts(tmp_path / "data")
+    holder = {}
+
+    async def send(frame):
+        await holder["t"].send(frame)
+
+    channel = Channel(accounts, tmp_path / "data" / "keys", send, "https://app", "ws://gw/v1/device", "Home")
+    tunnel = Tunnel(f"unix:{sock}", gw.pin, new_key(), accounts, "Home", channel)
+    holder["t"] = tunnel
+    task = asyncio.create_task(tunnel.run())
+    await asyncio.wait_for(tunnel.connected.wait(), 3)
+    acct = accounts.create("Ana")
+    code = await tunnel.pair_code()
+    state = channel.new_pairing(code, acct)
+    await gw.ws.send(Pair(code=code, body={"t": "hello"}).model_dump_json())
+    bundle = await asyncio.wait_for(replies.get(), 3)
+    keys = c.DeviceKeys.generate()
+    msg, pk, _ = c.device_finish(bundle, channel.identity.fingerprint(), state.offer.psk, keys)
+    await gw.ws.send(Pair(code=code, body={"t": "finish", **msg}).model_dump_json())
+    ok = await asyncio.wait_for(replies.get(), 5)
+    assert ok["t"] == "ok"
+    c.device_check_computer(pk, c.b64d(ok["mac"]))
+    assert tunnel.connected.is_set() and len(acct.devices) == 1
+    task.cancel()
+    server.close()

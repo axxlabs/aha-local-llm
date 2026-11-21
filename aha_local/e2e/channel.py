@@ -94,6 +94,7 @@ class Channel:
         self.online: set[str] = set()
         self.pairings: dict[str, PairingState] = {}
         self._cert_waiters: dict[str, asyncio.Future] = {}
+        self._tasks: set[asyncio.Task] = set()
         self.gateway_pin = ""
 
     # ---- output for the agent (agent.AgentOut, approvals.Out)
@@ -184,7 +185,9 @@ class Channel:
             self.online.add(frame.dev)
             found = self.accounts.by_device(frame.dev)
             if found and found[1].certificate and needs_renewal(found[1].certificate):
-                await self._renew(*found)
+                task = asyncio.create_task(self._renew(*found))  # waits for a frame from this same connection
+                self._tasks.add(task)
+                task.add_done_callback(self._tasks.discard)
         else:
             self.online.discard(frame.dev)
 
