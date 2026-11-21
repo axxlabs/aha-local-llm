@@ -7,6 +7,12 @@ model, your memories, your mail tokens and your conversation history stay on you
 leaves with your words or data in it (typing into a website, an email) and before Aha! saves something about
 you, it shows you a card with the exact content: Approve, Edit, Decline.
 
+What it does: searches and reads the web (citing pages), uses websites in its own browser (bookings, forms,
+screenshots sent to your chat), signs in to sites when you want (you type your password on a card; the model
+never sees it; stay signed in per site if you choose), reads and writes your Gmail, reads photos you send
+(receipts, tickets), reminds you, runs tasks on a schedule and watches for changes (quiet until there's news),
+and remembers what you approve. Each person in the household has their own account, memories, browser and mail.
+
 This repo is the part that runs on your computer. Messages reach it through an
 [Aha! gateway](https://github.com/axxlabs/aha-gateway) (self-hosted, or the hosted one for $5/month per user),
 which carries encrypted messages it can't read and keeps nothing. Website: https://axxlabs.ai/aha/

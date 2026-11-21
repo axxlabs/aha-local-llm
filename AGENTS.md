@@ -23,6 +23,12 @@ Rules:
   model's own unchecked text as sources.
 - `aha_local/protocol.py` and `aha_local/certs.py` are identical copies of the files in aha-gateway; change
   both repos together (a test compares them).
+- Sign-in secrets (`aha_local/tools/browser.py` `browser_sign_in`, `signins.py`): what the person types on a
+  sign-in card goes to the page and nowhere else. Never log, return, store or audit it; every tool result after
+  it is masked (`signins.redact`). Kept sign-ins are per account and only ever restored into that account's
+  browser context. `tests/test_signin.py` guards this.
+- Each account has its own browser context (`BrowserPool`); a tool reaches the browser only through
+  `ctx.browser`. Never share a context or a connection between accounts.
 - All texts aha sends on its own live in `aha_local/messages.py`.
 - Nothing is ever uploaded: the gateway receives only chat messages. Don't add telemetry or remote logging.
 - Containers keep their sandboxing (`deploy/quadlet/`): the model server stays on the internal network only.
