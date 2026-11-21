@@ -226,6 +226,21 @@ class Service:
         return revoked
 
 
+async def _run_until_stopped(service: Service) -> None:
+    """Run until SIGTERM or SIGINT. In the container the agent is PID 1, which ignores SIGTERM unless it
+    handles it, so without this `aha stop` waits 10 s and kills it."""
+    import signal
+
+    task = asyncio.current_task()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, task.cancel)
+    try:
+        await service.run()
+    except asyncio.CancelledError:
+        log.info("stopping")
+
+
 def main() -> None:
     logging.basicConfig(
         level=os.environ.get("AHA_LOG_LEVEL", "INFO"), format="%(asctime)s %(name)s %(levelname)s %(message)s"
@@ -237,4 +252,4 @@ def main() -> None:
     except RestError as e:
         log.error("can't open the data folder: %s", e)
         raise SystemExit(1) from None
-    asyncio.run(service.run())
+    asyncio.run(_run_until_stopped(service))
