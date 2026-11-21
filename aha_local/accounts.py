@@ -2,6 +2,8 @@
 # Copyright (C) 2026 Axxlabs Limited
 """Accounts (people), their devices and their files (SPEC §3.8). Nothing here is ever uploaded.
 
+Every file is encrypted at rest through the data folder's vault (SPEC §3.8.1).
+
 An account is a person on this computer: a random id, a display name, a random routing tag (the gateway counts
 tags for billing and learns nothing else), memories, the transcript and the context. Each device of the account
 has its own file under `devices/` (mode 0600) with its public keys, push subscription, binding certificate and
@@ -22,22 +24,14 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .protocol import Cert
+from .rest import Vault
 
 VERSION = 2
 
 
-def _write_json(path: Path, data, private: bool = False) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600 if private else 0o644)
-    with os.fdopen(fd, "w") as f:
-        f.write(json.dumps(data, ensure_ascii=False, indent=1))
-    os.replace(tmp, path)
-
-
-def _append_jsonl(path: Path, entry: dict) -> None:
+def _log_line(entry: dict) -> bytes:
     entry = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), **entry}
-    with path.open("a") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    return json.dumps(entry, ensure_ascii=False).encode()
 
 
 def device_file_id(dev: str) -> str:
@@ -68,6 +62,7 @@ class Account:
     dir: Path
     name: str
     tag: str
+    vault: Vault = field(repr=False)
     created: int = field(default_factory=lambda: int(time.time()))
     seq: int = 0
     devices: dict[str, Device] = field(default_factory=dict)
@@ -84,8 +79,8 @@ class Account:
     # ---- files
 
     def save(self) -> None:
-        self.dir.mkdir(parents=True, exist_ok=True)
-        _write_json(
+        self.dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.vault.write_json(
             self.dir / "account.json",
             {"v": VERSION, "id": self.id, "name": self.name, "tag": self.tag, "created": self.created, "seq": self.seq},
         )
@@ -99,7 +94,7 @@ class Account:
         d = self.dir / "devices"
         d.mkdir(parents=True, exist_ok=True)
         os.chmod(d, 0o700)
-        _write_json(d / f"{device_file_id(device.dev)}.json", asdict(device), private=True)
+        self.vault.write_json(d / f"{device_file_id(device.dev)}.json", asdict(device))
         self.devices[device.dev] = device
 
     def remove_device(self, dev: str) -> Device | None:
@@ -109,17 +104,14 @@ class Account:
         return device
 
     def transcript(self, entry: dict) -> None:
-        _append_jsonl(self.dir / "transcript.jsonl", entry)
+        self.vault.append(self.dir / "transcript.jsonl", _log_line(entry))
 
     def audit(self, entry: dict) -> None:
-        _append_jsonl(self.dir / "audit.jsonl", entry)
+        self.vault.append(self.dir / "audit.jsonl", _log_line(entry))
 
     def read_transcript(self) -> list[dict]:
-        path = self.dir / "transcript.jsonl"
-        if not path.exists():
-            return []
         out = []
-        for line in path.read_text().splitlines():
+        for line in self.vault.records(self.dir / "transcript.jsonl"):
             try:
                 out.append(json.loads(line))
             except json.JSONDecodeError:
@@ -139,36 +131,37 @@ class Account:
         return out[-limit:]
 
     def load_context(self) -> dict:
-        path = self.dir / "context.json"
-        return json.loads(path.read_text()) if path.exists() else {"summary": "", "turns": []}
+        return self.vault.read_json(self.dir / "context.json", {"summary": "", "turns": []})
 
     def save_context(self, context: dict) -> None:
-        _write_json(self.dir / "context.json", context)
+        self.vault.write_json(self.dir / "context.json", context)
 
     def load_memory(self) -> list[dict]:
-        path = self.dir / "memory.json"
-        return json.loads(path.read_text()) if path.exists() else []
+        return self.vault.read_json(self.dir / "memory.json", [])
 
     def save_memory(self, items: list[dict]) -> None:
-        _write_json(self.dir / "memory.json", items)
+        self.vault.write_json(self.dir / "memory.json", items)
 
 
 class Accounts:
-    def __init__(self, data_dir: Path) -> None:
-        self.root = data_dir / "accounts"
-        self.root.mkdir(parents=True, exist_ok=True)
+    def __init__(self, vault: Vault) -> None:
+        self.vault = vault
+        self.root = vault.root / "accounts"
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._cache: dict[str, Account] = {}
         self._by_device: dict[str, str] = {}
         for d in sorted(self.root.iterdir()):
             f = d / "account.json"
             if not f.exists():
                 continue
-            raw = json.loads(f.read_text())
+            raw = vault.read_json(f)
             if raw.get("v") != VERSION:
                 continue  # v1 (chat-app address) accounts are not loaded
-            acct = Account(raw["id"], d, raw.get("name", ""), raw["tag"], raw.get("created", 0), raw.get("seq", 0))
+            acct = Account(
+                raw["id"], d, raw.get("name", ""), raw["tag"], vault, raw.get("created", 0), raw.get("seq", 0)
+            )
             for df in sorted((d / "devices").glob("*.json")) if (d / "devices").exists() else []:
-                device = Device(**json.loads(df.read_text()))
+                device = Device(**vault.read_json(df))
                 acct.devices[device.dev] = device
                 self._by_device[device.dev] = acct.id
             self._cache[acct.id] = acct
@@ -176,7 +169,7 @@ class Accounts:
     def create(self, name: str) -> Account:
         account_id = secrets.token_hex(16)
         tag = base64.b64encode(secrets.token_bytes(16)).decode()
-        acct = Account(account_id, self.root / account_id, name.strip()[:60], tag)
+        acct = Account(account_id, self.root / account_id, name.strip()[:60], tag, self.vault)
         acct.save()
         self._cache[acct.id] = acct
         return acct
@@ -225,15 +218,21 @@ class Accounts:
         for dev in acct.devices:
             self._by_device.pop(dev, None)
         shutil.rmtree(acct.dir, ignore_errors=True)
+        self.vault.forget(acct.dir)
         return acct
 
     def export(self, account_id: str, target: Path) -> Path | None:
-        """The person's own data; device keys and ratchet states are left out."""
+        """The person's own data, decrypted (it's their copy); device keys and ratchet states are left out."""
         acct = self._cache.get(account_id)
         if acct is None:
             return None
-        with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as z:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as out, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
             for f in sorted(acct.dir.iterdir()):
-                if f.is_file() and not f.name.endswith(".tmp"):
-                    z.write(f, f.name)
+                if not f.is_file() or f.name.endswith(".tmp"):
+                    continue
+                if f.suffix == ".jsonl":
+                    z.writestr(f.name, b"".join(r + b"\n" for r in self.vault.records(f)))
+                else:
+                    z.writestr(f.name, self.vault.read(f) or b"")
         return target

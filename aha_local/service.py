@@ -13,11 +13,12 @@ import time
 from . import __version__
 from .accounts import Accounts
 from .agent import Agent
-from .certs import load_or_create_key, public_b64
+from .certs import public_b64
 from .config import Config
 from .e2e import crypto
 from .e2e.channel import Channel
 from .llm import LLM
+from .rest import RestError, Vault, load_or_create_instance_key
 from .tools import browser, conversation, documents, memory, web
 from .tools.registry import Registry
 from .tunnel import Tunnel
@@ -29,8 +30,9 @@ class Service:
     def __init__(self, config: Config) -> None:
         self.config = config
         data = config.data_dir
-        self.key = load_or_create_key(data / "keys" / "instance.key")
-        self.accounts = Accounts(data)
+        self.vault = Vault.open(data, config.data_key_file)
+        self.key = load_or_create_instance_key(self.vault, data / "keys" / "instance.key")
+        self.accounts = Accounts(self.vault)
         self.registry = Registry()
         for module in (web, memory, documents, conversation):
             module.register(self.registry)
@@ -183,4 +185,9 @@ def main() -> None:
     )
     for noisy in ("httpx", "mcp", "websockets"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
-    asyncio.run(Service(Config.load()).run())
+    try:
+        service = Service(Config.load())
+    except RestError as e:
+        log.error("can't open the data folder: %s", e)
+        raise SystemExit(1) from None
+    asyncio.run(service.run())

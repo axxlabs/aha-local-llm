@@ -54,6 +54,14 @@ All are rootless Podman containers managed by systemd Quadlet units (`deploy/qua
 dropped and read-only file systems where the image allows. Your data lives in `~/.local/share/aha/`;
 the configuration in `~/.config/aha/config.toml`.
 
+The data folder is encrypted at rest (ChaCha20-Poly1305, a key per file) under one data key that
+`systemd-creds` seals to this computer's TPM and host key (`~/.config/aha/data-key.cred`); systemd unseals it
+into the agent's private in-memory credentials folder at start. A copied folder, a backup or a stolen disk
+can't be read without this computer, or without the recovery code `aha init` shows once. It doesn't hide data
+from whoever controls the running computer: the agent needs plaintext to work. Full-disk encryption (LUKS) is
+still recommended; `aha doctor` warns without it. `aha recovery-key --show` shows the code again;
+`aha restore` (code on stdin) seals it to a new computer.
+
 ## Development
 
 ```sh

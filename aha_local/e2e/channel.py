@@ -17,7 +17,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
 import re
 import secrets
 import time
@@ -51,14 +50,13 @@ def clean_text(value: object, limit: int) -> str | None:
     return CONTROL.sub("", unicodedata.normalize("NFC", value))[:limit]
 
 
-def load_or_create_identity(path: Path) -> crypto.ComputerIdentity:
-    if path.exists():
-        return crypto.ComputerIdentity.from_dict(json.loads(path.read_text()))
-    path.parent.mkdir(parents=True, exist_ok=True)
+def load_or_create_identity(vault, path: Path) -> crypto.ComputerIdentity:
+    """The computer's end-to-end identity, encrypted at rest (SPEC §3.8.1)."""
+    raw = vault.read(path)
+    if raw is not None:
+        return crypto.ComputerIdentity.from_dict(json.loads(raw))
     identity = crypto.ComputerIdentity.generate()
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w") as f:
-        json.dump(identity.to_dict(), f)
+    vault.create(path, json.dumps(identity.to_dict()).encode())
     return identity
 
 
@@ -84,7 +82,7 @@ class Channel:
         model: str = "",
     ) -> None:
         self.accounts = accounts
-        self.identity = load_or_create_identity(keys_dir / "e2e.json")
+        self.identity = load_or_create_identity(accounts.vault, keys_dir / "e2e.json")
         self.send_frame = send_frame
         self.app_url = app_url.rstrip("/")
         self.device_url = device_url

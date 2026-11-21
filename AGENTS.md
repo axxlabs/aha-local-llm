@@ -60,6 +60,9 @@ Steps:
 2. **Configure.** `aha init --gateway <url> --documents <folder> --name <household> --timezone <tz>
    [--models <dir>]`. It prints the gateway key's fingerprint: show it to the user and have them compare it
    with the one the gateway operator publishes (for the hosted gateway: on the Aha! website). Don't confirm it yourself. A mismatch means stop.
+   It also creates the data key and prints a **recovery code** once. Tell the user to write it down or put it
+   in their password manager now. Don't copy it anywhere yourself, don't repeat it in chat, and don't run
+   `aha recovery-key --show`. An existing install gets its key, and its code, at `aha install`.
 3. **Models.** `aha models download` (~23 GB; tell the user it takes a while).
 4. **Install and start.** `aha install`, then `aha start`. `aha doctor` must show every line `ok`;
    `aha status` must show the four services `active` and the tunnel `connected`.

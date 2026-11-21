@@ -119,7 +119,7 @@ async def test_every_approval_is_audited(agent, llm, chat, registry, accounts):
     msg = await start_form_task(agent, llm, chat, registry, ran)
     await say(agent, "ok", button=msg.buttons[0].id)
     await settle(agent)
-    lines = [json.loads(x) for x in (person(accounts).dir / "audit.jsonl").read_text().splitlines()]
+    lines = [json.loads(x) for x in accounts.vault.records(person(accounts).dir / "audit.jsonl")]
     assert lines[0]["asked"] == ["Felipe", "07700 900123"]
     assert lines[1]["decision"] == "approved" and lines[1]["final"] == ["Felipe", "07700 900123"]
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,7 @@ from aha_local.accounts import Accounts
 from aha_local.agent import Agent
 from aha_local.config import Config
 from aha_local.llm import Reply, ToolCall
+from aha_local.rest import Vault
 from aha_local.tools import conversation, documents, memory
 from aha_local.tools.registry import Registry
 
@@ -106,7 +108,7 @@ def config(tmp_path: Path) -> Config:
 
 @pytest.fixture
 def accounts(config) -> Accounts:
-    accts = Accounts(config.data_dir)
+    accts = Accounts(Vault(config.data_dir, os.urandom(32)))
     accts.create("Fe")
     return accts
 

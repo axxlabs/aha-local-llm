@@ -17,10 +17,13 @@ Tmpfs=/tmp
 Volume=@DATA@:/data
 Volume=@CONFIG@:/config/config.toml:ro
 Volume=@DOCUMENTS@:/documents:ro
+# The data key (SPEC §3.8.1): systemd unseals it into this unit's private in-memory credentials folder (%d).
+Volume=%d/data-key:/run/aha/data-key:ro
 @GATEWAY_VOLUME@
 PodmanArgs=--memory=2g --pids-limit=256
 
 [Service]
+LoadCredentialEncrypted=data-key:@DATA_KEY_CRED@
 Restart=on-failure
 RestartSec=5
 

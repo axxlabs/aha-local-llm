@@ -5,6 +5,7 @@
 import asyncio
 import base64
 import json
+import os
 
 import http_ece
 import pytest
@@ -16,6 +17,7 @@ from aha_local.certs import issue_cert, new_key, public_b64
 from aha_local.e2e import crypto as c
 from aha_local.e2e.channel import Channel
 from aha_local.protocol import E2E, CertIssued, CertRequest, DeviceStatus, Pair, Push
+from aha_local.rest import Vault
 
 
 class FakeAgent:
@@ -41,7 +43,7 @@ class Rig:
         self.gw = new_key()
         self.instance = public_b64(new_key())
         self.frames: list = []
-        self.accounts = Accounts(tmp_path / "data")
+        self.accounts = Accounts(Vault(tmp_path / "data", os.urandom(32)))
         self.channel = Channel(
             self.accounts,
             tmp_path / "data" / "keys",

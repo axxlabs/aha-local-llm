@@ -34,6 +34,7 @@ UNITS = [
 ]
 SERVICES = ["aha-agent", "aha-browser", "aha-search", "aha-llm"]
 AGENT_IMAGE = "localhost/aha-agent:latest"
+DATA_KEY_CRED = HOME_CONFIG.parent / "data-key.cred"
 
 
 def die(message: str) -> None:
@@ -82,6 +83,98 @@ def fetch_pin(url: str) -> str:
         return r.json()["gateway"]
 
 
+# ---- the data key (SPEC §3.8.1): sealed by systemd-creds, never stored in the clear
+
+
+def has_tpm() -> bool:
+    return subprocess.run(["systemd-analyze", "has-tpm2", "-q"], capture_output=True).returncode == 0
+
+
+def seal_data_key(key: bytes, target: Path) -> str:
+    """Seal the key to this computer (host key + TPM, or host key only without a TPM); returns which."""
+    if not shutil.which("systemd-creds"):
+        die("systemd-creds is needed to protect the data key (systemd 256 or later).")
+    with_key = "host+tpm2" if has_tpm() else "host"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.unlink(missing_ok=True)
+    subprocess.run(
+        ["systemd-creds", "--user", "encrypt", f"--with-key={with_key}", "--name=data-key", "-", str(tmp)],
+        input=key,
+        check=True,
+        capture_output=True,
+    )
+    tmp.chmod(0o600)
+    if unseal_data_key(tmp) != key:
+        tmp.unlink(missing_ok=True)
+        die("Sealing the data key didn't round-trip; nothing was changed.")
+    os.replace(tmp, target)
+    return with_key
+
+
+def unseal_data_key(cred: Path) -> bytes | None:
+    r = subprocess.run(["systemd-creds", "--user", "decrypt", "--name=data-key", str(cred), "-"], capture_output=True)
+    return r.stdout if r.returncode == 0 and len(r.stdout) == 32 else None
+
+
+def show_recovery_code(key: bytes) -> None:
+    from .rest import recovery_code
+
+    print("\nRecovery code for your Aha! data (shown once; `aha recovery-key --show` shows it again):\n")
+    print(f"    {recovery_code(key)}\n")
+    print("Keep it offline (paper, a password manager). You need it to restore a backup of your data on another")
+    print("computer, or after this computer's TPM is cleared. Without it, that data can't be read by anyone.")
+
+
+def ensure_data_key() -> None:
+    if DATA_KEY_CRED.exists():
+        return
+    key = os.urandom(32)
+    with_key = seal_data_key(key, DATA_KEY_CRED)
+    print(f"Created the data key, sealed to this computer ({with_key}): {DATA_KEY_CRED}")
+    if with_key == "host":
+        print("No TPM found: this protects copies and backups of the data folder, but not a stolen disk.")
+    show_recovery_code(key)
+
+
+def cmd_recovery_key(a) -> None:
+    if not a.show:
+        die("This prints the key that decrypts all your Aha! data. Run `aha recovery-key --show` to see it.")
+    key = unseal_data_key(DATA_KEY_CRED) if DATA_KEY_CRED.exists() else None
+    if key is None:
+        die(f"Can't unseal {DATA_KEY_CRED} on this computer.")
+    from .rest import recovery_code
+
+    print(recovery_code(key))
+
+
+def cmd_restore(a) -> None:
+    """Seal a recovery code (read from stdin, never from the command line) to this computer."""
+    from .rest import parse_recovery_code
+
+    if DATA_KEY_CRED.exists() and unseal_data_key(DATA_KEY_CRED) is not None and not a.force:
+        die(
+            f"{DATA_KEY_CRED} already holds a working key; replacing it with --force makes the current data unreadable."
+        )
+    if sys.stdin.isatty():
+        print("Type or paste the recovery code, then Enter:", file=sys.stderr)
+    try:
+        key = parse_recovery_code(sys.stdin.readline())
+    except ValueError as e:
+        die(str(e))
+    with_key = seal_data_key(key, DATA_KEY_CRED)
+    print(f"Sealed the recovery key to this computer ({with_key}). Start aha with `aha restart`.")
+
+
+def disk_encrypted(path: Path) -> bool:
+    src = subprocess.run(["findmnt", "-n", "-o", "SOURCE", "--target", str(path)], capture_output=True, text=True)
+    device = src.stdout.strip().split("[", 1)[0]
+    if not device:
+        return False
+    tree = subprocess.run(["lsblk", "-n", "-s", "-o", "TYPE", device], capture_output=True, text=True)
+    return "crypt" in tree.stdout.split()
+
+
 # ---- commands
 
 
@@ -107,7 +200,9 @@ def cmd_init(a) -> None:
     HOME_DATA.mkdir(parents=True, exist_ok=True)
     HOME_DATA.chmod(0o700)
     Path(a.documents).expanduser().mkdir(parents=True, exist_ok=True)
-    print(f"Wrote {HOME_CONFIG}. Next: `aha install`.")
+    print(f"Wrote {HOME_CONFIG}.")
+    ensure_data_key()
+    print("Next: `aha install`.")
 
 
 def render_units(config: Config) -> dict[str, str]:
@@ -130,6 +225,7 @@ def render_units(config: Config) -> dict[str, str]:
         "@DEPLOY@": str(DEPLOY),
         "@GATEWAY_VOLUME@": gateway_volume,
         "@AGENT_IMAGE@": AGENT_IMAGE,
+        "@DATA_KEY_CRED@": str(DATA_KEY_CRED),
     }
     out = {}
     for unit in UNITS:
@@ -151,6 +247,7 @@ def cmd_install(a) -> None:
     subprocess.run(
         ["podman", "build", "-q", "-t", AGENT_IMAGE, "-f", str(DEPLOY / "Containerfile"), str(REPO)], check=True
     )
+    ensure_data_key()  # an install from before encryption at rest gets its key here (SPEC §3.8.1 Upgrade)
     QUADLET_DIR.mkdir(parents=True, exist_ok=True)
     for name, text in render_units(config).items():
         (QUADLET_DIR / name).write_text(text)
@@ -293,6 +390,17 @@ def cmd_doctor(a) -> None:
     check("vision file", (config.models_dir / "Qwen3.6-35B-A3B-mmproj-F16.gguf").exists(), "aha models download")
     check("documents folder", config.documents.exists(), f"mkdir -p {config.documents}")
     check("units installed", all((QUADLET_DIR / u).exists() for u in UNITS), "aha install")
+    check(
+        "data key sealed to this computer",
+        DATA_KEY_CRED.exists() and unseal_data_key(DATA_KEY_CRED) is not None,
+        "aha install creates it; after a TPM reset or a move, `aha restore` with your recovery code",
+    )
+    if not disk_encrypted(HOME_DATA):
+        print(
+            "warn data folder isn't on an encrypted disk\n"
+            "     Aha! encrypts its own files, but model files, swap and old plaintext blocks on an SSD aren't;\n"
+            "     full-disk encryption (LUKS) covers them."
+        )
     if a.repin:
         (HOME_DATA / "browser" / "pinned-tools.json").unlink(missing_ok=True)
         print("     browser tool definitions will be re-pinned at the next start (aha restart)")
@@ -382,6 +490,12 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("doctor", help="check the setup")
     s.add_argument("--repin", action="store_true", help="accept changed browser tool definitions")
     s.set_defaults(fn=cmd_doctor)
+    s = sub.add_parser("recovery-key", help="show the recovery code for your data key")
+    s.add_argument("--show", action="store_true", help="really print it")
+    s.set_defaults(fn=cmd_recovery_key)
+    s = sub.add_parser("restore", help="seal a recovery code (from stdin) to this computer")
+    s.add_argument("--force", action="store_true", help="replace a working key")
+    s.set_defaults(fn=cmd_restore)
     s = sub.add_parser("models", help="download the model files")
     s.add_argument("action", choices=["download"])
     s.set_defaults(fn=cmd_models)

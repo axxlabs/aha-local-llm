@@ -70,6 +70,7 @@ class Config:
     llm_model: str = field(default_factory=lambda: os.environ.get("AHA_LLM_MODEL", "qwen3.6-35b"))
     search_url: str = field(default_factory=lambda: os.environ.get("AHA_SEARCH_URL", "http://aha-search:8080"))
     browser_url: str = field(default_factory=lambda: os.environ.get("AHA_BROWSER_URL", "http://aha-browser:8931/mcp"))
+    data_key_file: Path = field(default_factory=lambda: Path(os.environ.get("AHA_DATA_KEY_FILE", "/run/aha/data-key")))
     context_tokens: int = field(default_factory=lambda: int(os.environ.get("AHA_CONTEXT_TOKENS", "131072")))
 
     @classmethod

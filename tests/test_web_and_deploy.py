@@ -2,6 +2,7 @@
 # Copyright (C) 2026 Axxlabs Limited
 """fetch_url's address checks (SPEC §5.2) and the rendered Quadlet units (SPEC §3.6)."""
 
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -153,8 +154,12 @@ def test_units_render_with_sandboxing(tmp_path, monkeypatch):
     assert f"Volume={tmp_path / 'docs'}:/documents:ro" in agent
     assert "Volume=/run/user/1000/aha-gateway:/run/user/1000/aha-gateway" in agent
     assert "Internal=true" in units["aha-internal.network"]
+    # The data key: unsealed by systemd into the unit's credentials folder, mounted read-only (SPEC §3.8.1).
+    assert f"LoadCredentialEncrypted=data-key:{cli.DATA_KEY_CRED}" in agent
+    assert "Volume=%d/data-key:/run/aha/data-key:ro" in agent
+    assert "AHA_DATA_KEY" not in agent and "Environment" not in agent
     for text in units.values():
-        assert "@DATA@" not in text and "@SEARCH_SECRET@" not in text
+        assert not re.search(r"@[A-Z_]+@", text)
 
 
 def test_every_source_file_carries_the_licence_header():

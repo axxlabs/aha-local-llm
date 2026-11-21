@@ -12,7 +12,13 @@ import websockets
 from aha_local.accounts import Accounts, Device
 from aha_local.certs import handshake_message, issue_cert, new_key, public_b64, sign, verify
 from aha_local.protocol import E2E, FROM_COMPUTER, DeviceStatus, Hello, Ready, b64
+from aha_local.rest import Vault
 from aha_local.tunnel import PinMismatch, Tunnel
+
+
+def accounts_in(path: Path) -> Accounts:
+    return Accounts(Vault(path, os.urandom(32)))
+
 
 ROOT = Path(__file__).resolve().parents[1]
 TAG = b64(b"\x03" * 16)
@@ -73,7 +79,8 @@ async def fake(tmp_path):
 
 
 async def test_presents_device_certificates_and_routes_frames(fake, tmp_path):
-    accounts = Accounts(tmp_path / "data")
+    data_key = os.urandom(32)
+    accounts = Accounts(Vault(tmp_path / "data", data_key))
     key = new_key()
     acct = accounts.create("Fe")
     dev = public_b64(new_key())
@@ -82,7 +89,7 @@ async def test_presents_device_certificates_and_routes_frames(fake, tmp_path):
         acct, Device(dev=dev, name="Phone", ikd="", kemd="", push_key="", ratchet={}, cert=cert.model_dump())
     )
     channel = StubChannel()
-    tunnel = Tunnel(fake.url, fake.pin, key, Accounts(tmp_path / "data"), "Home", channel)
+    tunnel = Tunnel(fake.url, fake.pin, key, Accounts(Vault(tmp_path / "data", data_key)), "Home", channel)
     task = asyncio.create_task(tunnel.run())
     await asyncio.wait_for(tunnel.connected.wait(), 3)
     assert [c.device for c in fake.auth.certs] == [dev]
@@ -99,7 +106,14 @@ async def test_presents_device_certificates_and_routes_frames(fake, tmp_path):
 
 
 async def test_wrong_pin_never_authenticates(fake, tmp_path):
-    tunnel = Tunnel(fake.url, public_b64(new_key()), new_key(), Accounts(tmp_path / "d"), "Home", StubChannel())
+    tunnel = Tunnel(
+        fake.url,
+        public_b64(new_key()),
+        new_key(),
+        accounts_in(tmp_path / "d"),
+        "Home",
+        StubChannel(),
+    )
     with pytest.raises(PinMismatch):
         await tunnel._session()
     assert fake.auth is None  # never sent its credentials
@@ -109,14 +123,14 @@ async def test_gateway_that_cannot_sign_with_the_pinned_key_is_refused(tmp_path)
     impostor = FakeGateway(sign_ready_with=new_key())
     sock = str(tmp_path / "gw.sock")
     server = await websockets.unix_serve(impostor.handler, sock)
-    tunnel = Tunnel(f"unix:{sock}", impostor.pin, new_key(), Accounts(tmp_path / "d"), "Home", StubChannel())
+    tunnel = Tunnel(f"unix:{sock}", impostor.pin, new_key(), accounts_in(tmp_path / "d"), "Home", StubChannel())
     with pytest.raises(PinMismatch):
         await tunnel._session()
     server.close()
 
 
 async def test_sending_while_offline_raises_connection_error(tmp_path):
-    tunnel = Tunnel("unix:/nowhere", "x", new_key(), Accounts(tmp_path / "d"), "Home", StubChannel())
+    tunnel = Tunnel("unix:/nowhere", "x", new_key(), accounts_in(tmp_path / "d"), "Home", StubChannel())
     with pytest.raises(ConnectionError):
         await tunnel.send(E2E(dev=public_b64(new_key()), box="AAAA"))
 
@@ -157,7 +171,7 @@ async def test_pairing_through_the_tunnel_does_not_deadlock(tmp_path):
 
     sock = str(tmp_path / "gw.sock")
     server = await websockets.unix_serve(handler, sock)
-    accounts = Accounts(tmp_path / "data")
+    accounts = Accounts(Vault(tmp_path / "data", os.urandom(32)))
     holder = {}
 
     async def send(frame):
