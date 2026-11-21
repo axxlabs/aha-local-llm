@@ -48,7 +48,7 @@ To keep it running while you're logged out: `loginctl enable-linger $USER`.
 |---|---|---|
 | `aha-llm` | llama.cpp with Qwen3.6-35B-A3B (vision) | internal only: no internet, no LAN |
 | `aha-search` | SearXNG | internet |
-| `aha-browser` | Playwright MCP, headless Chromium, fresh profile each session | internet |
+| `aha-browser` | Playwright MCP, headless Chromium: a separate in-memory browser per person, discarded after 30 minutes unused | internet |
 | `aha-agent` | this repo: agent loop, tools, policy, approvals, memories, end-to-end encryption, tunnel | both |
 
 All are rootless Podman containers managed by systemd Quadlet units (`deploy/quadlet/`), with capabilities
