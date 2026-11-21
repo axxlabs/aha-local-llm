@@ -86,11 +86,14 @@ def _fresh(items: list[dict], now: float) -> list[dict]:
     return [c for c in items if not (isinstance(c.get("expires"), (int, float)) and 0 < c["expires"] < now)]
 
 
-async def keep(account: Account, session, site: str) -> int:
-    """Save the site's cookies from the account's context. Returns how many."""
+async def keep(account: Account, session, host: str, site: str) -> int:
+    """Save the cookies of the site signed in on (`host` as the card showed it). Returns how many.
+
+    Cookies of the whole site are kept, since sign-ins often span subdomains (login.x.com, www.x.com); they only
+    ever go back into this same person's browser."""
     mine = [c for c in await cookies(session) if matches(c["domain"], site)]
     data = load(account)
-    data[site] = {"cookies": mine, "saved": int(time.time())}
+    data[host] = {"site": site, "cookies": mine, "saved": int(time.time())}
     save(account, data)
     return len(mine)
 
@@ -112,10 +115,11 @@ async def refresh(account: Account, session) -> None:
         return
     current = await cookies(session)
     changed = False
-    for site, entry in data.items():
+    for host, entry in data.items():
+        site = entry.get("site", host)
         mine = [c for c in current if matches(c["domain"], site)]
         if mine and mine != entry.get("cookies"):
-            data[site] = {"cookies": mine, "saved": int(time.time())}
+            data[host] = {"site": site, "cookies": mine, "saved": int(time.time())}
             changed = True
     if changed:
         save(account, data)
@@ -123,11 +127,15 @@ async def refresh(account: Account, session) -> None:
 
 async def forget(account: Account, site: str, session=None) -> bool:
     """Stop keeping a site; also sign it out of the open context."""
-    site = site.strip().lower().removeprefix("www.")
+    name = site.strip().lower().removeprefix("www.")
     data = load(account)
-    found = data.pop(site, None) is not None
+    hosts = [h for h, e in data.items() if name in (h, e.get("site"))]
+    sites_gone = {data[h].get("site", h) for h in hosts}
+    for h in hosts:
+        del data[h]
     save(account, data)
-    if session is not None:
-        keep_these = [c for c in await cookies(session) if not matches(c["domain"], site)]
+    found = bool(hosts)
+    if session is not None and found:
+        keep_these = [c for c in await cookies(session) if not any(matches(c["domain"], s) for s in sites_gone)]
         _result(await session.call("browser_run_code_unsafe", {"code": _clear_code(keep_these)}))
     return found

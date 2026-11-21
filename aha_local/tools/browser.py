@@ -456,6 +456,9 @@ async def browser_sign_in(args: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult(f"Blocked by aha's safety policy: {why or 'no page is open'}.", error=True)
     if urlsplit(url).scheme != "https":
         return ToolResult("Signing in is only offered on secure (https) pages. Tell the person.", error=True)
+    # The card names the exact host: on shared hosting (x.herokuapp.com, y.github.io) the site alone would let a
+    # look-alike page borrow a trusted name.
+    shown = (urlsplit(url).hostname or site).lower().removeprefix("www.")
     labels = []
     for ref, _, _ in targets:
         label = element_label(ctx.task.last_snapshot, ref)
@@ -465,7 +468,7 @@ async def browser_sign_in(args: dict, ctx: ToolContext) -> ToolResult:
                 error=True,
             )
         labels.append(label)
-    fields = [Field("Site", site, "info")]
+    fields = [Field("Site", shown, "info")]
     if ctx.task.read_mail:
         fields.append(Field("Check", MAIL_NOTE, "info"))
     first = len(fields)
@@ -474,7 +477,7 @@ async def browser_sign_in(args: dict, ctx: ToolContext) -> ToolResult:
     has_password = any(kind == "secret" and default == "Password" for _, kind, default in targets)
     if has_password:
         fields.append(Field(KEEP_LABEL, "false", "bool"))
-    decision = await ctx.approvals.ask(ctx.account, "signin", f"Sign in to {site}?", fields, await screenshot(session))
+    decision = await ctx.approvals.ask(ctx.account, "signin", f"Sign in to {shown}?", fields, await screenshot(session))
     if not decision.approved:
         if decision.reason == "expired":
             return ToolResult("", error=True, kind="expired")
@@ -502,14 +505,14 @@ async def browser_sign_in(args: dict, ctx: ToolContext) -> ToolResult:
     kept = has_password and decision.values[-1] == "true"
     if kept:
         try:
-            await signins.keep(ctx.account, session, site)
-            ctx.task.signed_in.add(site)
+            await signins.keep(ctx.account, session, shown, site)
+            ctx.task.signed_in.add(shown)
         except Exception:
             log.exception("couldn't keep a sign-in")
             kept = False
     page = await call_with_snapshot(session, "browser_snapshot", {}, ctx)
     page.text = (
-        f"The person signed in on {site} themselves; you never see what they typed. "
+        f"The person signed in on {shown} themselves; you never see what they typed. "
         + ("They chose to stay signed in on this computer. " if kept else "")
         + "If the page asks for a one-time code, call browser_sign_in again with the code field. The page now:\n\n"
         + signins.redact(page.text, ctx.task.secrets)

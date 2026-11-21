@@ -169,6 +169,14 @@ async def test_the_person_types_the_password_and_the_model_never_sees_it(setup, 
     assert not signins.sites(fe)  # not kept unless chosen
 
 
+async def test_on_shared_hosting_the_card_names_the_exact_host(setup, llm, chat, accounts):
+    agent, _, _ = setup
+    fe = person(accounts)
+    card = await start_sign_in(agent, llm, chat, fe, url="https://waitrose-login.herokuapp.com/signin")
+    assert card.card["title"] == "Sign in to waitrose-login.herokuapp.com?"
+    assert card.card["fields"][0]["value"] == "waitrose-login.herokuapp.com"
+
+
 async def test_a_declined_sign_in_types_nothing(setup, llm, chat, accounts):
     agent, _, fake = setup
     fe = person(accounts)
