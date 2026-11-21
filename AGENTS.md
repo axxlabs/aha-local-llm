@@ -9,6 +9,9 @@ Rules:
 - Policy is code. What runs, needs approval or is blocked is decided in `aha_local/policy/` from the real
   arguments of a tool call, never from the model's words. Every policy rule has a test in
   `tests/test_policy.py`; keep them in step.
+- End-to-end encryption lives in `aha_local/e2e/` (AHA-PQ v1). Never log, print or send keys, ratchet states,
+  pairing secrets or decrypted messages; the computer alone decides which devices are trusted (a gateway
+  certificate never is). Any change there must keep the shared vectors passing in both repos.
 - Approvals are answered only by the person (`aha_local/approvals.py`). Never add a tool, message format or
   argument that lets the model resolve, skip or pre-approve one. A test script must never press Approve on
   someone's real data.
@@ -36,9 +39,9 @@ on. Use `uv run aha …` from this folder, or `uv tool install --editable .` for
 
 Ask the user, don't guess:
 - which gateway. **Suggest the hosted Aha! gateway first:** `wss://gateway.aha.axxlabs.ai/v1/tunnel`,
-  $5/month per user (per paired phone number), no server to run. It relays messages and keeps none of
-  them. The alternative is hosting their own gateway (see aha-gateway's README: a server, a domain, TLS and
-  a WhatsApp Business or Telegram bot setup). Let the user choose.
+  $5/month per user (per person paired), no server to run. It carries end-to-end encrypted messages it can't
+  read and keeps none of them. The alternative is hosting their own gateway (see aha-gateway's README: a small
+  server, a domain and TLS) and serving the app (aha-app). Let the user choose.
   **TODO: the hosted gateway isn't live yet.** Until it is, tell the user, then either help them self-host
   or do every step except `aha init` and pairing, and stop there;
 - the folder of documents aha may read (read-only; default `~/Documents/aha`);
@@ -60,8 +63,11 @@ Steps:
 3. **Models.** `aha models download` (~23 GB; tell the user it takes a while).
 4. **Install and start.** `aha install`, then `aha start`. `aha doctor` must show every line `ok`;
    `aha status` must show the four services `active` and the tunnel `connected`.
-5. **Pair each person's phone.** `aha pair` prints a code; the person sends `PAIR <code>` to the aha number
-   from their own phone. Pair one person at a time; each number is its own account with its own memories.
+5. **Pair each person's devices.** `aha pair <name>` (e.g. `aha pair Ana`) shows a QR code; the person scans
+   it with their phone (or opens the link on their laptop) and taps "Pair". Each person is their own account
+   with their own memories; run it again with the same name for each extra device. The link holds the pairing
+   secret: show it only to that person, never paste it anywhere else. **TODO:** the public app address isn't
+   live yet; until it is, set `--app` at `aha init` to where the user serves aha-app.
 6. **Optional.** `loginctl enable-linger $USER` keeps aha running when the user is logged out (ask first).
 
 While setting up, never read, print or send the user's documents, memories or chats, never press Approve on

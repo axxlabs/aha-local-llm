@@ -1,13 +1,14 @@
 # aha-local-llm
 
-**Aha! Your private agent.** It runs on your own computer, and you talk to it from WhatsApp or
-Telegram. The model, your memories, your documents and your conversation history never leave your computer.
-Before aha types anything into a website or saves something about you, it asks you in the chat, with
-buttons: Approve, Edit, Decline.
+**Aha! Your private agent.** It runs on your own computer, and you talk to it from the
+[Aha! app](https://github.com/axxlabs/aha-app) on your phone or laptop. Every message is **end-to-end
+encrypted** between your device and your computer (hybrid post-quantum pairing, then a Double Ratchet). The
+model, your memories, your documents and your conversation history never leave your computer. Before Aha!
+types anything into a website or saves something about you, it asks you with a card: Approve, Edit, Decline.
 
 This repo is the part that runs on your computer. Messages reach it through an
 [Aha! gateway](https://github.com/axxlabs/aha-gateway) (self-hosted, or the hosted one for $5/month per user),
-which relays them and keeps nothing. Website: https://axxlabs.ai/aha/
+which carries encrypted messages it can't read and keeps nothing. Website: https://axxlabs.ai/aha/
 
 ## Install with a coding agent (easiest)
 
@@ -33,10 +34,11 @@ aha init --gateway wss://<gateway>/v1/tunnel   # pins the gateway's key; check t
 aha models download                   # Qwen3.6-35B-A3B + vision file, ~23 GB
 aha install                           # builds the agent image, installs the systemd units
 aha start
-aha pair                              # prints a code; send "PAIR <code>" to aha from your phone
+aha pair Ana                          # shows a QR code: scan it with Ana's phone to pair it
 ```
 
-`aha status`, `aha logs`, `aha accounts`, `aha memory list <address>`, `aha doctor` and `aha --help` for the rest.
+`aha status`, `aha logs`, `aha accounts`, `aha devices <name>`, `aha revoke <name> <device>`,
+`aha memory list <name>`, `aha doctor` and `aha --help` for the rest.
 To keep it running while you're logged out: `loginctl enable-linger $USER`.
 
 ## How it runs
@@ -46,7 +48,7 @@ To keep it running while you're logged out: `loginctl enable-linger $USER`.
 | `aha-llm` | llama.cpp with Qwen3.6-35B-A3B (vision) | internal only: no internet, no LAN |
 | `aha-search` | SearXNG | internet |
 | `aha-browser` | Playwright MCP, headless Chromium, fresh profile each session | internet |
-| `aha-agent` | this repo: agent loop, tools, policy, approvals, memories, tunnel | both |
+| `aha-agent` | this repo: agent loop, tools, policy, approvals, memories, end-to-end encryption, tunnel | both |
 
 All are rootless Podman containers managed by systemd Quadlet units (`deploy/quadlet/`), with capabilities
 dropped and read-only file systems where the image allows. Your data lives in `~/.local/share/aha/`;
@@ -60,8 +62,13 @@ uv run pytest            # no GPU needed: a scripted model stands in for the rea
 uv run ruff check . && uv run ruff format --check .
 ```
 
-For an end-to-end run on one machine, start a staging gateway from aha-gateway (`scripts/dev.sh`), then
-`aha init --gateway unix:$XDG_RUNTIME_DIR/aha-gateway/gateway.sock` and open http://127.0.0.1:8700/test.
+For an end-to-end run on one machine: start a development gateway from aha-gateway (`scripts/dev.sh`) and the
+app's dev server from aha-app (`npm run dev`), then
+`aha init --gateway unix:$XDG_RUNTIME_DIR/aha-gateway/gateway.sock --app http://127.0.0.1:5173`, install, and
+`aha pair <name>`: open the printed link in a browser on this machine.
+
+The end-to-end encryption (`aha_local/e2e/`) is checked against aha-app's TypeScript implementation with
+shared test vectors (`tests/vectors/`, regenerate with `uv run python scripts/make_vectors.py`).
 
 ## Licence
 

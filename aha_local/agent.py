@@ -309,7 +309,7 @@ UNSOURCED_TOOLS = {"web_search"}  # snippets are leads, not sources
 
 
 def finish(answer: str, sources: list[str]) -> tuple[str, bool]:
-    """WhatsApp formatting, and a visible warning for numbers no opened page supports.
+    """App formatting, and a visible warning for numbers no opened page supports.
 
     Returns the answer and whether it passed: only answers that passed count as sources later.
     """
