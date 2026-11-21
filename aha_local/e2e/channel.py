@@ -14,6 +14,8 @@ Only devices on this computer's own list are ever trusted; certificates from the
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import contextlib
 import json
 import logging
@@ -42,6 +44,26 @@ HISTORY_LIMIT = 50
 CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 SendFrame = Callable[[Any], Awaitable[None]]
+
+
+MAX_PHOTO_BYTES = 1_000_000  # the app sends ≤1600 px JPEGs, a few hundred kB (SPEC §6.5)
+PHOTO_MAGIC = {"image/jpeg": (b"\xff\xd8\xff",), "image/png": (b"\x89PNG\r\n\x1a\n",), "image/webp": (b"RIFF",)}
+
+
+def photo(value: object) -> Image | None:
+    """A photo from the person: a known type whose bytes start like that type, within the size limit."""
+    if not isinstance(value, dict) or value.get("mime") not in PHOTO_MAGIC or not isinstance(value.get("b64"), str):
+        return None
+    b64 = value["b64"]
+    if len(b64) > MAX_PHOTO_BYTES * 4 // 3 + 4:
+        return None
+    try:
+        raw = base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if not raw.startswith(PHOTO_MAGIC[value["mime"]]) or (value["mime"] == "image/webp" and raw[8:12] != b"WEBP"):
+        return None
+    return Image(mime=value["mime"], b64=b64)
 
 
 def clean_text(value: object, limit: int) -> str | None:
@@ -218,13 +240,20 @@ class Channel:
             if first and account.seq == 0:
                 await self.message(account, messages.WELCOME)
         elif t == "say":
-            text = clean_text(msg.get("text"), MAX_TEXT)
+            text = clean_text(msg.get("text"), MAX_TEXT) or ""
             cid = clean_text(msg.get("cid"), 64) or ""
-            if not text or not text.strip():
+            image = photo(msg.get("image"))
+            if msg.get("image") is not None and image is None:
+                await reply({"t": "error", "code": "bad_image"})
                 return
-            await self.publish(account, {"t": "msg", "role": "me", "text": text, "cid": cid})
+            if not text.strip() and image is None:
+                return
+            echo = {"t": "msg", "role": "me", "text": text, "cid": cid}
+            if image is not None:
+                echo["image"] = image.to_dict()
+            await self.publish(account, echo)
             if self.agent is not None:
-                await self.agent.inbound(account, text)
+                await self.agent.inbound(account, text, image)
         elif t == "approval_reply":
             decision = msg.get("decision")
             approval_id = clean_text(msg.get("id"), 32)

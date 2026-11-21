@@ -36,6 +36,7 @@ class AgentOut(Protocol):
 TYPING_EVERY = 4.0  # seconds between `typing` frames while a reply is owed (SPEC §3.3)
 STOP_WORDS = {"stop", "cancel", "stop it", "stop that"}
 NEW_MESSAGE = "[New message from the user while you were working]\n{text}"
+PHOTO_ONLY = "(sent a photo)"
 SCHEDULED = (
     "[Scheduled task the user set up earlier{late}; they aren't necessarily looking at the chat]\n{text}\n\n"
     "Do it now. If it says to tell them only when something happens and it hasn't, answer exactly "
@@ -80,6 +81,7 @@ class Agent:
         # Messages that arrive while the account's task runs: the task reads them before its next model call.
         self.inbox: dict[str, list[str]] = defaultdict(list)
         self.sent: dict[str, int] = defaultdict(int)  # messages sent per account, to know if they've heard back
+        self.photos: dict[str, list[Image]] = defaultdict(list)  # photos from the person, for the next model call
         self.typing_every = TYPING_EVERY
 
     # ---- outbound
@@ -91,10 +93,18 @@ class Agent:
 
     # ---- inbound
 
-    async def inbound(self, account: Account, text: str) -> None:
-        """A message the person typed (already shown on their devices by the channel)."""
+    async def inbound(self, account: Account, text: str, image: Image | None = None) -> None:
+        """A message the person typed, maybe with a photo (already shown on their devices by the channel)."""
         text = text.strip()
-        account.transcript({"kind": "user", "text": text})
+        account.transcript({"kind": "user", "text": text, "image": bool(image)})
+        if image is not None:
+            # A photo is never a command: it goes to the running task, or starts one (SPEC §6.5).
+            self.photos[account.address].append(image)
+            text = text or PHOTO_ONLY
+            if await self.approvals.reply_text(account, text):
+                return  # declines the open card; the running task sees the photo with the note
+            await self._start(account, text)
+            return
         command = text.lower().rstrip(".!")
 
         if command in STOP_WORDS:
@@ -152,6 +162,9 @@ class Agent:
             return
         if not text:
             return
+        await self._start(account, text)
+
+    async def _start(self, account: Account, text: str) -> None:
         if account.address in self.running:
             self.inbox[account.address].append(text)  # the running task reads it; "typing…" already shows
             return
@@ -267,6 +280,21 @@ class Agent:
     async def solve(self, account: Account, text: str) -> tuple[str, bool, str]:
         """Returns the answer, whether it passed the checks, and everything the person said during the task."""
         task: list[dict] = [{"role": "user", "content": text}]
+        has_photo = False
+
+        def take_photos(message: dict) -> None:
+            """Attach the person's waiting photos to a message for the model (the vision model reads them)."""
+            nonlocal has_photo, text
+            photos = self.photos.pop(account.address, [])
+            if not photos:
+                return
+            has_photo = True
+            text = text + " [photo]" * len(photos)
+            parts = [{"type": "text", "text": message["content"]}]
+            parts += [{"type": "image_url", "image_url": {"url": f"data:{i.mime};base64,{i.b64}"}} for i in photos]
+            message["content"] = parts
+
+        take_photos(task[0])
 
         async def send(message: str, image: Image | None = None) -> None:
             await self.send(account, checks.chat_format(message) if message else "", image)
@@ -292,6 +320,7 @@ class Agent:
                 task.append({"role": "user", "content": NEW_MESSAGE.format(text=extra)})
                 sources.append(extra)
                 text = f"{text}\n\n{extra}"
+                take_photos(task[-1])
             msgs = context.build(
                 account, task, self.config.timezone, self.config.household_name, self.config.context_tokens
             )
@@ -304,6 +333,10 @@ class Agent:
                     task.append({"role": "assistant", "content": reply.content or ""})
                     task.append({"role": "user", "content": checks.MEMORY_RETRY})
                     continue
+                if has_photo:
+                    # Numbers in the person's photo can't be matched as text: no retry, no warning, and the
+                    # answer isn't a source later (SPEC §3.5.1).
+                    return checks.chat_format(reply.content or ""), False, text
                 missing = checks.unverified(checks.chat_format(reply.content or ""), sources)
                 if missing and not retried:
                     # One more go: ask the model to confirm the numbers on a page, or drop them (SPEC §3.5).

@@ -23,11 +23,13 @@ from aha_local.rest import Vault
 class FakeAgent:
     def __init__(self) -> None:
         self.said: list[str] = []
+        self.photos: list = []
         self.replies: list[tuple] = []
         self.stopped = 0
 
-    async def inbound(self, account, text):
+    async def inbound(self, account, text, image=None):
         self.said.append(text)
+        self.photos.append(image)
 
     async def approval_reply(self, account, approval_id, decision, values=None, note=""):
         self.replies.append((approval_id, decision, values, note))
@@ -124,6 +126,29 @@ async def test_pairing_then_messages_both_ways(tmp_path):
     assert phone.inbox()[0]["text"] == "Which day?"
     await rig.channel.typing(acct, True)
     assert phone.inbox() == [{"t": "typing", "on": True}]
+
+
+JPEG = base64.b64encode(b"\xff\xd8\xff\xe0 a fictional receipt").decode()
+
+
+async def test_a_photo_reaches_the_agent_and_every_device_and_a_fake_one_doesnt(tmp_path):
+    rig = Rig(tmp_path)
+    _, phone = await rig.pair()
+    await phone.send({"t": "hello", "name": "P"})
+    phone.inbox()
+    await phone.send({"t": "say", "text": "", "cid": "c9", "image": {"mime": "image/jpeg", "b64": JPEG}})
+    assert rig.agent.said == [""] and rig.agent.photos[0].b64 == JPEG
+    (echo,) = phone.inbox()
+    assert echo["role"] == "me" and echo["image"] == {"mime": "image/jpeg", "b64": JPEG}
+    for bad in (
+        {"mime": "image/jpeg", "b64": base64.b64encode(b"<svg onload=x>").decode()},  # not what it says
+        {"mime": "image/svg+xml", "b64": JPEG},
+        {"mime": "image/png", "b64": "not base64!"},
+        {"mime": "image/jpeg", "b64": base64.b64encode(b"\xff\xd8\xff" + b"0" * 1_100_000).decode()},
+    ):
+        await phone.send({"t": "say", "text": "look", "image": bad})
+        assert phone.inbox() == [{"t": "error", "code": "bad_image"}]
+    assert len(rig.agent.said) == 1
 
 
 async def test_a_wrong_pairing_secret_fails_and_closes_the_code(tmp_path):
