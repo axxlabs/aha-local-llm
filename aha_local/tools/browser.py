@@ -2,9 +2,13 @@
 # Copyright (C) 2026 Axxlabs Limited
 """The browser: Playwright MCP behind the policy (SPEC §3.4, §5.2).
 
-One persistent MCP session to aha-browser, owned by a background task, so the page survives between calls
-and tasks. Each browser tool the model sees is wrapped: the policy decides auto, approval or block from the
-real arguments; approvals are answered only by the person (approvals.py).
+One MCP connection to aha-browser per account, so one browser context per account: tabs, cookies, storage and
+logins never cross between people (SPEC §3.4). A task only ever reaches its own account's connection, through
+`ctx.browser`; the model can't name another. A connection opens on the account's first browser call, keeps
+its page between tasks, and closes after `idle_minutes` unused, on `aha delete`, and when the agent stops.
+
+Each browser tool the model sees is wrapped: the policy decides auto, approval or block from the real
+arguments; approvals are answered only by the person (approvals.py).
 """
 
 from __future__ import annotations
@@ -14,6 +18,8 @@ import hashlib
 import json
 import logging
 import re
+import time
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -41,19 +47,31 @@ APPROVED_NOTE = (
 
 
 class BrowserSession:
+    """One MCP connection, owned by a background task so its page survives between calls."""
+
     def __init__(self, url: str) -> None:
         self.url = url
         self.queue: asyncio.Queue = asyncio.Queue()
         self.ready = asyncio.Event()
         self.tools: list[mt.Tool] = []
+        self.busy = 0
+        self.last_used = time.monotonic()
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._run())
 
-    async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
+    async def stop(self, timeout: float = 5) -> None:
+        """Close the connection, which discards its browser context."""
+        if not self._task or self._task.done():
+            return
+        if self.ready.is_set():
+            await self.queue.put(None)  # leave the session cleanly, so the browser closes the context now
+            done, _ = await asyncio.wait([self._task], timeout=timeout)
+            if done:
+                return
+        self._task.cancel()
+        await asyncio.wait([self._task])  # without re-raising the task's own cancellation
 
     async def _run(self) -> None:
         while True:
@@ -62,9 +80,11 @@ class BrowserSession:
                     await s.initialize()
                     self.tools = (await s.list_tools()).tools
                     self.ready.set()
-                    log.info("browser connected: %d tools", len(self.tools))
                     while True:
-                        fn, fut = await self.queue.get()
+                        item = await self.queue.get()
+                        if item is None:
+                            return
+                        fn, fut = item
                         try:
                             fut.set_result(await fn(s))
                         except Exception as e:
@@ -78,10 +98,104 @@ class BrowserSession:
                 await asyncio.sleep(3)
 
     async def call(self, name: str, args: dict, timeout: float = 90) -> mt.CallToolResult:
-        await asyncio.wait_for(self.ready.wait(), timeout=30)
-        fut = asyncio.get_running_loop().create_future()
-        await self.queue.put((lambda s: s.call_tool(name, args), fut))
-        return await asyncio.wait_for(fut, timeout)
+        self.busy += 1
+        try:
+            await asyncio.wait_for(self.ready.wait(), timeout=30)
+            fut = asyncio.get_running_loop().create_future()
+            await self.queue.put((lambda s: s.call_tool(name, args), fut))
+            return await asyncio.wait_for(fut, timeout)
+        finally:
+            self.busy -= 1
+            self.last_used = time.monotonic()
+
+
+class BrowserPool:
+    """One BrowserSession per account (SPEC §3.4)."""
+
+    def __init__(self, url: str, idle_seconds: float, session=BrowserSession) -> None:
+        self.url = url
+        self.idle_seconds = idle_seconds
+        self._session = session
+        self._sessions: dict[str, BrowserSession] = {}
+        self._held: dict[str, int] = {}
+        self._reaper: asyncio.Task | None = None
+
+    async def tools(self, wait: float = 60) -> list[mt.Tool]:
+        """The browser's tool definitions, from a short-lived connection of no account's."""
+        probe = self._session(self.url)
+        probe.start()
+        try:
+            await asyncio.wait_for(probe.ready.wait(), timeout=wait)
+            return probe.tools
+        finally:
+            await probe.stop()
+
+    def start(self, every: float = 60) -> None:
+        self._reaper = asyncio.create_task(self._reap(every))
+
+    def session(self, account_id: str) -> BrowserSession:
+        s = self._sessions.get(account_id)
+        if s is None:
+            s = self._sessions[account_id] = self._session(self.url)
+            s.start()
+            log.info("browser context opened for an account (%d open)", len(self._sessions))
+        return s
+
+    def for_account(self, account_id: str) -> AccountBrowser:
+        return AccountBrowser(self, account_id)
+
+    @contextmanager
+    def hold(self, account_id: str):
+        """While an account's task runs, its context isn't closed for being idle."""
+        self._held[account_id] = self._held.get(account_id, 0) + 1
+        try:
+            yield
+        finally:
+            self._held[account_id] -= 1
+            if not self._held[account_id]:
+                del self._held[account_id]
+            if s := self._sessions.get(account_id):
+                s.last_used = time.monotonic()
+
+    def is_open(self, account_id: str) -> bool:
+        return account_id in self._sessions
+
+    async def close(self, account_id: str) -> None:
+        s = self._sessions.pop(account_id, None)
+        if s is not None:
+            await s.stop()
+            log.info("browser context closed for an account (%d open)", len(self._sessions))
+
+    async def reap(self) -> None:
+        now = time.monotonic()
+        for account_id, s in list(self._sessions.items()):
+            if account_id not in self._held and not s.busy and now - s.last_used >= self.idle_seconds:
+                await self.close(account_id)
+
+    async def _reap(self, every: float) -> None:
+        while True:
+            await asyncio.sleep(every)
+            try:
+                await self.reap()
+            except Exception:
+                log.exception("closing idle browser contexts failed")
+
+    async def stop(self) -> None:
+        if self._reaper:
+            self._reaper.cancel()
+        for account_id in list(self._sessions):
+            await self.close(account_id)
+
+
+class AccountBrowser:
+    """An account's way into the browser, as tools see it (`ctx.browser`): opens its context on first use."""
+
+    def __init__(self, pool: BrowserPool, account_id: str) -> None:
+        self._pool = pool
+        self._account_id = account_id
+
+    async def call(self, name: str, args: dict, timeout: float = 90) -> mt.CallToolResult:
+        return await self._pool.session(self._account_id).call(name, args, timeout)
 
 
 def to_result(r: mt.CallToolResult) -> ToolResult:
@@ -125,7 +239,7 @@ def pinned(tools: list[mt.Tool], path: Path) -> list[mt.Tool]:
     return ok
 
 
-async def current_site(session: BrowserSession) -> str:
+async def current_site(session) -> str:
     """The site of the page the browser is on, read from the browser itself (not from the model)."""
     r = await session.call("browser_tabs", {"action": "list"})
     for c in r.content:
@@ -167,7 +281,7 @@ def element_label(snapshot: str, ref: str) -> str:
     return ""
 
 
-async def call_with_snapshot(session: BrowserSession, name: str, args: dict, ctx: ToolContext) -> ToolResult:
+async def call_with_snapshot(session, name: str, args: dict, ctx: ToolContext) -> ToolResult:
     """Run a browser tool; when the result only links to its snapshot file, fetch the snapshot inline."""
     result = to_result(await session.call(name, args))
     if SNAPSHOT_LINK.search(result.text):
@@ -198,8 +312,11 @@ def labelled(name: str, args: dict, ctx: ToolContext) -> dict:
     return out
 
 
-def make_handler(session: BrowserSession, name: str):
+def make_handler(name: str):
     async def handler(args: dict, ctx: ToolContext) -> ToolResult:
+        session = ctx.browser  # this account's own context, never another's (SPEC §3.4)
+        if session is None:
+            return ToolResult("The browser isn't available right now.", error=True)
         args = normalise_targets(args)
         if ctx.task.read_mail:  # SPEC §5.5: after reading mail, every address the model picks is a card
             verdict = decide(name, args, False, set())
@@ -261,16 +378,17 @@ def declined(decision) -> ToolResult:
     return ToolResult(text, error=True)
 
 
-async def register(reg: Registry, session: BrowserSession, pin_file: Path, wait: float = 60) -> int:
+async def register(reg: Registry, pool: BrowserPool, pin_file: Path, wait: float = 60) -> int:
     try:
-        await asyncio.wait_for(session.ready.wait(), timeout=wait)
+        tools = await pool.tools(wait)
     except TimeoutError:
         log.warning("browser not reachable; browsing is unavailable until restart")
         return 0
     count = 0
-    for t in pinned(session.tools, pin_file):
+    for t in pinned(tools, pin_file):
         if not offered(t.name):
             continue
-        reg.add(Tool(t.name, t.description or "", t.inputSchema, make_handler(session, t.name)))
+        reg.add(Tool(t.name, t.description or "", t.inputSchema, make_handler(t.name)))
         count += 1
+    log.info("browser: %d tools, one context per account", count)
     return count

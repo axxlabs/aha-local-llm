@@ -42,6 +42,7 @@ push_preview = false       # true: notifications show the first line of the repl
 [browser]
 # true: any public site opens without asking; typing and forms still need approval (SPEC §5.2).
 allow_all_sites = true
+idle_minutes = 30     # a person's browser tabs and cookies are discarded after this long unused
 """
 
 
@@ -56,6 +57,7 @@ class Config:
     max_model_calls: int = 40
     max_task_seconds: float = 15 * 60
     allow_all_sites: bool = True
+    browser_idle_seconds: float = 30 * 60  # an account's browser context closes after this long unused
     source_url: str = "https://github.com/axxlabs/aha-local-llm"  # named in `help` (AGPL §13, SPEC §10.1)
     app_url: str = "https://app.aha.axxlabs.ai"  # where pairing links open the app (SPEC §6.4)
     device_url: str = ""  # the gateway's device endpoint, for the pairing link; derived from gateway_url if empty
@@ -86,6 +88,7 @@ class Config:
             max_model_calls=int(agent.get("max_model_calls_per_task", 40)),
             max_task_seconds=float(agent.get("max_task_minutes", 15)) * 60,
             allow_all_sites=bool(browser.get("allow_all_sites", True)),
+            browser_idle_seconds=float(browser.get("idle_minutes", 30)) * 60,
             source_url=str(agent.get("source_url", "https://github.com/axxlabs/aha-local-llm")),
             app_url=str(gw.get("app", "https://app.aha.axxlabs.ai")),
             device_url=str(gw.get("device_url", "")),

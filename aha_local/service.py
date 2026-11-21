@@ -38,7 +38,7 @@ class Service:
         self.registry = Registry()
         for module in (web, memory, mail, conversation):
             module.register(self.registry)
-        self.browser = browser.BrowserSession(config.browser_url)
+        self.browser = browser.BrowserPool(config.browser_url, config.browser_idle_seconds)
         self.llm = LLM(config.llm_url, config.llm_model)
         self.channel = Channel(
             self.accounts,
@@ -62,17 +62,20 @@ class Service:
         await self.tunnel.send(frame)
 
     async def run(self) -> None:
-        self.browser.start()
         count = await browser.register(
             self.registry, self.browser, self.config.data_dir / "browser" / "pinned-tools.json"
         )
+        self.browser.start()
         log.info("aha %s: %d tools (%d browser)", __version__, len(self.registry.names()), count)
         sock = self.config.data_dir / "agent.sock"
         sock.unlink(missing_ok=True)
         admin = await asyncio.start_unix_server(self._admin, path=str(sock))
         os.chmod(sock, 0o600)
-        async with admin:
-            await self.tunnel.run()
+        try:
+            async with admin:
+                await self.tunnel.run()
+        finally:
+            await self.browser.stop()
 
     # ---- admin socket: one JSON request per connection, one JSON reply
 
@@ -205,6 +208,7 @@ class Service:
             for dev in list(acct.devices):
                 await self.channel.revoke(acct, dev)
             await self._mail_disconnect(acct)
+            await self.browser.close(acct.id)
             return {"ok": self.accounts.delete(acct.id) is not None}
         return {"ok": False, "error": f"unknown command {cmd!r}"}
 

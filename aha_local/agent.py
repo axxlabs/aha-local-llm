@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections import defaultdict
@@ -137,16 +138,21 @@ class Agent:
     # ---- tasks
 
     async def run(self, account: Account, text: str) -> None:
+        held = self.browser.hold(account.id) if self.browser else contextlib.nullcontext()
         try:
-            while True:
-                await self._task(account, text)
-                # Messages that came in after the task's last model call: one follow-up task for all of them.
-                pending = self.inbox.pop(account.address, [])
-                if not pending:
-                    break
-                text = "\n\n".join(pending)
+            with held:
+                await self._run(account, text)
         finally:
             self.running.pop(account.address, None)
+
+    async def _run(self, account: Account, text: str) -> None:
+        while True:
+            await self._task(account, text)
+            # Messages that came in after the task's last model call: one follow-up task for all of them.
+            pending = self.inbox.pop(account.address, [])
+            if not pending:
+                break
+            text = "\n\n".join(pending)
 
     async def _typing(self, account: Account) -> None:
         """While a reply is owed: "typing…", refreshed, except while the person owes us an approval answer."""
@@ -203,7 +209,9 @@ class Agent:
         async def send(message: str) -> None:
             await self.send(account, checks.chat_format(message))
 
-        ctx = ToolContext(account, self.approvals, self.config, TaskState(), self.browser, send)
+        # The browser is reached only through this account's own context (SPEC §3.4).
+        browser = self.browser.for_account(account.id) if self.browser else None
+        ctx = ToolContext(account, self.approvals, self.config, TaskState(), browser, send)
         tools = self.registry.specs()
         last = ""
         retried = False

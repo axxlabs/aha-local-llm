@@ -45,7 +45,7 @@ class ToolContext:
     approvals: Approvals
     config: Config
     task: TaskState
-    browser: Any = None  # tools.browser.BrowserSession, when the browser is available
+    browser: Any = None  # tools.browser.AccountBrowser: this account's own browser context, if available
     send: Callable[[str], Awaitable[None]] | None = None  # message the person now, without ending the task
 
 

