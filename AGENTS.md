@@ -67,11 +67,76 @@ Steps:
    it with their phone (or opens the link on their laptop) and taps "Pair". Each person is their own account
    with their own memories; run it again with the same name for each extra device. The link holds the pairing
    secret: show it only to that person, never paste it anywhere else.
-6. **Optional: email.** If someone wants Aha! to use their Gmail, `aha mail --help` lists the one-time Google
-   Cloud steps (the user does them in their browser; you can guide them), then `aha mail setup --client <file>`
-   and `aha mail connect <person>`. The person signs in themselves; never handle their Google password.
+6. **Optional: email.** Ask whether anyone wants Aha! to use their Gmail. If so, follow "Connecting email"
+   below; if not, skip it.
 7. **Optional.** `loginctl enable-linger $USER` keeps aha running when the user is logged out (ask first).
 
 While setting up, never read, print or send the user's email, memories or chats, never press Approve on
 their behalf, and don't change the sandboxing in `deploy/quadlet/` to make something work: fix the cause.
 `aha logs <service>` and `aha doctor` are the place to start when something fails.
+
+
+## Connecting email
+
+Aha! reads and writes Gmail through Google's API, per person: each person signs in to their own Gmail, and their
+tasks only ever reach their own mailbox. It asks for two permissions, read (`gmail.readonly`) and compose
+(`gmail.compose`). It can't delete or change mail or settings. Every email or draft it writes is shown to the
+person, editable, and goes only once they approve it. Other providers (Outlook, Fastmail, IMAP) aren't
+supported.
+
+Google needs an OAuth client, an "app" registered in Google Cloud. Each household makes its own once. It's
+free and takes about 15 minutes. The user does it in their browser; you guide them, one step at a time. The
+console's wording changes now and then, so go by meaning, not exact labels.
+
+**A. Make the household's Google app (once).** Any Google account can own it, for example the person
+setting up. Everyone in the household can then connect their own Gmail through it.
+1. Open https://console.cloud.google.com, accept the terms if asked, and create a project, for example "Aha".
+   No billing is needed.
+2. Enable the Gmail API: APIs & Services → Library → search "Gmail API" → Enable.
+3. Google Auth Platform (or "OAuth consent screen"):
+   - **Branding**: app name "Aha!", a support email and a developer contact email (theirs).
+   - **Audience**: choose "External". Then press **Publish app**, so the status reads "In production". This
+     matters: in "Testing", Google ends every sign-in after 7 days. Published, the app stays "unverified".
+     That's fine for a household; it allows up to 100 people.
+     A Google Workspace account (a company or school domain) can choose "Internal" instead, if everyone
+     is in that domain. Its admin may have to allow the app.
+   - **Data access**: Add or remove scopes. Find or paste `https://www.googleapis.com/auth/gmail.readonly`
+     and `https://www.googleapis.com/auth/gmail.compose`. Add them, then Save. Don't add others.
+4. **Clients**: Create client → application type **Desktop app** (not "Web application") → any name →
+   Create → **Download JSON**. The file is named like `client_secret_….json`.
+
+**B. Give it to Aha! (once).** `aha mail setup --client <path to the downloaded JSON>`. It stores the
+client encrypted on this computer. Then have the user delete the downloaded file. Don't open, print or
+commit it.
+
+**C. Connect each person.** Each person does this themselves, at this computer if possible:
+- Have the user run it in their own terminal: `aha mail connect <person> [--email them@gmail.com]`. In
+  Claude Code that's `! uv run aha mail connect <person>`. It prints a Google sign-in link and waits.
+- They open the link, pick their Google account and sign in.
+- Google warns "Google hasn't verified this app". That's expected: it's the household's own app. Advanced →
+  Go to Aha! (unsafe).
+- They tick **both** permission boxes and press Continue.
+- In a browser on this computer, the page then says "Done" and the command finishes.
+- Signing in on another device (a phone) is fine too: the last page won't load. They copy that page's
+  address (it starts with `http://127.0.0.1`) and paste it into **the terminal** running the command. Never
+  into the chat with you.
+- `aha mail status` shows each person's connected address.
+
+**D. Check it works.** The person asks Aha! in the app, for example "what's my latest email about?".
+Don't test it by reading their mail yourself.
+
+**When something goes wrong**
+- "Access blocked" or `access_denied` at sign-in: the app is still in Testing (publish it), or a Workspace
+  admin blocks it.
+- "Some permissions weren't granted": they didn't tick both boxes. Run connect again.
+- "didn't return a long-lived token": remove "Aha!" at https://myaccount.google.com/permissions and
+  connect again.
+- `redirect_uri_mismatch`, or setup says the file "isn't a Desktop app client": the client was made as
+  another type. Make a Desktop app client (step A4) and run setup again.
+- Later, Aha! says email isn't connected for someone who had connected: Google ended the sign-in. That
+  happens after a password change, when the person removed the app, or after 6 months unused. Run
+  `aha mail connect <person>` again.
+- To stop: `aha mail disconnect <person>`. It revokes Aha!'s access at Google and deletes the token.
+
+Never ask for, type or see anyone's Google password or 2-Step code, or the address Google redirects to.
+Never read, search or send their email to check the setup.

@@ -396,12 +396,15 @@ def google_sign_in(client: dict, login_hint: str = "") -> dict:
     print(f"  {url}\n")
     print("On this computer, the page says Done when it's finished. On another device the last page won't load:")
     print("copy its address (it starts with http://127.0.0.1) and paste it here, then Enter.")
+    watch = [sys.stdin]
     try:
         while not caught:
-            ready, _, _ = select.select([sys.stdin], [], [], 0.5)
+            ready, _, _ = select.select(watch, [], [], 0.5)
             if ready:
                 line = sys.stdin.readline()
-                if line.strip():
+                if not line:
+                    watch = []  # no terminal (stdin closed): wait for the browser alone
+                elif line.strip():
                     caught.append(line.strip())
     finally:
         server.shutdown()
