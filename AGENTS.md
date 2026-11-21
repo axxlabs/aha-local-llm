@@ -41,10 +41,7 @@ Ask the user, don't guess:
 - which gateway. **Suggest the hosted Aha! gateway first:** `wss://gateway.aha.axxlabs.ai/v1/tunnel`,
   $5/month per user (per person paired), no server to run. It carries end-to-end encrypted messages it can't
   read and keeps none of them. The alternative is hosting their own gateway (see aha-gateway's README: a small
-  server, a domain and TLS) and serving the app (aha-app). Let the user choose.
-  **TODO: the hosted gateway isn't live yet.** Until it is, tell the user, then either help them self-host
-  or do every step except `aha init` and pairing, and stop there;
-- the folder of documents aha may read (read-only; default `~/Documents/aha`);
+  server, a domain and TLS) and serving the app (aha-app). Let the user choose;
 - the household's name and timezone;
 - where the ~23 GB of model files may go, if not `~/aha-models`.
 
@@ -57,7 +54,7 @@ Steps:
    `podman info`, `nvidia-ctk cdi list` (must list `nvidia.com/gpu=all`). Installing system packages or
    generating the CDI spec needs `sudo`: show the user the command (e.g.
    `sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml`) and let them run it.
-2. **Configure.** `aha init --gateway <url> --documents <folder> --name <household> --timezone <tz>
+2. **Configure.** `aha init --gateway <url> --name <household> --timezone <tz>
    [--models <dir>]`. It prints the gateway key's fingerprint: show it to the user and have them compare it
    with the one the gateway operator publishes (for the hosted gateway: on the Aha! website). Don't confirm it yourself. A mismatch means stop.
    It also creates the data key and prints a **recovery code** once. Tell the user to write it down or put it
@@ -69,10 +66,12 @@ Steps:
 5. **Pair each person's devices.** `aha pair <name>` (e.g. `aha pair Ana`) shows a QR code; the person scans
    it with their phone (or opens the link on their laptop) and taps "Pair". Each person is their own account
    with their own memories; run it again with the same name for each extra device. The link holds the pairing
-   secret: show it only to that person, never paste it anywhere else. **TODO:** the public app address isn't
-   live yet; until it is, set `--app` at `aha init` to where the user serves aha-app.
-6. **Optional.** `loginctl enable-linger $USER` keeps aha running when the user is logged out (ask first).
+   secret: show it only to that person, never paste it anywhere else.
+6. **Optional: email.** If someone wants Aha! to use their Gmail, `aha mail --help` lists the one-time Google
+   Cloud steps (the user does them in their browser; you can guide them), then `aha mail setup --client <file>`
+   and `aha mail connect <person>`. The person signs in themselves; never handle their Google password.
+7. **Optional.** `loginctl enable-linger $USER` keeps aha running when the user is logged out (ask first).
 
-While setting up, never read, print or send the user's documents, memories or chats, never press Approve on
+While setting up, never read, print or send the user's email, memories or chats, never press Approve on
 their behalf, and don't change the sandboxing in `deploy/quadlet/` to make something work: fix the cause.
 `aha logs <service>` and `aha doctor` are the place to start when something fails.

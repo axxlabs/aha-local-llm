@@ -10,6 +10,8 @@ import logging
 import os
 import time
 
+import httpx
+
 from . import __version__
 from .accounts import Accounts
 from .agent import Agent
@@ -19,7 +21,7 @@ from .e2e import crypto
 from .e2e.channel import Channel
 from .llm import LLM
 from .rest import RestError, Vault, load_or_create_instance_key
-from .tools import browser, conversation, documents, memory, web
+from .tools import browser, conversation, mail, memory, web
 from .tools.registry import Registry
 from .tunnel import Tunnel
 
@@ -34,7 +36,7 @@ class Service:
         self.key = load_or_create_instance_key(self.vault, data / "keys" / "instance.key")
         self.accounts = Accounts(self.vault)
         self.registry = Registry()
-        for module in (web, memory, documents, conversation):
+        for module in (web, memory, mail, conversation):
             module.register(self.registry)
         self.browser = browser.BrowserSession(config.browser_url)
         self.llm = LLM(config.llm_url, config.llm_model)
@@ -134,8 +136,26 @@ class Service:
                     for a in self.accounts.all()
                 ],
             }
+        if cmd == "mail_setup":
+            client_id, secret = str(req.get("client_id", "")), str(req.get("client_secret", ""))
+            if not client_id.endswith(".apps.googleusercontent.com") or not secret:
+                return {"ok": False, "error": "that isn't a Google OAuth client (Desktop app) file"}
+            self.vault.write_json(mail.client_file(self.vault), {"client_id": client_id, "client_secret": secret})
+            return {"ok": True}
+        if cmd == "mail_client":
+            client = self.vault.read_json(mail.client_file(self.vault))
+            if not client:
+                return {"ok": False, "error": "no Google OAuth client yet: run `aha mail setup --client <file>`"}
+            return {"ok": True, **client, "scopes": list(mail.SCOPES)}
+        if cmd == "mail_status":
+            out = []
+            for a in self.accounts.all():
+                conn = a.vault.read_json(a.dir / "mail.json")
+                out.append({"name": a.label, "email": conn["email"] if conn else ""})
+            return {"ok": True, "accounts": out}
         acct = self.accounts.find(str(req.get("account", "")))
-        if cmd in ("devices", "revoke", "memory_list", "memory_import", "export", "rename", "delete") and acct is None:
+        needs_account = ("devices", "revoke", "memory_list", "memory_import", "export", "rename", "delete")
+        if (cmd in needs_account or cmd in ("mail_connect", "mail_disconnect")) and acct is None:
             return {"ok": False, "error": "no such account (see `aha accounts`)"}
         if cmd == "devices":
             return {
@@ -172,11 +192,38 @@ class Service:
             target.parent.mkdir(exist_ok=True)
             self.accounts.export(acct.id, target)
             return {"ok": True, "file": target.name}
+        if cmd == "mail_connect":
+            email, token = str(req.get("email", "")), str(req.get("refresh_token", ""))
+            if "@" not in email or not token:
+                return {"ok": False, "error": "missing the address or the token"}
+            self.vault.write_json(acct.dir / "mail.json", {"provider": "gmail", "email": email, "refresh_token": token})
+            mail.forget_token(acct.id)
+            return {"ok": True}
+        if cmd == "mail_disconnect":
+            return {"ok": True, "revoked": await self._mail_disconnect(acct)}
         if cmd == "delete":
             for dev in list(acct.devices):
                 await self.channel.revoke(acct, dev)
+            await self._mail_disconnect(acct)
             return {"ok": self.accounts.delete(acct.id) is not None}
         return {"ok": False, "error": f"unknown command {cmd!r}"}
+
+    async def _mail_disconnect(self, acct) -> bool:
+        """Revoke the account's Gmail token at Google (best effort) and delete it here. True if Google confirmed."""
+        path = acct.dir / "mail.json"
+        conn = self.vault.read_json(path)
+        mail.forget_token(acct.id)
+        if not conn:
+            return False
+        revoked = False
+        try:
+            async with httpx.AsyncClient(transport=mail.TRANSPORT, timeout=15) as http:
+                r = await http.post(mail.REVOKE_URL, data={"token": conn["refresh_token"]})
+                revoked = r.status_code == 200
+        except httpx.HTTPError:
+            log.warning("couldn't reach Google to revoke a mail token; deleted it here")
+        path.unlink(missing_ok=True)
+        return revoked
 
 
 def main() -> None:

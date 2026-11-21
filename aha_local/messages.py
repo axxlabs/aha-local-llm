@@ -18,10 +18,10 @@ EDIT_UNCLEAR = "I couldn't match that to the fields. Send lines like `2: new val
 WELCOME = "Hi! I'm **Aha!**, your private agent, running on your own computer. Ask me anything, or say **help**."
 HELP = """**Aha!** is your private agent, and it runs on your own computer. Ask me anything: I look things up, \
 read web pages, book things on websites, \
-find things in your documents and remember what matters about you.
+search and write your email (once it's connected) and remember what matters about you.
 
-Before I type anything into a website or save something about you, I'll ask you with buttons: **Approve**, \
-**Edit** or **Decline**.
+Before anything leaves this computer with your words or data in it (typing into a website, an email) and before \
+I save something about you, I'll show it to you with buttons: **Approve**, **Edit** or **Decline**.
 
 Commands: **stop** (cancel what I'm doing) · **memories** (what I remember about you) · **forget last** (drop our \
 last exchange) · **help**
@@ -32,4 +32,6 @@ APPROVE_LABELS = {
     "action": ("Approve", "Edit", "Decline"),
     "memory": ("Save", "Edit", "Don't"),
     "forget": ("Forget it", "Edit", "Keep it"),
+    "email": ("Send", "Edit", "Don't send"),
+    "draft": ("Save draft", "Edit", "Don't save"),
 }

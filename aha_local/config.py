@@ -3,7 +3,7 @@
 """Configuration (SPEC §3.7).
 
 The host keeps `~/.config/aha/config.toml`; the agent container reads the same file mounted at
-`/config/config.toml`. Paths inside the container are fixed (/data, /documents, /config) and the service
+`/config/config.toml`. Paths inside the container are fixed (/data, /config) and the service
 addresses come from the Quadlet units, so the TOML only holds what a person chooses.
 """
 
@@ -28,7 +28,6 @@ app = "{app_url}"          # where pairing links open the Aha! app
 [household]
 name = "{name}"
 timezone = "{timezone}"
-documents = "{documents}"
 
 [models]
 dir = "{models_dir}"
@@ -52,7 +51,6 @@ class Config:
     gateway_pin: str
     household_name: str = "Home"
     timezone: str = "Europe/London"
-    documents: Path = Path.home() / "Documents" / "aha"
     models_dir: Path = Path.home() / "aha-models"
     approval_expiry: float = 24 * 3600
     max_model_calls: int = 40
@@ -65,7 +63,6 @@ class Config:
     push_preview: bool = False
     # Service addresses (inside the containers' networks; overridable for development and tests).
     data_dir: Path = field(default_factory=lambda: Path(os.environ.get("AHA_DATA_DIR", "/data")))
-    documents_mount: Path = field(default_factory=lambda: Path(os.environ.get("AHA_DOCUMENTS_DIR", "/documents")))
     llm_url: str = field(default_factory=lambda: os.environ.get("AHA_LLM_URL", "http://aha-llm:8081/v1"))
     llm_model: str = field(default_factory=lambda: os.environ.get("AHA_LLM_MODEL", "qwen3.6-35b"))
     search_url: str = field(default_factory=lambda: os.environ.get("AHA_SEARCH_URL", "http://aha-search:8080"))
@@ -84,7 +81,6 @@ class Config:
             gateway_pin=gw["pin"],
             household_name=hh.get("name", "Home"),
             timezone=hh.get("timezone", "Europe/London"),
-            documents=Path(hh.get("documents", "~/Documents/aha")).expanduser(),
             models_dir=Path(models.get("dir", "~/aha-models")).expanduser(),
             approval_expiry=float(agent.get("approval_expiry_hours", 24)) * 3600,
             max_model_calls=int(agent.get("max_model_calls_per_task", 40)),

@@ -1,4 +1,4 @@
-# The agent: the only container on both networks. Holds the data volume; documents are read-only.
+# The agent: the only container on both networks. Holds the data volume; no other host folders.
 [Unit]
 Description=aha agent
 Wants=aha-llm.service aha-search.service aha-browser.service
@@ -16,7 +16,6 @@ ReadOnly=true
 Tmpfs=/tmp
 Volume=@DATA@:/data
 Volume=@CONFIG@:/config/config.toml:ro
-Volume=@DOCUMENTS@:/documents:ro
 # The data key (SPEC §3.8.1): systemd unseals it into this unit's private in-memory credentials folder (%d).
 Volume=%d/data-key:/run/aha/data-key:ro
 @GATEWAY_VOLUME@

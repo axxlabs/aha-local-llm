@@ -192,14 +192,12 @@ def cmd_init(a) -> None:
             app_url=a.app,
             name=a.name,
             timezone=a.timezone,
-            documents=Path(a.documents).expanduser(),
             models_dir=Path(a.models).expanduser(),
         )
     )
     HOME_CONFIG.chmod(0o600)
     HOME_DATA.mkdir(parents=True, exist_ok=True)
     HOME_DATA.chmod(0o700)
-    Path(a.documents).expanduser().mkdir(parents=True, exist_ok=True)
     print(f"Wrote {HOME_CONFIG}.")
     ensure_data_key()
     print("Next: `aha install`.")
@@ -221,7 +219,6 @@ def render_units(config: Config) -> dict[str, str]:
         "@DATA@": str(HOME_DATA),
         "@CONFIG@": str(HOME_CONFIG),
         "@MODELS@": str(config.models_dir),
-        "@DOCUMENTS@": str(config.documents),
         "@DEPLOY@": str(DEPLOY),
         "@GATEWAY_VOLUME@": gateway_volume,
         "@AGENT_IMAGE@": AGENT_IMAGE,
@@ -336,6 +333,158 @@ def cmd_rename(a) -> None:
     admin({"cmd": "rename", "account": a.account, "name": a.name})
 
 
+# ---- mail (SPEC §3.4 "Email")
+
+
+def oauth_code_from(redirect: str, state: str) -> str:
+    """The authorization code from the address Google redirected to (pasted, or caught on the loopback)."""
+    from urllib.parse import parse_qs
+
+    query = parse_qs(urlsplit(redirect.strip()).query)
+    if query.get("error"):
+        die(f"Google said: {query['error'][0]}")
+    if query.get("state", [""])[0] != state or not query.get("code"):
+        die("That isn't the address Google sent you back to (no code, or from another sign-in).")
+    return query["code"][0]
+
+
+def google_sign_in(client: dict, login_hint: str = "") -> dict:
+    """Installed-app OAuth with PKCE and a loopback redirect. Returns Google's token reply."""
+    import base64
+    import secrets
+    import select
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from urllib.parse import urlencode
+
+    import httpx
+
+    caught: list[str] = []
+
+    class Catch(BaseHTTPRequestHandler):
+        def do_GET(self):
+            caught.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"Done. You can close this tab and go back to the terminal.")
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Catch)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    redirect_uri = f"http://127.0.0.1:{server.server_port}/"
+    verifier = secrets.token_urlsafe(64)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    state = secrets.token_urlsafe(16)
+    url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(
+        {
+            "client_id": client["client_id"],
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": " ".join(client["scopes"]),
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "access_type": "offline",
+            "prompt": "consent",
+            "state": state,
+            **({"login_hint": login_hint} if login_hint else {}),
+        }
+    )
+    print("Open this link and sign in with the Google account to connect:\n")
+    print(f"  {url}\n")
+    print("On this computer, the page says Done when it's finished. On another device the last page won't load:")
+    print("copy its address (it starts with http://127.0.0.1) and paste it here, then Enter.")
+    try:
+        while not caught:
+            ready, _, _ = select.select([sys.stdin], [], [], 0.5)
+            if ready:
+                line = sys.stdin.readline()
+                if line.strip():
+                    caught.append(line.strip())
+    finally:
+        server.shutdown()
+    code = oauth_code_from(caught[0] if caught[0].startswith("http") else "http://x" + caught[0], state)
+    r = httpx.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "code": code,
+            "client_id": client["client_id"],
+            "client_secret": client["client_secret"],
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+            "code_verifier": verifier,
+        },
+        timeout=20,
+    )
+    if r.status_code != 200:
+        die(f"Google refused the sign-in (HTTP {r.status_code}). Try `aha mail connect` again.")
+    return r.json()
+
+
+def cmd_mail(a) -> None:
+    import httpx
+
+    if a.action == "setup":
+        if not a.client:
+            die("Give the OAuth client file you downloaded from Google Cloud: aha mail setup --client <file>")
+        raw = json.loads(Path(a.client).expanduser().read_text())
+        info = raw.get("installed") or {}
+        if not info:
+            die('That file isn\'t a Desktop app client (it has no "installed" section). See `aha mail --help`.')
+        admin(
+            {
+                "cmd": "mail_setup",
+                "client_id": info.get("client_id", ""),
+                "client_secret": info.get("client_secret", ""),
+            }
+        )
+        print("Saved the Google OAuth client (encrypted on this computer). You can delete the downloaded file.")
+        print("Next: aha mail connect <person>")
+        return
+    if a.action == "status":
+        for row in admin({"cmd": "mail_status"})["accounts"]:
+            print(f"{row['name']:<20} {row['email'] or '(not connected)'}")
+        return
+    if not a.account:
+        die(f"Whose mail? aha mail {a.action} <person>")
+    if a.action == "disconnect":
+        reply = admin({"cmd": "mail_disconnect", "account": a.account})
+        print(
+            "Disconnected."
+            + (
+                ""
+                if reply.get("revoked")
+                else " (Google didn't confirm the revocation; "
+                "remove access at https://myaccount.google.com/permissions to be sure.)"
+            )
+        )
+        return
+    client = admin({"cmd": "mail_client"})
+    tokens = google_sign_in(client, a.email or "")
+    granted = set(tokens.get("scope", "").split())
+    if not set(client["scopes"]) <= granted:
+        die("Some permissions weren't granted (tick both boxes on Google's page). Nothing was saved.")
+    if not tokens.get("refresh_token"):
+        die(
+            "Google didn't return a long-lived token. Remove the app at https://myaccount.google.com/permissions "
+            "and connect again."
+        )
+    profile = httpx.get(
+        "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        timeout=20,
+    )
+    profile.raise_for_status()
+    email = profile.json()["emailAddress"]
+    admin({"cmd": "mail_connect", "account": a.account, "email": email, "refresh_token": tokens["refresh_token"]})
+    print(
+        f"Connected {email} for {a.account}. Aha! can now search and read it, and send or draft only after "
+        "they approve each email."
+    )
+
+
 def cmd_memory(a) -> None:
     if a.action == "list":
         for m in admin({"cmd": "memory_list", "account": a.account})["memories"]:
@@ -388,7 +537,6 @@ def cmd_doctor(a) -> None:
     model = config.models_dir / "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
     check(f"model {model.name}", model.exists(), "aha models download")
     check("vision file", (config.models_dir / "Qwen3.6-35B-A3B-mmproj-F16.gguf").exists(), "aha models download")
-    check("documents folder", config.documents.exists(), f"mkdir -p {config.documents}")
     check("units installed", all((QUADLET_DIR / u).exists() for u in UNITS), "aha install")
     check(
         "data key sealed to this computer",
@@ -447,7 +595,6 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--pin", help="the gateway's public key, if you have it")
     s.add_argument("--name", default="Home", help="what your household is called in chats")
     s.add_argument("--timezone", default="Europe/London")
-    s.add_argument("--documents", default="~/Documents/aha")
     s.add_argument("--models", default="~/aha-models")
     s.add_argument("--app", default="https://app.aha.axxlabs.ai", help="where pairing links open the Aha! app")
     s.add_argument("--force", action="store_true")
@@ -490,6 +637,24 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("doctor", help="check the setup")
     s.add_argument("--repin", action="store_true", help="accept changed browser tool definitions")
     s.set_defaults(fn=cmd_doctor)
+    s = sub.add_parser(
+        "mail",
+        help="connect a person's Gmail",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="""Gmail, per person. Once per household, make a Google OAuth client:
+  1. https://console.cloud.google.com: create a project, enable the Gmail API.
+  2. Google Auth Platform: Branding (app name "Aha!"), Audience "External", then Publish app
+     ("In production"; it stays unverified, which is fine for your household: Google shows a warning).
+  3. Data access: add the scopes gmail.readonly and gmail.compose.
+  4. Clients: create an OAuth client of type "Desktop app" and download its JSON.
+  5. aha mail setup --client <that file>
+Then for each person: aha mail connect <person>""",
+    )
+    s.add_argument("action", choices=["setup", "connect", "disconnect", "status"])
+    s.add_argument("account", nargs="?", help="the person (for connect and disconnect)")
+    s.add_argument("--client", help="for setup: the OAuth client JSON downloaded from Google Cloud")
+    s.add_argument("--email", help="for connect: suggest this Google account on the sign-in page")
+    s.set_defaults(fn=cmd_mail)
     s = sub.add_parser("recovery-key", help="show the recovery code for your data key")
     s.add_argument("--show", action="store_true", help="really print it")
     s.set_defaults(fn=cmd_recovery_key)

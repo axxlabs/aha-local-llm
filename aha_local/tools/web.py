@@ -10,6 +10,7 @@ import httpx
 import trafilatura
 
 from .. import __version__
+from ..approvals import Field
 from ..policy.urls import check_url, resolves_publicly
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
@@ -27,10 +28,25 @@ HEADERS = {
 }
 
 
+async def after_mail(ctx: ToolContext, title: str, label: str, value: str) -> tuple[str, ToolResult | None]:
+    """SPEC §5.5: once the task has read mail, a query or address leaves only after the person approves it."""
+    if not ctx.task.read_mail:
+        return value, None
+    from .browser import declined
+
+    decision = await ctx.approvals.ask(ctx.account, "action", title, [Field(label, value)])
+    if not decision.approved:
+        return value, declined(decision)
+    return decision.values[0].strip(), None
+
+
 async def web_search(args: dict, ctx: ToolContext) -> ToolResult:
     query = str(args.get("query", "")).strip()
     if not query:
         return ToolResult("Give a search query.", error=True)
+    query, refused = await after_mail(ctx, "Search the web for this?", "Search", query)
+    if refused:
+        return refused
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.get(f"{ctx.config.search_url}/search", params={"q": query, "format": "json"})
         r.raise_for_status()
@@ -89,6 +105,10 @@ async def read_with_browser(url: str, ctx: ToolContext, why: str) -> ToolResult:
 
 async def fetch_url(args: dict, ctx: ToolContext) -> ToolResult:
     url = str(args.get("url", "")).strip()
+    if check_url(url)[1] is None:
+        url, refused = await after_mail(ctx, "Open this page?", "Address", url)
+        if refused:
+            return refused
     page = None
     for _ in range(MAX_REDIRECTS + 1):
         _, why = check_url(url)

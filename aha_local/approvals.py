@@ -22,13 +22,15 @@ from .items import Image
 
 EDIT_LINE = re.compile(r"^\s*(\d{1,2})\s*[:.)-]\s*(.*)$")
 MAX_VALUE = 2000
+MAX_LONG = 10_000  # longtext fields: an email's message
+EDITABLE = ("text", "longtext")
 
 
 @dataclass
 class Field:
     label: str
     value: str
-    kind: str = "text"  # text | bool
+    kind: str = "text"  # text | longtext | bool | info (shown, not editable)
 
 
 @dataclass
@@ -61,14 +63,14 @@ class Out(Protocol):
 
 def card(p: Pending) -> dict:
     yes, edit, no = messages.APPROVE_LABELS.get(p.kind, messages.APPROVE_LABELS["action"])
-    editable = any(f.kind == "text" for f in p.fields)
+    editable = any(f.kind in EDITABLE for f in p.fields)
     out = {
         "t": "approval",
         "id": p.id,
         "kind": p.kind,
         "title": p.title,
         "fields": [
-            {"label": f.label, "value": f.value, "editable": f.kind == "text", "kind": f.kind} for f in p.fields
+            {"label": f.label, "value": f.value, "editable": f.kind in EDITABLE, "kind": f.kind} for f in p.fields
         ],
         "buttons": [yes, edit, no] if editable else [yes, no],
     }
@@ -91,8 +93,8 @@ def apply_edit(fields: list[Field], text: str) -> list[Field] | None:
         if not m:
             continue
         i = int(m.group(1)) - 1
-        if 0 <= i < len(new) and new[i].kind == "text":
-            new[i].value = m.group(2).strip()[:MAX_VALUE]
+        if 0 <= i < len(new) and new[i].kind in EDITABLE:
+            new[i].value = m.group(2).strip()[: MAX_LONG if new[i].kind == "longtext" else MAX_VALUE]
             matched = True
     return new if matched else None
 
@@ -103,9 +105,9 @@ def checked_values(fields: list[Field], values: list) -> list[str] | None:
         return None
     out = []
     for f, v in zip(fields, values, strict=True):
-        if not isinstance(v, str) or len(v) > MAX_VALUE:
+        if not isinstance(v, str) or len(v) > (MAX_LONG if f.kind == "longtext" else MAX_VALUE):
             return None
-        if f.kind == "text":
+        if f.kind in EDITABLE:
             out.append(v)
         elif f.kind == "bool" and v.lower() in ("true", "false"):
             out.append(v.lower())
@@ -176,7 +178,7 @@ class Approvals:
             self._resolve(p, Decision(False, note=str(note)[:MAX_VALUE].strip(), reason="declined"))
         elif decision == "edit":
             p.editing = True
-            text_fields = [i for i, f in enumerate(p.fields, 1) if f.kind == "text"]
+            text_fields = [i for i, f in enumerate(p.fields, 1) if f.kind in EDITABLE]
             if len(p.fields) == 1:
                 prompt = messages.EDIT_ONE
             else:

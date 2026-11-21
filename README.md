@@ -3,8 +3,9 @@
 **Aha! Your private agent.** It runs on your own computer, and you talk to it from the
 [Aha! app](https://github.com/axxlabs/aha-app) on your phone or laptop. Every message is **end-to-end
 encrypted** between your device and your computer (hybrid post-quantum pairing, then a Double Ratchet). The
-model, your memories, your documents and your conversation history never leave your computer. Before Aha!
-types anything into a website or saves something about you, it asks you with a card: Approve, Edit, Decline.
+model, your memories, your mail tokens and your conversation history stay on your computer. Before anything
+leaves with your words or data in it (typing into a website, an email) and before Aha! saves something about
+you, it shows you a card with the exact content: Approve, Edit, Decline.
 
 This repo is the part that runs on your computer. Messages reach it through an
 [Aha! gateway](https://github.com/axxlabs/aha-gateway) (self-hosted, or the hosted one for $5/month per user),
@@ -16,7 +17,7 @@ Open Claude Code (or another coding agent) on the computer that will run aha and
 
 > Install Aha! for me from https://github.com/axxlabs/aha-local-llm. Follow its AGENTS.md, section "Setting up aha for a user".
 
-It checks your machine, asks you a few questions (which gateway, which documents folder), downloads the
+It checks your machine, asks you a few questions (which gateway, your household's name and timezone), downloads the
 model and sets everything up. It suggests the hosted Aha! gateway ($5/month per user); you can host your own
 instead.
 
@@ -53,6 +54,15 @@ To keep it running while you're logged out: `loginctl enable-linger $USER`.
 All are rootless Podman containers managed by systemd Quadlet units (`deploy/quadlet/`), with capabilities
 dropped and read-only file systems where the image allows. Your data lives in `~/.local/share/aha/`;
 the configuration in `~/.config/aha/config.toml`.
+
+## Email (Gmail)
+
+Each person can connect their own Gmail. Aha! then searches and reads it, and writes, replies and saves drafts;
+every email is shown to them in full, editable, and goes only when they approve. After a task has read mail,
+every web search and page address in that task is shown first too, so a message can't steer Aha! into sending
+their data somewhere. The connection uses Google's OAuth with read and compose permissions only (nothing can
+delete or change mail), and the token is kept encrypted in that person's folder. Setup, once per household,
+then per person: `aha mail --help`, then `aha mail connect <person>`.
 
 The data folder is encrypted at rest (ChaCha20-Poly1305, a key per file) under one data key that
 `systemd-creds` seals to this computer's TPM and host key (`~/.config/aha/data-key.cred`); systemd unseals it

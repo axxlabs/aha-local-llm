@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
-"""The agent: memory approvals, context layers, commands, queueing, documents (SPEC §3.3, §4, §5.4, §11.3–11.4)."""
+"""The agent: memory approvals, context layers, commands, queueing (SPEC §3.3, §4, §5.4, §11.3–11.4)."""
 
 import asyncio
 
@@ -224,22 +224,6 @@ async def test_typing_while_a_reply_is_owed_but_not_while_an_approval_waits(agen
     await settle(agent)
     assert chat.typed[0] is True and chat.typed[-1] is False
     assert chat.texts() == [ask.text, "Noted."]  # no "On it…", no "Busy…"
-
-
-async def test_documents_search_and_read(agent, llm, chat, config):
-    (config.documents_mount / "home").mkdir()
-    (config.documents_mount / "home" / "appliances.md").write_text(
-        "# Appliances\n\nWashing machine LG F4V5, warranty until 2027-08-02.\n\nFridge Bosch, warranty 2026."
-    )
-    (config.documents_mount / "notes.txt").write_text("Plant watering: ficus weekly.")
-    llm.call("documents_search", query="washing machine warranty")
-    llm.call("documents_read", path="../../etc/passwd")
-    llm.answer("Until 2 Aug 2027.")
-    await say(agent, "when does the washing machine warranty end?")
-    await settle(agent)
-    tools = [m for m in llm.requests[-1]["messages"] if m["role"] == "tool"]
-    assert "[home/appliances.md]" in tools[0]["content"] and "2027-08-02" in tools[0]["content"]
-    assert "no such document" in tools[1]["content"]
 
 
 async def test_a_claimed_forget_without_the_tool_is_sent_back(agent, llm, chat):

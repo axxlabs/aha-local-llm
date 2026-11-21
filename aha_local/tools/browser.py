@@ -201,7 +201,10 @@ def labelled(name: str, args: dict, ctx: ToolContext) -> dict:
 def make_handler(session: BrowserSession, name: str):
     async def handler(args: dict, ctx: ToolContext) -> ToolResult:
         args = normalise_targets(args)
-        verdict = decide(name, args, ctx.config.allow_all_sites, ctx.task.approved_sites)
+        if ctx.task.read_mail:  # SPEC §5.5: after reading mail, every address the model picks is a card
+            verdict = decide(name, args, False, set())
+        else:
+            verdict = decide(name, args, ctx.config.allow_all_sites, ctx.task.approved_sites)
         if verdict.outcome == "block":
             return ToolResult(f"Blocked by aha's safety policy: {verdict.reason}.", error=True)
         if verdict.outcome == "auto":

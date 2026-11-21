@@ -9,11 +9,12 @@ from types import SimpleNamespace
 import pytest
 
 from aha_local.tools import web
+from aha_local.tools.registry import TaskState
 
 
 @pytest.fixture
 def ctx(config):
-    return SimpleNamespace(config=config)
+    return SimpleNamespace(config=config, task=TaskState())
 
 
 async def test_fetch_blocks_private_addresses(ctx):
@@ -79,7 +80,7 @@ class FakeBrowser:
 
 
 def browser_ctx(ctx, status):
-    return SimpleNamespace(config=ctx.config, browser=FakeBrowser(status), task=SimpleNamespace(approved_sites=set()))
+    return SimpleNamespace(config=ctx.config, browser=FakeBrowser(status), task=TaskState())
 
 
 async def test_fetch_says_what_it_is():
@@ -143,7 +144,6 @@ def test_units_render_with_sandboxing(tmp_path, monkeypatch):
         gateway_url="unix:/run/user/1000/aha-gateway/gateway.sock",
         gateway_pin="x",
         models_dir=tmp_path / "models",
-        documents=tmp_path / "docs",
     )
     units = cli.render_units(config)
     llm = units["aha-llm.container"]
@@ -151,7 +151,7 @@ def test_units_render_with_sandboxing(tmp_path, monkeypatch):
     assert "DropCapability=ALL" in llm and "ReadOnly=true" in llm
     agent = units["aha-agent.container"]
     assert "Network=aha-internal.network" in agent and "Network=aha-egress.network" in agent
-    assert f"Volume={tmp_path / 'docs'}:/documents:ro" in agent
+    assert "/documents" not in agent
     assert "Volume=/run/user/1000/aha-gateway:/run/user/1000/aha-gateway" in agent
     assert "Internal=true" in units["aha-internal.network"]
     # The data key: unsealed by systemd into the unit's credentials folder, mounted read-only (SPEC §3.8.1).

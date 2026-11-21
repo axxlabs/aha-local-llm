@@ -36,6 +36,7 @@ class TaskState:
 
     approved_sites: set[str] = field(default_factory=set)
     last_snapshot: str = ""  # the latest page snapshot, to label approvals from the page itself
+    read_mail: bool = False  # set by email_search/email_read: from then on, text going out is a card (SPEC §5.5)
 
 
 @dataclass

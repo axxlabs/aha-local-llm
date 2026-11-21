@@ -18,7 +18,7 @@ from aha_local.agent import Agent
 from aha_local.config import Config
 from aha_local.llm import Reply, ToolCall
 from aha_local.rest import Vault
-from aha_local.tools import conversation, documents, memory
+from aha_local.tools import conversation, mail, memory
 from aha_local.tools.registry import Registry
 
 
@@ -95,12 +95,10 @@ class Chat:
 
 @pytest.fixture
 def config(tmp_path: Path) -> Config:
-    (tmp_path / "docs").mkdir()
     return Config(
         gateway_url="unix:/nowhere",
         gateway_pin="x",
         data_dir=tmp_path / "data",
-        documents_mount=tmp_path / "docs",
         approval_expiry=5,
         context_tokens=131072,
     )
@@ -116,7 +114,7 @@ def accounts(config) -> Accounts:
 @pytest.fixture
 def registry() -> Registry:
     reg = Registry()
-    for module in (memory, documents, conversation):
+    for module in (memory, mail, conversation):
         module.register(reg)
     return reg
 

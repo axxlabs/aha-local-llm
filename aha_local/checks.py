@@ -5,7 +5,7 @@
 1. chat_format: Markdown the app doesn't render (headings) is normalised; everything else is left as Markdown.
 2. unverified: times, prices, dates, phone numbers and reference-like numbers in the answer that appear in no
    page aha opened during the task (fetch_url or the browser), in the person's own messages, in their memories
-   or in their documents. Search-result snippets don't count. Those numbers get a visible warning, so a
+   or in emails they let it read. Search-result snippets don't count. Those numbers get a visible warning, so a
    made-up number can't pass as checked.
 """
 
