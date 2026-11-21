@@ -100,20 +100,25 @@ async def test_a_scheduled_task_needs_a_card_and_runs_later_as_its_person(schedu
     (saved,) = schedule.load(fe)
     assert saved["next"] == local("2027-01-05T09:00")
 
-    # Day one: nothing new. Nothing is sent, and the turn isn't kept.
+    assert card.card["buttons"] == ["Schedule", "Edit", "Don't"]
+
+    # Day one: nothing new. Nothing is sent, and the turn isn't kept; the note is, for next time.
     chat.sent.clear()
     turns_before = len(fe.load_context().get("turns", []))
-    llm.answer("NOTHING_TO_REPORT")
+    llm.answer("NOTHING_TO_REPORT: the page says 'Tickets on sale 1 March'")
     await scheduler.tick(now=saved["next"] + 5)
     await settle(agent)
     assert "Scheduled task the user set up" in llm.requests[-1]["messages"][-1]["content"]
     assert not chat.sent and len(fe.load_context().get("turns", [])) == turns_before
     assert schedule.load(fe)[0]["next"] == local("2027-01-06T09:00")
 
-    # Day two: news.
+    assert schedule.load(fe)[0]["last"] == "the page says 'Tickets on sale 1 March'"
+
+    # Day two: news. This run is told what the last one found.
     llm.answer("Tickets for Fictional Band are on sale now.")
     await scheduler.tick(now=local("2027-01-06T09:00") + 5)
     await settle(agent)
+    assert "Last time you found: the page says 'Tickets on sale 1 March'" in str(llm.requests[-1]["messages"][-1])
     assert [m.text for m in chat.sent] == ["⏰ Tickets for Fictional Band are on sale now."]
 
 

@@ -305,6 +305,6 @@ class Scheduler:
             note = f" _(late: due {when})_" if late > LATE_NOTE else ""
             await self.agent.send(account, f"⏰ {entry['text']}{note}")
         else:
-            self.agent.start_scheduled(account, entry["text"], late=late > LATE_NOTE)
+            self.agent.start_scheduled(account, entry, late=late > LATE_NOTE)
         following = None if once else next_time(entry, self.tz, now)
         update(account, entry["id"], lambda e: None if following is None else {**e, "next": following})

@@ -39,9 +39,10 @@ NEW_MESSAGE = "[New message from the user while you were working]\n{text}"
 PHOTO_ONLY = "(sent a photo)"
 SCHEDULED = (
     "[Scheduled task the user set up earlier{late}; they aren't necessarily looking at the chat]\n{text}\n\n"
-    "Do it now. If it says to tell them only when something happens and it hasn't, answer exactly "
-    "NOTHING_TO_REPORT and nothing else."
+    "{last}Do it now. If it says to tell them only when something happens and it hasn't, answer "
+    "NOTHING_TO_REPORT: followed by one line on what you found (kept for next time, not sent)."
 )
+LAST_TIME = "Last time you found: {note}\n\n"
 
 
 class _Counted:
@@ -190,13 +191,17 @@ class Agent:
     def is_running(self, account: Account) -> bool:
         return account.address in self.running
 
-    def start_scheduled(self, account: Account, instruction: str, late: bool = False) -> None:
+    def start_scheduled(self, account: Account, entry: dict, late: bool = False) -> None:
         """A scheduled task is due (SPEC §3.4): run it as this account, like a message from them."""
-        account.transcript({"kind": "scheduled", "text": instruction})
-        text = SCHEDULED.format(text=instruction, late=", running late: the computer was off" if late else "")
-        self.running[account.address] = asyncio.create_task(self.run(account, text, scheduled=True))
+        account.transcript({"kind": "scheduled", "text": entry["text"]})
+        text = SCHEDULED.format(
+            text=entry["text"],
+            late=", running late: the computer was off" if late else "",
+            last=LAST_TIME.format(note=entry["last"]) if entry.get("last") else "",
+        )
+        self.running[account.address] = asyncio.create_task(self.run(account, text, scheduled=entry["id"]))
 
-    async def run(self, account: Account, text: str, scheduled: bool = False) -> None:
+    async def run(self, account: Account, text: str, scheduled: str | None = None) -> None:
         held = self.browser.hold(account.id) if self.browser else contextlib.nullcontext()
         try:
             with held:
@@ -214,10 +219,10 @@ class Agent:
         except Exception:
             log.warning("couldn't refresh kept sign-ins")
 
-    async def _run(self, account: Account, text: str, scheduled: bool = False) -> None:
+    async def _run(self, account: Account, text: str, scheduled: str | None = None) -> None:
         while True:
             await self._task(account, text, scheduled)
-            scheduled = False  # a follow-up is the person's own message
+            scheduled = None  # a follow-up is the person's own message
             # Messages that came in after the task's last model call: one follow-up task for all of them.
             pending = self.inbox.pop(account.address, [])
             if not pending:
@@ -241,7 +246,7 @@ class Agent:
         except Exception:
             log.warning("couldn't send a typing message")
 
-    async def _task(self, account: Account, text: str, scheduled: bool = False) -> None:
+    async def _task(self, account: Account, text: str, scheduled: str | None = None) -> None:
         sent_before = self.sent[account.address]
         typing = asyncio.create_task(self._typing(account))
         try:
@@ -266,11 +271,15 @@ class Agent:
             # After "✅ Save" there may be nothing to add; if they've heard nothing at all, say something.
             answer = "" if self.sent[account.address] > sent_before else "…"
         await self._stop_typing(account, typing)  # before the answer, so no refresh can land after it
-        if scheduled and schedule.NOTHING in answer and len(answer) < len(schedule.NOTHING) + 40:
-            account.transcript({"kind": "answer", "text": "", "scheduled": "nothing to report"})
-            return  # watching for a change, and there's none: say nothing, keep the chat clean
-        if scheduled and answer:
-            answer = f"⏰ {answer}"
+        if scheduled:
+            quiet = answer.strip().lstrip("*_` ").startswith(schedule.NOTHING)
+            note = answer.split(schedule.NOTHING, 1)[1].lstrip(" :*_`-") if quiet else answer
+            schedule.update(account, scheduled, lambda e: {**e, "last": " ".join(note.split())[:500]})
+            if quiet:
+                account.transcript({"kind": "answer", "text": "", "scheduled": "nothing to report", "note": note})
+                return  # watching for a change, and there's none: say nothing, keep the chat clean
+            if answer:
+                answer = f"⏰ {answer}"
         if answer:
             await self.send(account, answer)
         account.transcript({"kind": "answer", "text": answer})
