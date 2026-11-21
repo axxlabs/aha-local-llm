@@ -52,7 +52,11 @@ async def open_socket(url: str):
         return await websockets.unix_connect(
             url[5:], uri="ws://localhost/v1/tunnel", max_size=MAX_FRAME_BYTES, ping_interval=30
         )
-    return await websockets.connect(url, max_size=MAX_FRAME_BYTES, ping_interval=30, open_timeout=15)
+    # Happy eyeballs (RFC 8305): try IPv4 too if IPv6 doesn't answer quickly. Without it, a network with a broken
+    # IPv6 route hangs on the gateway's AAAA address until the timeout, every time.
+    return await websockets.connect(
+        url, max_size=MAX_FRAME_BYTES, ping_interval=30, open_timeout=15, happy_eyeballs_delay=0.25
+    )
 
 
 class Tunnel:
