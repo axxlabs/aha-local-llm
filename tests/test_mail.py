@@ -158,7 +158,7 @@ async def test_without_a_connection_the_tools_say_how_to_connect(google, account
         await mail.email_search({"query": "x"}, ctx),
         await mail.email_send({"to": "a@example.com", "body": "hi"}, ctx),
     ):
-        assert result.error and "aha mail connect" in result.text
+        assert result.error and "aha mail connect" in result.text and "whoever set up Aha!" in result.text
     assert not google.requests
 
 

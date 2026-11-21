@@ -61,8 +61,28 @@ Each person can connect their own Gmail. Aha! then searches and reads it, and wr
 every email is shown to them in full, editable, and goes only when they approve. After a task has read mail,
 every web search and page address in that task is shown first too, so a message can't steer Aha! into sending
 their data somewhere. The connection uses Google's OAuth with read and compose permissions only (nothing can
-delete or change mail), and the token is kept encrypted in that person's folder. Setup, once per household,
-then per person: `aha mail --help`, then `aha mail connect <person>`.
+delete or change mail), and the token is kept encrypted in that person's folder.
+
+Setting it up takes about 15 minutes, once per household, on the computer:
+
+1. **Make the household's Google app** at https://console.cloud.google.com (free, any Google account):
+   - create a project and enable the **Gmail API** (APIs & Services → Library);
+   - under Google Auth Platform: **Branding** (app name "Aha!", your email), **Audience** "External", then
+     **Publish app** so it reads "In production" (in "Testing", Google ends every sign-in after 7 days; it stays
+     "unverified", which is fine for a household of up to 100 people);
+   - **Data access**: add the scopes `https://www.googleapis.com/auth/gmail.readonly` and
+     `https://www.googleapis.com/auth/gmail.compose`;
+   - **Clients**: create a client of type **Desktop app** and download its JSON file.
+2. `aha mail setup --client ~/Downloads/client_secret_….json` (it's stored encrypted; delete the download).
+3. For each person: `aha mail connect <person>`. They open the link it prints and sign in with Google; past
+   "Google hasn't verified this app" (Advanced → Go to Aha!), they tick both permissions. On a phone, the last
+   page won't load: copy its address into the terminal. `aha mail status` shows who's connected;
+   `aha mail disconnect <person>` revokes it.
+
+If Aha! later says email isn't connected for someone who had connected (after a password change, removing
+the app in their Google account, or six months unused), run `aha mail connect <person>` again.
+
+## Encryption at rest
 
 The data folder is encrypted at rest (ChaCha20-Poly1305, a key per file) under one data key that
 `systemd-creds` seals to this computer's TPM and host key (`~/.config/aha/data-key.cred`); systemd unseals it

@@ -23,14 +23,16 @@ from .items import Image
 EDIT_LINE = re.compile(r"^\s*(\d{1,2})\s*[:.)-]\s*(.*)$")
 MAX_VALUE = 2000
 MAX_LONG = 10_000  # longtext fields: an email's message
-EDITABLE = ("text", "longtext")
+EDITABLE = ("text", "longtext", "secret")  # inputs on the card
+TYPED = ("text", "longtext")  # also editable by the text fallback; a secret never goes through the chat
+MASK = "••••"
 
 
 @dataclass
 class Field:
     label: str
     value: str
-    kind: str = "text"  # text | longtext | bool | info (shown, not editable)
+    kind: str = "text"  # text | longtext | bool | info (shown, not editable) | secret (typed by the person, masked)
 
 
 @dataclass
@@ -61,6 +63,14 @@ class Out(Protocol):
     async def text(self, account: Account, text: str) -> None: ...
 
 
+OPEN_INPUTS = ("signin",)  # cards whose inputs are open from the start: the person types into them
+
+
+def masked(fields: list[Field], values: list[str]) -> list[str]:
+    """Values as they may be written down (audit): secrets never are."""
+    return [MASK if f.kind == "secret" and v else v for f, v in zip(fields, values, strict=False)]
+
+
 def card(p: Pending) -> dict:
     yes, edit, no = messages.APPROVE_LABELS.get(p.kind, messages.APPROVE_LABELS["action"])
     editable = any(f.kind in EDITABLE for f in p.fields)
@@ -70,9 +80,15 @@ def card(p: Pending) -> dict:
         "kind": p.kind,
         "title": p.title,
         "fields": [
-            {"label": f.label, "value": f.value, "editable": f.kind in EDITABLE, "kind": f.kind} for f in p.fields
+            {
+                "label": f.label,
+                "value": "" if f.kind == "secret" else f.value,
+                "editable": f.kind in EDITABLE,
+                "kind": f.kind,
+            }
+            for f in p.fields
         ],
-        "buttons": [yes, edit, no] if editable else [yes, no],
+        "buttons": [yes, edit, no] if editable and p.kind not in OPEN_INPUTS else [yes, no],
     }
     if p.image is not None:
         out["image"] = p.image.to_dict()
@@ -85,6 +101,8 @@ def apply_edit(fields: list[Field], text: str) -> list[Field] | None:
     if not text:
         return None
     if len(fields) == 1:
+        if fields[0].kind not in TYPED:
+            return None
         return [Field(fields[0].label, text[:MAX_VALUE], fields[0].kind)]
     new = [Field(f.label, f.value, f.kind) for f in fields]
     matched = False
@@ -93,7 +111,7 @@ def apply_edit(fields: list[Field], text: str) -> list[Field] | None:
         if not m:
             continue
         i = int(m.group(1)) - 1
-        if 0 <= i < len(new) and new[i].kind in EDITABLE:
+        if 0 <= i < len(new) and new[i].kind in TYPED:
             new[i].value = m.group(2).strip()[: MAX_LONG if new[i].kind == "longtext" else MAX_VALUE]
             matched = True
     return new if matched else None
@@ -134,7 +152,9 @@ class Approvals:
             secrets.token_hex(4), account, kind, title, fields, image, asyncio.get_running_loop().create_future()
         )
         self._pending[account.address] = p
-        account.audit({"approval": p.id, "kind": kind, "title": title, "asked": [f.value for f in fields]})
+        account.audit(
+            {"approval": p.id, "kind": kind, "title": title, "asked": masked(fields, [f.value for f in fields])}
+        )
         state = "stopped"
         try:
             await self.out.card(account, card(p))
@@ -154,7 +174,7 @@ class Approvals:
             {
                 "approval": p.id,
                 "decision": "approved" if decision.approved else decision.reason,
-                "final": decision.values,
+                "final": masked(fields, decision.values),
                 "note": decision.note,
             }
         )
@@ -177,8 +197,11 @@ class Approvals:
         elif decision == "decline":
             self._resolve(p, Decision(False, note=str(note)[:MAX_VALUE].strip(), reason="declined"))
         elif decision == "edit":
+            if p.kind in OPEN_INPUTS or not any(f.kind in TYPED for f in p.fields):
+                await self.out.text(account, messages.EDIT_IN_CARD)
+                return
             p.editing = True
-            text_fields = [i for i, f in enumerate(p.fields, 1) if f.kind in EDITABLE]
+            text_fields = [i for i, f in enumerate(p.fields, 1) if f.kind in TYPED]
             if len(p.fields) == 1:
                 prompt = messages.EDIT_ONE
             else:

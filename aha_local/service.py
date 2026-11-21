@@ -21,7 +21,7 @@ from .e2e import crypto
 from .e2e.channel import Channel
 from .llm import LLM
 from .rest import RestError, Vault, load_or_create_instance_key
-from .tools import browser, conversation, mail, memory, web
+from .tools import browser, conversation, mail, memory, signins, web
 from .tools.registry import Registry
 from .tunnel import Tunnel
 
@@ -39,6 +39,7 @@ class Service:
         for module in (web, memory, mail, conversation):
             module.register(self.registry)
         self.browser = browser.BrowserPool(config.browser_url, config.browser_idle_seconds)
+        self.browser.on_open = self._browser_opened
         self.llm = LLM(config.llm_url, config.llm_model)
         self.channel = Channel(
             self.accounts,
@@ -57,6 +58,12 @@ class Service:
         self.agent = Agent(config, self.accounts, self.llm, self.registry, self.channel, self.browser)
         self.channel.agent = self.agent
         self.started = time.time()
+
+    async def _browser_opened(self, account_id: str, session) -> None:
+        """A person's browser context just opened: put back the sites they chose to stay signed in on."""
+        acct = self.accounts.get(account_id)
+        if acct is not None:
+            await signins.restore(acct, session)
 
     async def _send_frame(self, frame) -> None:
         await self.tunnel.send(frame)

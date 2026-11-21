@@ -33,8 +33,11 @@ MAX_BODY = 10_000
 TRANSPORT: httpx.AsyncBaseTransport | None = None  # tests put a fake Gmail here
 
 NOT_CONNECTED = (
-    "Email isn't connected for this person. Tell them it's set up on the computer with "
-    "`aha mail connect <their name>` (see `aha mail --help`)."
+    "Email isn't connected for this person yet. Explain it in plain words: whoever set up Aha! on the computer "
+    "connects it there, once for the household: a free Google Cloud app (about 15 minutes; the steps are in "
+    "`aha mail --help` and the Email section of the README at https://github.com/axxlabs/aha-local-llm#email-gmail), "
+    "then `aha mail connect <their name>` on the computer while this person signs in with Google. Their mail stays "
+    "between Google and this computer. Don't suggest any other way to connect."
 )
 APPROVED = "The user approved this email; it was {done} exactly as shown."
 

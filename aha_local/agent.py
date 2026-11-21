@@ -17,7 +17,7 @@ from .approvals import Approvals
 from .config import Config
 from .items import Image
 from .llm import LLM, ModelUnavailable
-from .tools import memory
+from .tools import memory, signins
 from .tools.registry import Registry, TaskState, ToolContext
 
 log = logging.getLogger("aha.agent")
@@ -109,6 +109,22 @@ class Agent:
                 else "I don't remember anything about you yet.",
             )
             return
+        if command in ("sign-ins", "signins", "sign ins"):
+            kept = signins.sites(account)
+            await self.send(
+                account,
+                messages.SIGNINS.format(sites="\n".join(f"- {site}" for site in kept)) if kept else messages.NO_SIGNINS,
+            )
+            return
+        if command.startswith(("forget sign-in ", "forget signin ", "forget sign in ")):
+            site = command.split(" ", 2)[2].removeprefix("in ").strip()
+            session = None
+            if self.browser is not None and self.browser.is_open(account.id):
+                session = self.browser.session(account.id)
+            found = await signins.forget(account, site, session)
+            reply = messages.SIGNIN_FORGOTTEN if found else messages.SIGNIN_UNKNOWN
+            await self.send(account, reply.format(site=site))
+            return
         if command == "forget last":
             context.forget_last(account)
             await self.send(account, messages.FORGOT_LAST)
@@ -144,6 +160,16 @@ class Agent:
                 await self._run(account, text)
         finally:
             self.running.pop(account.address, None)
+            await self._refresh_sign_ins(account)
+
+    async def _refresh_sign_ins(self, account: Account) -> None:
+        """Save kept sites' cookies again after a task, so sessions the site renewed stay valid (SPEC §3.4)."""
+        if self.browser is None or not self.browser.is_open(account.id) or not signins.sites(account):
+            return
+        try:
+            await signins.refresh(account, self.browser.session(account.id))
+        except Exception:
+            log.warning("couldn't refresh kept sign-ins")
 
     async def _run(self, account: Account, text: str) -> None:
         while True:
@@ -206,8 +232,8 @@ class Agent:
         """Returns the answer, whether it passed the checks, and everything the person said during the task."""
         task: list[dict] = [{"role": "user", "content": text}]
 
-        async def send(message: str) -> None:
-            await self.send(account, checks.chat_format(message))
+        async def send(message: str, image: Image | None = None) -> None:
+            await self.send(account, checks.chat_format(message) if message else "", image)
 
         # The browser is reached only through this account's own context (SPEC §3.4).
         browser = self.browser.for_account(account.id) if self.browser else None
@@ -266,11 +292,13 @@ class Agent:
                 result = await self.registry.call(call.name, call.arguments, ctx)
                 if result.kind == "expired":
                     raise ApprovalExpired
+                if ctx.task.secrets:  # what the person typed on a sign-in card never shows again (SPEC §3.4)
+                    result.text = signins.redact(result.text, ctx.task.secrets)
                 account.transcript(
                     {
                         "kind": "tool",
                         "name": call.name,
-                        "args": _short(call.arguments),
+                        "args": signins.redact(_short(call.arguments), ctx.task.secrets),
                         "result": result.text[:4000],
                         "error": result.error,
                     }

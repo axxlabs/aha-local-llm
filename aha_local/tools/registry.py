@@ -37,6 +37,8 @@ class TaskState:
     approved_sites: set[str] = field(default_factory=set)
     last_snapshot: str = ""  # the latest page snapshot, to label approvals from the page itself
     read_mail: bool = False  # set by email_search/email_read: from then on, text going out is a card (SPEC §5.5)
+    secrets: list[str] = field(default_factory=list)  # values the person typed on a sign-in card: never shown again
+    signed_in: set[str] = field(default_factory=set)  # sites the person chose to stay signed in on, this task
 
 
 @dataclass
@@ -46,7 +48,7 @@ class ToolContext:
     config: Config
     task: TaskState
     browser: Any = None  # tools.browser.AccountBrowser: this account's own browser context, if available
-    send: Callable[[str], Awaitable[None]] | None = None  # message the person now, without ending the task
+    send: Callable[..., Awaitable[None]] | None = None  # message the person now (text, image=None), mid-task
 
 
 Handler = Callable[[dict, ToolContext], Awaitable[ToolResult]]
