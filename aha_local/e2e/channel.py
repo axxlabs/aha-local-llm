@@ -131,10 +131,10 @@ class Channel:
         return item
 
     async def _send(self, account: Account, device: Device, message: dict) -> bool:
-        ratchet = crypto.Ratchet.from_dict(device.ratchet)
         try:
+            ratchet = crypto.Ratchet.from_dict(device.ratchet)
             box = crypto.encrypt_json(ratchet, message)
-        except crypto.CryptoError:
+        except (crypto.CryptoError, KeyError, TypeError, ValueError):
             return False  # the device hasn't spoken yet, so there's no sending chain; it will sync
         device.ratchet = ratchet.to_dict()
         account.save_device(device)  # saved before sending (SPEC §6.8)
@@ -165,10 +165,10 @@ class Channel:
             log.info("dropped a message from a device not on this computer's list")
             return
         account, device = found
-        ratchet = crypto.Ratchet.from_dict(device.ratchet)
         try:
+            ratchet = crypto.Ratchet.from_dict(device.ratchet)
             message = crypto.decrypt_json(ratchet, frame.box)
-        except crypto.CryptoError:
+        except (crypto.CryptoError, KeyError, TypeError, ValueError):
             log.info("dropped a message that didn't decrypt")
             return
         device.ratchet = ratchet.to_dict()

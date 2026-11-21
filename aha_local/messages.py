@@ -15,16 +15,16 @@ EDIT_ONE = "Send the corrected value."
 EDIT_MANY = "Send the corrected fields, one per line, like:\n`{example}`"
 EDIT_UNCLEAR = "I couldn't match that to the fields. Send lines like `2: new value`, or tap Approve or Decline."
 
-WELCOME = "Hi! I'm *Aha!*, your private agent, running on your own computer. Ask me anything, or say *help*."
-HELP = """*Aha!* is your private agent, and it runs on your own computer. Ask me anything: I look things up, \
+WELCOME = "Hi! I'm **Aha!**, your private agent, running on your own computer. Ask me anything, or say **help**."
+HELP = """**Aha!** is your private agent, and it runs on your own computer. Ask me anything: I look things up, \
 read web pages, book things on websites, \
 find things in your documents and remember what matters about you.
 
-Before I type anything into a website or save something about you, I'll ask you with buttons: *Approve*, \
-*Edit* or *Decline*.
+Before I type anything into a website or save something about you, I'll ask you with buttons: **Approve**, \
+**Edit** or **Decline**.
 
-Commands: *stop* (cancel what I'm doing) · *memories* (what I remember about you) · *forget last* (drop our \
-last exchange) · *help*
+Commands: **stop** (cancel what I'm doing) · **memories** (what I remember about you) · **forget last** (drop our \
+last exchange) · **help**
 
 Open source (AGPL-3.0): {source}"""
 

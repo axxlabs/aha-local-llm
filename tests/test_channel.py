@@ -243,3 +243,15 @@ async def test_malformed_messages_do_nothing_harmful(tmp_path, bad):
     phone.inbox()
     await phone.send(bad)
     assert rig.agent.said == []
+
+
+async def test_a_corrupted_ratchet_state_drops_messages_but_keeps_the_channel_alive(tmp_path):
+    rig = Rig(tmp_path)
+    _, phone = await rig.pair()
+    await phone.send({"t": "hello", "name": "P"})
+    phone.inbox()
+    acct = rig.accounts.find("Ana")
+    acct.devices[phone.dev].ratchet = {"v": 1, "rk": "not base64!"}
+    await phone.send({"t": "say", "text": "hello?"})  # must not raise into the tunnel loop
+    await rig.channel.message(acct, "still alive")
+    assert rig.agent.said == []
