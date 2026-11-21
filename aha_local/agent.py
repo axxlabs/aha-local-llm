@@ -306,6 +306,7 @@ class Agent:
         last = ""
         retried = False
         memory_retried = False
+        signin_retried = False
         called: set[str] = set()  # tools that ran without error in this task
         # Where numbers in the answer may come from: what the person said or saved, earlier answers, and pages
         # opened in this task. Search snippets don't count (SPEC §3.5).
@@ -332,6 +333,12 @@ class Agent:
                     log.info("draft answer claimed a memory change no tool made; asking the model to fix it")
                     task.append({"role": "assistant", "content": reply.content or ""})
                     task.append({"role": "user", "content": checks.MEMORY_RETRY})
+                    continue
+                if not signin_retried and checks.unbacked_signin_claim(reply.content or "", called):
+                    signin_retried = True
+                    log.info("draft answer pointed at a sign-in card no tool showed; asking the model to call it")
+                    task.append({"role": "assistant", "content": reply.content or ""})
+                    task.append({"role": "user", "content": checks.SIGNIN_RETRY})
                     continue
                 if has_photo:
                     # Numbers in the person's photo can't be matched as text: no retry, no warning, and the

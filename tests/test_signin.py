@@ -253,3 +253,17 @@ async def test_show_screenshot_sends_the_page_to_the_persons_chat(setup, llm, ch
     shots = [m for m in chat.sent if m.image is not None and m.card is None]
     assert len(shots) == 1 and shots[0].text == "Search results" and shots[0].image.b64 == PNG
     assert any(e.get("image") for e in fe.read_transcript() if e["kind"] == "out")
+
+
+async def test_pointing_at_a_sign_in_card_without_showing_one_goes_back_once(setup, llm, chat, accounts):
+    agent, _, _ = setup
+    fe = person(accounts)
+    llm.call("browser_navigate", url="https://www.waitrose.com/login")
+    llm.answer("Please sign in using the sign-in card that has appeared in the app.")  # no card exists
+    llm.call("browser_sign_in", username_target="e1", password_target="e2")
+    await agent.inbound(fe, "add toilet paper to my Waitrose basket")
+    card = await chat.next()
+    assert card.card and card.card["kind"] == "signin"
+    assert "haven't called browser_sign_in" in json.dumps(llm.requests[2]["messages"])
+    await agent.approval_reply(fe, card.card["id"], "decline")
+    await settle(agent)

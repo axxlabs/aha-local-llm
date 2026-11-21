@@ -103,6 +103,25 @@ MEMORY_RETRY = (
 )
 
 
+SIGNIN_CLAIM = re.compile(
+    r"\bsign[- ]?in card\b|\bcard (?:that )?(?:has )?appeared\b|\bsign in (?:on|using|with) the card\b", re.I
+)
+
+
+def unbacked_signin_claim(answer: str, tools_called: set[str]) -> bool:
+    """The answer points the person at a sign-in card, but browser_sign_in didn't run: there's no card."""
+    return bool(SIGNIN_CLAIM.search(answer)) and "browser_sign_in" not in tools_called
+
+
+SIGNIN_RETRY = (
+    "[aha check] Your draft tells the person to use a sign-in card, but you haven't called browser_sign_in in this "
+    "task, so no card was shown. A card appears only when you call browser_sign_in yourself, with the references "
+    "of the sign-in fields from the latest snapshot (take one if needed; if the page has only an email field "
+    "first, use that alone). If you can't find the fields, say so plainly. Then write your reply to the person "
+    "from scratch: they haven't seen your draft, and never mention this check."
+)
+
+
 def retry_prompt(values: list[str]) -> str:
     shown = ", ".join(values[:8])
     return (
