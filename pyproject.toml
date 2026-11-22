@@ -1,7 +1,7 @@
 [project]
 name = "aha-local-llm"
 version = "0.2.0"
-description = "Aha! Your private agent: runs on your own computer; you talk to it from the Aha! app, end-to-end encrypted"
+description = "aha! A Truly Private Personal Assistant: runs on your own computer; you talk to it from the Aha! app, end-to-end encrypted"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
 dependencies = [

@@ -610,7 +610,9 @@ def cmd_run(a) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser(prog="aha", description="Aha! Your private agent, on your own computer.")
+    p = argparse.ArgumentParser(
+        prog="aha", description="aha! A Truly Private Personal Assistant, on your own computer."
+    )
     sub = p.add_subparsers(dest="command", required=True)
 
     s = sub.add_parser("init", help="create the configuration and pin the gateway's key")

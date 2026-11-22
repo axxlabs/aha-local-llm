@@ -15,11 +15,14 @@ EDIT_ONE = "Send the corrected value."
 EDIT_MANY = "Send the corrected fields, one per line, like:\n`{example}`"
 EDIT_UNCLEAR = "I couldn't match that to the fields. Send lines like `2: new value`, or tap Approve or Decline."
 
-WELCOME = "Hi! I'm **Aha!**, your private agent, running on your own computer. Ask me anything, or say **help**."
-HELP = """**Aha!** is your private agent, and it runs on your own computer. Ask me anything: I look things up, \
-read web pages, book things on websites (signing in when you want: you type your password on a card, and I \
-never see it), search and write your email (once it's connected), remind you of things, do tasks on a schedule \
-or keep an eye on something for you, and remember what matters about you.
+WELCOME = (
+    "Hi! I'm **Aha!**, a truly private personal assistant, running on your own computer. "
+    "Ask me anything, or say **help**."
+)
+HELP = """**Aha!** is a truly private personal assistant, and it runs on your own computer. Ask me anything: \
+I look things up, read web pages, book things on websites (signing in when you want: you type your password on \
+a card, and I never see it), search and write your email (once it's connected), remind you of things, do \
+tasks on a schedule or keep an eye on something for you, and remember what matters about you.
 
 Before anything leaves this computer with your words or data in it (typing into a website, an email) and before \
 I save something about you, I'll show it to you with buttons: **Approve**, **Edit** or **Decline**.
