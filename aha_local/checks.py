@@ -98,6 +98,10 @@ class Draft:
     answer: str
     called: set[str]  # tools that ran without error in this task
     can_sign_in: bool
+    sign_in_page: str = ""  # the site, when the last page the model saw is a sign-in form
+    sign_in_offered: bool = False  # a sign-in card was shown in this task
+    challenge_page: str = ""  # the site, when the last page the model saw shows an "are you human?" check
+    human_check_offered: bool = False  # a check card was shown in this task
 
 
 @dataclass(frozen=True)
@@ -236,6 +240,32 @@ CHECK_RETRY = retry(
 )
 
 
+def ignores_sign_in_page(d: Draft) -> bool:
+    """The task ends on a sign-in page and no sign-in card was shown: the model didn't notice, or gave up."""
+    return d.can_sign_in and bool(d.sign_in_page) and not d.sign_in_offered
+
+
+def ignores_challenge(d: Draft) -> bool:
+    """The task ends on a page with an "are you human?" check and no check card was shown."""
+    return d.can_sign_in and bool(d.challenge_page) and not d.human_check_offered
+
+
+CHALLENGE_RETRY = retry(
+    'The last page you saw shows an "are you human?" check, and you haven\'t shown the user a check card, so '
+    "they can't do it. Call browser_human_check now: they see the page on a card and tap where to click. Only for "
+    'a "press and hold" check, which the card can\'t do, tell them so and give the link.'
+)
+
+
+def sign_in_page_retry(site: str) -> str:
+    return retry(
+        f"The last page you saw is a sign-in form on {site}, and you haven't shown the user a sign-in card, so they "
+        "aren't signed in there now (an earlier session can end). If the task needs their account, call "
+        "browser_sign_in with the references of that page's sign-in fields (take a snapshot first if needed). If "
+        "it doesn't, answer without saying they're signed in."
+    )
+
+
 SCREENSHOT_REQUEST = re.compile(
     r"\bscreen ?shot|\b(?:show|send) me (?:the|a|that|this) (?:page|site|website|screen|picture)\b|"
     r"\blet me see (?:it|the page|the site)\b",
@@ -295,6 +325,18 @@ CLAIM_CHECKS = (
         lambda d: unbacked_check_claim(d.answer, d.called),
         CHECK_RETRY,
         "draft answer pointed at a check card no tool showed; asking the model to call it",
+    ),
+    Check(
+        "challenge",
+        ignores_challenge,
+        CHALLENGE_RETRY,
+        'draft answer left the person on an "are you human?" check without a check card; asking for one',
+    ),
+    Check(
+        "sign_in_page",
+        ignores_sign_in_page,
+        "",  # depends on the site: sign_in_page_retry
+        "draft answer left the person on a sign-in page without a sign-in card; asking the model to show one",
     ),
     Check(
         "screenshot",

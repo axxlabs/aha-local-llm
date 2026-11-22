@@ -14,8 +14,8 @@ from aha_local.tools.registry import TaskState
 
 
 @pytest.fixture
-def ctx(config):
-    return SimpleNamespace(config=config, task=TaskState())
+def ctx(config, accounts):
+    return SimpleNamespace(config=config, task=TaskState(), account=accounts.create("Test Person"))
 
 
 async def test_fetch_blocks_private_addresses(ctx):
@@ -81,7 +81,7 @@ class FakeBrowser:
 
 
 def browser_ctx(ctx, status):
-    return SimpleNamespace(config=ctx.config, browser=FakeBrowser(status), task=TaskState())
+    return SimpleNamespace(config=ctx.config, browser=FakeBrowser(status), task=TaskState(), account=ctx.account)
 
 
 async def test_fetch_says_what_it_is():

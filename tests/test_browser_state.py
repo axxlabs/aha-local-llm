@@ -241,3 +241,77 @@ async def test_an_approved_form_is_typed_in_its_own_order(setup, llm, chat, acco
     await agent.approval_reply(fe, card.card["id"], "approve")
     await settle(agent)
     assert fake.contexts[-1].order == ["typed e1", "filled e9", "typed e3"]
+
+
+def test_sign_in_forms_are_spotted_from_the_page():
+    from aha_local.tools.browser import is_sign_in_form
+
+    password = '- textbox "Password" [ref=e2]'
+    email_step = (
+        '- heading "Sign in" [level=1] [ref=e1]\n- textbox "Email address" [ref=e2]\n- button "Continue" [ref=e3]'
+    )
+    assert is_sign_in_form(password, "https://www.waitrose.com/ecom/shop")
+    assert is_sign_in_form(email_step, "https://www.waitrose.com/ecom/shop")
+    assert is_sign_in_form('- textbox "Email" [ref=e1]', "https://shop.example/account/login?next=/")
+    newsletter = '- textbox "Email address" [ref=e7]\n- button "Subscribe" [ref=e8]'
+    assert not is_sign_in_form(newsletter, "https://shop.example/")  # an email field alone isn't a sign-in form
+    assert not is_sign_in_form('- link "Sign in" [ref=e1]\n- button "Add to trolley" [ref=e2]', "https://shop.example/")
+
+
+async def test_a_remembered_session_that_ended_is_said_plainly_and_not_glossed_over(setup, llm, chat, accounts):
+    """Seen with the real model (2026-11-22): Waitrose was remembered, its session had ended, the model assumed not."""
+    agent, _, _ = setup
+    fe = person(accounts)
+    cookie = {"name": "sid", "value": "old", "domain": ".waitrose.com", "path": "/"}
+    signins.save(
+        fe,
+        {
+            **signins.empty(),
+            "state": {"cookies": [cookie], "origins": []},
+            "signed_in": {"waitrose.com": {"site": "waitrose.com"}},
+        },
+    )
+    llm.call("browser_navigate", url="https://www.waitrose.com/login")  # the fake page has a password field
+    llm.answer("You're signed in to Waitrose, I've added the toilet paper.")  # glosses over the sign-in page
+    llm.call("browser_sign_in", username_target="e1", password_target="e2")
+    await agent.inbound(fe, "add toilet paper to my Waitrose trolley")
+    card = await chat.next()
+    assert card.card and card.card["kind"] == "signin"
+    sent_back = json.dumps(llm.requests[1]["messages"])
+    assert "that session has ended: they are NOT signed in there now" in sent_back  # said in the tool result
+    assert "The last page you saw is a sign-in form on waitrose.com" in json.dumps(llm.requests[2]["messages"])
+    await agent.approval_reply(fe, card.card["id"], "decline")
+    await settle(agent)
+    assert chat.texts()[-1] != "You're signed in to Waitrose, I've added the toilet paper."
+
+
+async def test_a_human_check_on_the_page_is_said_and_a_card_follows(setup, llm, chat, accounts):
+    """Seen with the real model (2026-11-22): it said a captcha came up but never showed the check card."""
+    agent, _, _ = setup
+    fe = person(accounts)
+    llm.call("browser_navigate", url="https://tickets.example/queue")  # HTTP 403 with a reCAPTCHA box
+    llm.answer("The site is showing a CAPTCHA, so I couldn't get in.")  # tells, but shows no card
+    llm.call("browser_human_check")
+    await agent.inbound(fe, "get me in the ticket queue")
+    card = (await chat.next()).card
+    assert card and card["kind"] == "check"
+    first = tool_results(llm)[0]
+    assert first.startswith('[Aha!: this page shows an "are you human?" check') and "can't tell why" not in first
+    assert "you haven't shown the user a check card" in json.dumps(llm.requests[2]["messages"])
+    await agent.approval_reply(fe, card["id"], "decline")
+    await settle(agent)
+
+
+def test_human_checks_are_spotted_from_the_page():
+    from aha_local.tools.browser import CHALLENGE
+
+    for page in (
+        '- checkbox "I\'m not a robot" [ref=f1e2]',
+        '- iframe "reCAPTCHA" [ref=e4]',
+        '- checkbox "Verify you are human" [ref=f2e1]',
+        "- text: Press & Hold to confirm you are a human (and not a bot).",
+        '- heading "Our systems have detected unusual traffic from your computer network" [level=1]',
+    ):
+        assert CHALLENGE.search(page), page
+    for page in ('- button "Add to trolley"', '- link "Robots and drones" [ref=e9]', '- heading "Human resources"'):
+        assert not CHALLENGE.search(page), page

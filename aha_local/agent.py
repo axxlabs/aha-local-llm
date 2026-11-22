@@ -360,13 +360,23 @@ class Agent:
             reply = await self.llm.chat(msgs, tools)
             log.info("model call: %d prompt tokens, %d cached", reply.prompt_tokens, reply.cached_tokens)
             if not reply.tool_calls:
-                draft = checks.Draft(text, reply.content or "", called, can_sign_in)
+                draft = checks.Draft(
+                    text,
+                    reply.content or "",
+                    called,
+                    can_sign_in,
+                    ctx.task.sign_in_page,
+                    ctx.task.sign_in_offered,
+                    ctx.task.challenge_page,
+                    ctx.task.human_check_offered,
+                )
                 failed = next((c for c in checks.CLAIM_CHECKS if c.name not in retried and c.failed(draft)), None)
                 if failed:
                     retried.add(failed.name)
                     log.info(failed.log)
                     task.append({"role": "assistant", "content": draft.answer})
-                    task.append({"role": "user", "content": failed.retry})
+                    retry = failed.retry or checks.sign_in_page_retry(draft.sign_in_page)
+                    task.append({"role": "user", "content": retry})
                     continue
                 if has_photo:
                     # Numbers in the person's photo can't be matched as text: no retry, no warning, and the

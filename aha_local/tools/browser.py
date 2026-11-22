@@ -43,6 +43,21 @@ log = logging.getLogger("aha.browser")
 MAX_SNAPSHOT_CHARS = 30_000
 HTTP_STATUS = re.compile(r"^- HTTP status: (\d{3})", re.M)
 PAGE_URL = re.compile(r"^- Page URL: (\S+)", re.M)
+# A sign-in form on the page, from the page's own snapshot (SPEC §3.4 "Signing in"): a password field, or an email
+# or username field with a "Sign in" / "Log in" button or heading, or on a sign-in address.
+PASSWORD_FIELD = re.compile(
+    r'^\s*- textbox "[^"]*(?:password|passcode|passwort|mot de passe|senha|contrase)', re.I | re.M
+)
+USER_FIELD = re.compile(r'^\s*- textbox "[^"]*(?:e-?mail|username|user name|user id|login)', re.I | re.M)
+SIGN_IN_CONTROL = re.compile(r'^\s*- (?:button|heading)\b[^\n]*"[^"]*\b(?:sign ?in|log ?in|login)\b', re.I | re.M)
+SIGN_IN_ADDRESS = re.compile(r"/(?:log-?in|sign-?in|signin|sign_in|auth(?:enticate)?)(?:[/?#.]|$)", re.I)
+# An "are you human?" check on the page (SPEC §3.4 "When a site still checks"), from the page's own snapshot.
+CHALLENGE = re.compile(
+    r"i['’]?m not a robot|verify (?:that )?(?:you are|you['’]re) (?:a )?human|are you (?:a )?(?:robot|human)|"
+    r"press (?:&|and) hold|captcha|unusual traffic|security challenge|checking your browser|"
+    r"checking if the site connection is secure|confirm you are (?:a )?human",
+    re.I,
+)
 CANT_TELL = (
     "From here you can't tell why: tell the person you couldn't load the page and give the link; "
     "don't guess at a cause (region, IP, outage) the page didn't state."
@@ -335,10 +350,68 @@ async def call_with_snapshot(session, name: str, args: dict, ctx: ToolContext) -
             result.text = SNAPSHOT_LINK.sub(
                 "### Snapshot\n" + snap.text.split("### Snapshot", 1)[-1].strip(), result.text
             )
+    annotate(ctx, result)
+    return result
+
+
+def annotate(ctx: ToolContext, result: ToolResult) -> None:
+    """What the harness tells the model about a page it opened, in code (SPEC §3.4, §5.6)."""
     if m := YAML_BLOCK.search(result.text):
         ctx.task.last_snapshot = m.group(1)
+        note_sign_in_form(ctx, result, m.group(1))
+        note_challenge(ctx, result, m.group(1))
     note_page(ctx, result.text)
-    return result
+
+
+def note_challenge(ctx: ToolContext, result: ToolResult, snapshot: str) -> None:
+    """An "are you human?" check on the page: say so, and that the person does it on a card (SPEC §3.4)."""
+    m = PAGE_URL.search(result.text)
+    host = urlsplit(m.group(1)).hostname or "" if m else ""
+    if not host or not CHALLENGE.search(snapshot):
+        ctx.task.challenge_page = ""
+        return
+    ctx.task.challenge_page = site_of(host)
+    # Challenge pages often answer 403 or 429: that's the check, not a page that won't load.
+    result.text = re.sub(r"^The site answered HTTP \d{3}\. " + re.escape(CANT_TELL) + "\n", "", result.text)
+    result.error = False
+    result.text = (
+        '[Aha!: this page shows an "are you human?" check. If one click on an "I\'m not a robot" box doesn\'t '
+        "pass it (or there's no box), call browser_human_check now: the user does it on a card. Don't just tell "
+        "them about it, and never solve a picture puzzle yourself.]\n\n" + result.text
+    )
+
+
+def is_sign_in_form(snapshot: str, url: str) -> bool:
+    if PASSWORD_FIELD.search(snapshot):
+        return True
+    return bool(USER_FIELD.search(snapshot)) and bool(
+        SIGN_IN_CONTROL.search(snapshot) or SIGN_IN_ADDRESS.search(urlsplit(url).path)
+    )
+
+
+def note_sign_in_form(ctx: ToolContext, result: ToolResult, snapshot: str) -> None:
+    """Say in code, not leave to the model, that the page asks the person to sign in (SPEC §3.4 "Signing in").
+
+    A session the browser remembered can have ended: the page is what counts, not an earlier sign-in."""
+    m = PAGE_URL.search(result.text)
+    url = m.group(1) if m else ""
+    host = urlsplit(url).hostname or ""
+    if not host or not is_sign_in_form(snapshot, url):
+        ctx.task.sign_in_page = ""
+        return
+    site = site_of(host)
+    ctx.task.sign_in_page = site
+    if ctx.task.signed_in_sites is None:
+        ctx.task.signed_in_sites = signins.signed_in_sites(ctx.account)
+    before = (
+        f"They signed in on {site} before, but that session has ended: they are NOT signed in there now. "
+        if site in ctx.task.signed_in_sites
+        else ""
+    )
+    result.text = (
+        f"[Aha!: this page is a sign-in form on {site}. {before}If the task needs their account, call "
+        "browser_sign_in now with this page's field references; don't tell them they're signed in.]\n\n" + result.text
+    )
 
 
 def note_page(ctx: ToolContext, text: str) -> None:
@@ -554,6 +627,7 @@ async def browser_sign_in(args: dict, ctx: ToolContext) -> ToolResult:
     first = len(fields)
     for (_, kind, default), label in zip(targets, labels, strict=True):
         fields.append(Field(label or default, "", kind))
+    ctx.task.sign_in_offered = True
     decision = await ctx.approvals.ask(ctx.account, "signin", f"Sign in to {shown}?", fields, await screenshot(session))
     if not decision.approved:
         if decision.reason == "expired":
@@ -647,6 +721,7 @@ async def browser_human_check(args: dict, ctx: ToolContext) -> ToolResult:
     if why or not site:
         return ToolResult(f"Blocked by aha's safety policy: {why}.", error=True)
     shown = (urlsplit(url).hostname or site).lower().removeprefix("www.")
+    ctx.task.human_check_offered = True
     taps_done = 0
     for _ in range(CHECK_ROUNDS):
         shot = await screenshot(session)

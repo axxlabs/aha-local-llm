@@ -108,10 +108,14 @@ async def read_with_browser(url: str, ctx: ToolContext, why: str) -> ToolResult:
     """Many sites block plain HTTP clients but not a real browser. The URL was already checked."""
     if ctx.browser is None:
         return ToolResult(f"Couldn't read {url}: {why}. Try the browser tools.", error=True)
-    from .browser import CANT_TELL, http_status, to_result
+    from .browser import CANT_TELL, annotate, http_status, to_result
 
     result = to_result(await ctx.browser.call("browser_navigate", {"url": url}))
+    annotate(ctx, result)  # a sign-in form or a human check on it is said here too (SPEC §3.4)
     status = http_status(result.text)
+    if ctx.task.challenge_page:  # an "are you human?" check: the person can do it on a card (SPEC §3.4)
+        ctx.task.approved_sites.add(check_url(url)[0] or "")
+        return result
     if result.error or (status and status >= 400):
         also = f"answered HTTP {status} to the browser too" if status else "and the browser failed too"
         return ToolResult(f"Couldn't read {url}: {why}, {also}. {CANT_TELL}", error=True)

@@ -93,12 +93,24 @@ class FakeContext:
         return text_result('### Result\n"ok"' + echo)
 
     def snapshot(self) -> str:
+        if "login" in self.url or "signin" in self.url:
+            return (
+                f"### Page\n- Page URL: {self.url}\n### Snapshot\n```yaml\n"
+                f'- textbox "Email address" [ref=e1]: {self.fields.get("e1", "")}\n'
+                f'- textbox "Password" [ref=e2]: {self.fields.get("e2", "")}\n'
+                f'- textbox "Verification code" [ref=e3]: {self.fields.get("e3", "")}\n'
+                '- button "Sign in" [ref=e4]\n```'
+            )
+        if "queue" in self.url:  # an "are you human?" check
+            return (
+                f"### Page\n- Page URL: {self.url}\n- HTTP status: 403\n### Snapshot\n```yaml\n"
+                '- iframe [ref=e1]:\n  - checkbox "I\'m not a robot" [ref=f1e2]\n```'
+            )
         return (
             f"### Page\n- Page URL: {self.url}\n### Snapshot\n```yaml\n"
-            f'- textbox "Email address" [ref=e1]: {self.fields.get("e1", "")}\n'
-            f'- textbox "Password" [ref=e2]: {self.fields.get("e2", "")}\n'
-            f'- textbox "Verification code" [ref=e3]: {self.fields.get("e3", "")}\n'
-            '- button "Sign in" [ref=e4]\n```'
+            f'- textbox "Your email" [ref=e1]: {self.fields.get("e1", "")}\n'
+            f'- textbox "Postcode" [ref=e3]: {self.fields.get("e3", "")}\n'
+            '- button "Continue" [ref=e4]\n```'
         )
 
     async def call_tool(self, name: str, args: dict) -> mt.CallToolResult:

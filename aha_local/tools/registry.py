@@ -42,6 +42,10 @@ class TaskState:
     # then on a site not opened yet in the task is a card (SPEC §5.6).
     signed_in_sites: set[str] | None = None
     on_signed_in: bool = False
+    sign_in_page: str = ""  # the site, when the latest page is a sign-in form (SPEC §3.4 "Signing in")
+    sign_in_offered: bool = False  # a sign-in card was shown in this task (whatever the answer)
+    challenge_page: str = ""  # the site, when the latest page shows an "are you human?" check
+    human_check_offered: bool = False  # a check card was shown in this task
 
 
 @dataclass
