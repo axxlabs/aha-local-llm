@@ -316,7 +316,8 @@ class Agent:
         last = ""
         retried = False
         memory_retried = False
-        signin_retried = schedule_retried = screenshot_retried = secret_retried = False
+        signin_retried = schedule_retried = screenshot_retried = secret_retried = refusal_retried = False
+        can_sign_in = "browser_sign_in" in self.registry.names()
         called: set[str] = set()  # tools that ran without error in this task
         # Where numbers in the answer may come from: what the person said or saved, earlier answers, and pages
         # opened in this task. Search snippets don't count (SPEC §3.5).
@@ -349,6 +350,12 @@ class Agent:
                     log.info("draft answer pointed at a sign-in card no tool showed; asking the model to call it")
                     task.append({"role": "assistant", "content": reply.content or ""})
                     task.append({"role": "user", "content": checks.SIGNIN_RETRY})
+                    continue
+                if not refusal_retried and checks.refuses_sign_in(reply.content or "", called, can_sign_in):
+                    refusal_retried = True
+                    log.info("draft answer refused to sign in to a site without trying the sign-in card")
+                    task.append({"role": "assistant", "content": reply.content or ""})
+                    task.append({"role": "user", "content": checks.SIGNIN_REFUSAL_RETRY})
                     continue
                 if not secret_retried and checks.asks_for_secret(reply.content or ""):
                     secret_retried = True

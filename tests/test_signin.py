@@ -310,3 +310,43 @@ def test_asking_for_a_password_in_the_chat_is_caught():
         "What time should I book?",
     ):
         assert not checks.asks_for_secret(fine), fine
+
+
+WAITROSE_REFUSAL = (
+    "I can navigate to the Waitrose website and help you find toilet paper options, but I can't log into your "
+    "personal account or add items to your cart. That would require your login credentials, which I shouldn't ask for."
+)
+
+
+async def test_refusing_to_sign_in_without_trying_goes_back_once(setup, llm, chat, accounts):
+    """Seen with the real model (2026-11-22): it refused before opening the site."""
+    agent, _, _ = setup
+    fe = person(accounts)
+    llm.answer(WAITROSE_REFUSAL)
+    llm.call("browser_navigate", url="https://www.waitrose.com/login")
+    llm.call("browser_sign_in", username_target="e1", password_target="e2")
+    await agent.inbound(fe, "can you log into waitrose website and add toilet papers to the cart?")
+    card = await chat.next()
+    assert card.card and card.card["kind"] == "signin"
+    assert WAITROSE_REFUSAL not in chat.texts()
+    assert "you can't sign in or use the person's account" in json.dumps(llm.requests[1]["messages"])
+    await agent.approval_reply(fe, card.card["id"], "decline")
+    await settle(agent)
+
+
+def test_what_counts_as_refusing_to_sign_in():
+    for bad in (
+        WAITROSE_REFUSAL,
+        "Sorry, I'm unable to sign in to your Tesco account.",
+        "I cannot add the toilet roll to your basket.",
+        "Logging in needs your password, so I can't access your account.",
+    ):
+        assert checks.refuses_sign_in(bad, set(), True), bad
+    assert not checks.refuses_sign_in(WAITROSE_REFUSAL, {"browser_sign_in"}, True)  # it tried: an honest report
+    assert not checks.refuses_sign_in(WAITROSE_REFUSAL, set(), False)  # no browser on this computer
+    for fine in (
+        "I couldn't find a sign-in form on that page.",
+        "Added 2 packs of toilet paper to your basket.",
+        "The site can't be opened right now.",
+    ):
+        assert not checks.refuses_sign_in(fine, set(), True), fine

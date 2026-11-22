@@ -163,6 +163,31 @@ SECRET_RETRY = (
     "your draft, and never mention this check."
 )
 
+SIGNIN_REFUSAL = re.compile(
+    # "I can't log into your account", "I'm unable to add items to your cart", "that would require your login"
+    r"\b(?:can'?t|cannot|can not|unable to|not able to|won'?t be able to)\b[^.?!\n]{0,40}"
+    r"\b(?:log ?(?:in|into|on)|sign ?(?:in|into)|access your|"
+    r"add (?:\w+ ){0,3}to (?:your |the )?(?:cart|basket|trolley))|"
+    r"\b(?:require|need)s? your (?:login|credentials|password|account details)\b",
+    re.I,
+)
+
+
+def refuses_sign_in(answer: str, tools_called: set[str], can_sign_in: bool) -> bool:
+    """The answer refuses to sign in or use the person's account on a site, without having tried the sign-in card."""
+    return can_sign_in and "browser_sign_in" not in tools_called and bool(SIGNIN_REFUSAL.search(answer))
+
+
+SIGNIN_REFUSAL_RETRY = (
+    "[aha check] Your draft says you can't sign in or use the person's account on the site. You can: open the "
+    "site, go to its sign-in page, take a snapshot and call browser_sign_in with the references of the sign-in "
+    "fields. The person types their details on the card and you never see them, so there's nothing to refuse. "
+    "Then carry on with the task (their basket, orders, bookings). Only if the site can't be opened or has no "
+    "sign-in form, say that plainly. Write your reply to the person from scratch: they haven't seen your draft, "
+    "and never mention this check."
+)
+
+
 SCREENSHOT_REQUEST = re.compile(
     r"\bscreen ?shot|\b(?:show|send) me (?:the|a|that|this) (?:page|site|website|screen|picture)\b|"
     r"\blet me see (?:it|the page|the site)\b",
