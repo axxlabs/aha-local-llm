@@ -1,6 +1,6 @@
 # aha-local-llm
 
-**Aha! Your private agent.** It runs on your own computer, and you talk to it from the
+**aha! A Truly Private Personal Assistant.** It runs on your own computer, and you talk to it from the
 [Aha! app](https://github.com/axxlabs/aha-app) on your phone or laptop. Every message is **end-to-end
 encrypted** between your device and your computer (hybrid post-quantum pairing, then a Double Ratchet). The
 model, your memories, your mail tokens and your conversation history stay on your computer. Before anything
