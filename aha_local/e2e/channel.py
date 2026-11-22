@@ -315,7 +315,10 @@ class Channel:
             if after == 0 and isinstance(days, int) and 0 <= days < self.history_days:
                 since = time.time() - days * 86400
             items = fit(account.items(after=after, since=since, limit=SYNC_LIMIT))
-            await reply({"t": "sync", "items": items, "last": account.seq, "start": account.history_start()})
+            working = self.agent is not None and self.agent.owes_reply(account)  # it may have missed `typing`
+            await reply(
+                {"t": "sync", "items": items, "last": account.seq, "start": account.history_start(), "working": working}
+            )
         elif t == "history_request":
             before = msg.get("before")
             limit = msg.get("limit")

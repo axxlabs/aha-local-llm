@@ -79,6 +79,8 @@ class FakeContext:
                 self.cookies.append(
                     {"name": "sid", "value": "s3ss10n", "domain": ".waitrose.com", "path": "/", "expires": -1}
                 )
+        elif code == signins.GET_URL:
+            return text_result("### Result\n" + json.dumps(self.url) + echo)
         elif "innerWidth" in code:
             return text_result("### Result\n" + json.dumps(json.dumps([1280, 813])) + echo)
         elif "page.mouse.down" in code:
@@ -93,6 +95,8 @@ class FakeContext:
         return text_result('### Result\n"ok"' + echo)
 
     def snapshot(self) -> str:
+        if self.url == "about:blank":  # a new window
+            return "### Page\n- Page URL: about:blank\n### Snapshot\n```yaml\n\n```"
         if "login" in self.url or "signin" in self.url:
             return (
                 f"### Page\n- Page URL: {self.url}\n### Snapshot\n```yaml\n"

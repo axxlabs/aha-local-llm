@@ -102,6 +102,7 @@ class Draft:
     sign_in_offered: bool = False  # a sign-in card was shown in this task
     challenge_page: str = ""  # the site, when the last page the model saw shows an "are you human?" check
     human_check_offered: bool = False  # a check card was shown in this task
+    blank_page: bool = False  # the last page the model saw is a new window's blank page (SPEC §3.4)
 
 
 @dataclass(frozen=True)
@@ -122,12 +123,82 @@ MEMORY_CLAIM = re.compile(
 MEMORY_WRITE_TOOLS = {"memory_add", "memory_update", "memory_delete"}
 
 
+# What does something on a site. Snapshots, navigating, scrolling and screenshots only look.
+BROWSER_ACTION_TOOLS = {
+    "browser_click",
+    "browser_type",
+    "browser_fill_form",
+    "browser_select_option",
+    "browser_press_key",
+    "browser_drag",
+    "browser_file_upload",
+    "browser_handle_dialog",
+    "browser_sign_in",
+    "browser_human_check",
+}
+
+
 def unbacked_memory_claim(asked: str, answer: str, tools_called: set[str]) -> bool:
     """The person asked about their memories, the answer says it's done, and no memory tool ran in this task.
 
-    Memories change only through the tools (and the person's approval), so such an answer is untrue.
+    Memories change only through the tools (and the person's approval), so such an answer is untrue. Not when a
+    browser action ran: "remove the toilet paper" then "I've removed it" is about a trolley, not a memory.
     """
-    return bool(MEMORY_REQUEST.search(asked) and MEMORY_CLAIM.search(answer) and not tools_called & MEMORY_WRITE_TOOLS)
+    return bool(
+        MEMORY_REQUEST.search(asked)
+        and MEMORY_CLAIM.search(answer)
+        and not tools_called & (MEMORY_WRITE_TOOLS | BROWSER_ACTION_TOOLS)
+    )
+
+
+SITE_DONE = re.compile(
+    # "added back to your trolley", "I've removed the tissue", "Done — booked", "your order is placed"
+    r"\b(?:added|removed|put (?:it |them )?back|placed|booked|ordered|cancell?ed|submitted|bought|reserved|"
+    r"emptied|swapped|replaced)\b",
+    re.I,
+)
+SITE_THING = re.compile(
+    r"\b(?:trolley|basket|cart|checkout|order|booking|reservation|appointment|slot|delivery|wish ?list|"
+    r"favourites|favorites|form)\b",
+    re.I,
+)
+
+
+SITE_ASK = re.compile(
+    r"\b(?:add|remove|put|take|book|order|cancel|buy|delete|swap|replace|empty|reserve|submit|check ?out|"
+    r"change|undo|get)\b",
+    re.I,
+)
+
+
+def unbacked_site_claim(asked: str, answer: str, tools_called: set[str]) -> bool:
+    """The person asked for a change on a site, the answer says it's done, and no browser action ran in this task.
+
+    Only for a request: reading the trolley back ("your slot is booked for Tuesday") isn't a claim of an action."""
+    return (
+        bool(SITE_ASK.search(asked) and SITE_DONE.search(answer) and SITE_THING.search(answer))
+        and not tools_called & BROWSER_ACTION_TOOLS
+        and not tools_called & MEMORY_WRITE_TOOLS
+    )
+
+
+SITE_RETRY = retry(
+    "Your draft says something was done on a site, but no browser action (a click, typing, a form) ran in this "
+    "task, so nothing changed there. Earlier turns don't count: do it now in the browser (open the site again if "
+    "the page is blank, take a snapshot, click), then check the page shows it done. If you can't, say so plainly."
+)
+
+
+def on_blank_page(d: Draft) -> bool:
+    """The task ends on a new window's blank page: the model gave up instead of opening the site again."""
+    return d.blank_page
+
+
+BLANK_RETRY = retry(
+    "The last page you saw is the blank page of a new browser window. That's not a problem: the browser opens "
+    "blank after a while unused, with the user's cookies and sign-ins still in it. Open the site again with "
+    "browser_navigate and finish the task. Don't tell the user a session ended or ask them to check it themselves."
+)
 
 
 MEMORY_RETRY = retry(
@@ -290,6 +361,18 @@ SCREENSHOT_RETRY = retry(
 
 # In this order; each runs at most once per task.
 CLAIM_CHECKS = (
+    Check(
+        "site",
+        lambda d: unbacked_site_claim(d.asked, d.answer, d.called),
+        SITE_RETRY,
+        "draft answer claimed something was done on a site with no browser action; asking the model to do it",
+    ),
+    Check(
+        "blank",
+        on_blank_page,
+        BLANK_RETRY,
+        "draft answer ended on a new window's blank page; asking the model to open the site again",
+    ),
     Check(
         "memory",
         lambda d: unbacked_memory_claim(d.asked, d.answer, d.called),

@@ -30,6 +30,7 @@ MAX_STATE = 8 * 1024 * 1024  # bytes of JSON; larger is saved without IndexedDB,
 TIMEOUT = 30  # seconds for reading or writing the state in the browser
 GET_STATE = "async (page) => JSON.stringify(await page.context().storageState({ indexedDB: true }))"
 GET_STATE_LIGHT = "async (page) => JSON.stringify(await page.context().storageState())"
+GET_URL = "async (page) => page.url()"
 MIN_SECRET = 3  # shorter values aren't masked in results: they'd blank out ordinary text
 
 
@@ -77,6 +78,8 @@ def load(account: Account) -> dict:
     out["state"]["origins"] = [o for o in state.get("origins", []) if isinstance(o, dict)]
     out["signed_in"] = {h: e for h, e in (data.get("signed_in") or {}).items() if isinstance(e, dict)}
     out["saved"] = data.get("saved", 0)
+    if isinstance(data.get("page"), str):
+        out["page"] = data["page"]
     return out
 
 
@@ -116,6 +119,11 @@ def signed_in_sites(account: Account) -> set[str]:
     return {_entry_site(h, e) for h, e in load(account)["signed_in"].items()}
 
 
+def last_page(account: Account) -> str:
+    """The page open when the state was last saved: where a new, blank window picks up (SPEC §3.4)."""
+    return load(account).get("page", "")
+
+
 def sites(account: Account) -> list[dict]:
     """The sites the browser keeps data for, signed-in ones marked: [{"site", "signed_in"}], sorted."""
     data = load(account)
@@ -148,6 +156,8 @@ def forget(account: Account, site: str) -> bool:
         return False
     data["state"] = {"cookies": cookies, "origins": origins}
     data["signed_in"] = signed
+    if matches(_origin_host(data.get("page", "")), name):
+        data.pop("page")
     save(account, data)
     return True
 
@@ -217,6 +227,12 @@ async def capture(account: Account, session) -> None:
     data = load(account)
     data["state"] = await read_state(session)
     data["saved"] = int(time.time())
+    try:
+        url = _result(await session.call("browser_run_code_unsafe", {"code": GET_URL}, timeout=TIMEOUT))
+    except Exception:
+        url = ""
+    if isinstance(url, str) and url.startswith(("https://", "http://")):  # a blank page keeps the last one
+        data["page"] = url[:2000]
     save(account, data)
 
 

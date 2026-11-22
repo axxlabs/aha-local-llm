@@ -196,6 +196,10 @@ class Agent:
     def is_running(self, account: Account) -> bool:
         return account.address in self.running
 
+    def owes_reply(self, account: Account) -> bool:
+        """What "typing…" shows (SPEC §3.3): a task is running and isn't waiting for the person's approval."""
+        return self.is_running(account) and self.approvals.pending_for(account.address) is None
+
     def start_scheduled(self, account: Account, entry: dict, late: bool = False) -> None:
         """A scheduled task is due (SPEC §3.4): run it as this account, like a message from them."""
         account.transcript({"kind": "scheduled", "text": entry["text"]})
@@ -369,6 +373,7 @@ class Agent:
                     ctx.task.sign_in_offered,
                     ctx.task.challenge_page,
                     ctx.task.human_check_offered,
+                    ctx.task.blank_page,
                 )
                 failed = next((c for c in checks.CLAIM_CHECKS if c.name not in retried and c.failed(draft)), None)
                 if failed:

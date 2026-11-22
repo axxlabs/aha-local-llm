@@ -378,11 +378,29 @@ def remember_refs(ctx: ToolContext, text: str) -> None:
 def annotate(ctx: ToolContext, result: ToolResult) -> None:
     """What the harness tells the model about a page it opened, in code (SPEC §3.4, §5.6)."""
     remember_refs(ctx, result.text)
+    note_blank(ctx, result)
     if m := YAML_BLOCK.search(result.text):
         ctx.task.last_snapshot = m.group(1)
         note_sign_in_form(ctx, result, m.group(1))
         note_challenge(ctx, result, m.group(1))
     note_page(ctx, result.text)
+
+
+def note_blank(ctx: ToolContext, result: ToolResult) -> None:
+    """A new window's blank page: nothing was lost, open the site again (SPEC §3.4 "A new window starts blank")."""
+    m = PAGE_URL.search(result.text)
+    if not m:
+        return
+    ctx.task.blank_page = m.group(1) == "about:blank"
+    if not ctx.task.blank_page:
+        return
+    last = signins.last_page(ctx.account) if ctx.account is not None else ""
+    where = f" The last page open was {last}." if last else ""
+    result.text = (
+        "[Aha!: this is a new browser window: the browser closes when it isn't used for a while and opens again "
+        "blank. It still has the user's cookies and sign-ins, so nothing was lost and no session ended because of "
+        f"it. Open the site again with browser_navigate and carry on.{where}]\n\n" + result.text
+    )
 
 
 def note_challenge(ctx: ToolContext, result: ToolResult, snapshot: str) -> None:

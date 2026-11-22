@@ -388,3 +388,50 @@ async def test_password_fields_are_only_ever_filled_through_the_sign_in_card(set
     assert not any(m.card for m in chat.sent)
     results = tool_results(llm)
     assert all("is a sign-in field" in r and "browser_sign_in" in r for r in results[1:3])
+
+
+async def test_a_new_windows_blank_page_is_said_and_the_last_page_given(setup, llm, chat, accounts):
+    """Seen: after the browser closed for being idle, the model saw about:blank, said "the session timed out" and
+    told the person to check the site themselves. The state was all there."""
+    agent, pool, _ = setup
+    fe = person(accounts)
+    llm.call("browser_navigate", url="https://www.shop.example/trolley?visit=1")
+    llm.answer("Opened.")
+    await agent.inbound(fe, "open my trolley")
+    await settle(agent)
+    assert signins.last_page(fe) == "https://www.shop.example/trolley?visit=1"
+    await pool.close(fe.id)  # idle: a blank page is never saved as the last page
+    assert signins.last_page(fe) == "https://www.shop.example/trolley?visit=1"
+
+    n = len(llm.requests)
+    llm.call("browser_snapshot")
+    llm.answer("The session timed out; please check the site yourself.")
+    llm.call("browser_navigate", url="https://www.shop.example/trolley")
+    llm.answer("Your trolley has the rice in it.")
+    await agent.inbound(fe, "remove the toilet paper")
+    await settle(agent)
+    results = [m for m in llm.requests[n + 1]["messages"] if m.get("role") == "tool"]
+    assert "new browser window" in results[-1]["content"]
+    assert "https://www.shop.example/trolley?visit=1" in results[-1]["content"]
+    retry = llm.requests[n + 2]["messages"][-1]["content"]
+    assert retry.startswith("[aha check]") and "blank page of a new browser window" in retry
+    assert chat.texts()[-1] == "Your trolley has the rice in it."
+
+    assert signins.forget(fe, "shop.example") and signins.last_page(fe) == ""
+
+
+def test_a_site_action_claimed_without_a_browser_action_is_caught():
+    """Seen: "add it back" → "Done, added back to your trolley" with no tool call at all."""
+    claim = "Done — the bathroom tissue has been added back to your trolley."
+    draft = checks.Draft("err. add it back", claim, set(), True)
+    failed = next(c for c in checks.CLAIM_CHECKS if c.failed(draft))
+    assert failed.name == "site"
+    # Looking isn't doing.
+    looked = checks.Draft("add it back", claim, {"browser_navigate", "browser_snapshot"}, True)
+    assert next(c for c in checks.CLAIM_CHECKS if c.failed(looked)).name == "site"
+    # Done with a click: fine, and "remove" with "I've removed" isn't taken for a memory then.
+    clicked = checks.Draft("remove the toilet paper", "I've removed it from your trolley.", {"browser_click"}, True)
+    assert not any(c.failed(clicked) for c in checks.CLAIM_CHECKS)
+    # Reading the trolley back isn't a claim of an action.
+    read = checks.Draft("read my trolley to me", "Your delivery slot is booked for Tuesday.", set(), True)
+    assert not any(c.failed(read) for c in checks.CLAIM_CHECKS)

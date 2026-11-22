@@ -26,6 +26,10 @@ class FakeAgent:
         self.photos: list = []
         self.replies: list[tuple] = []
         self.stopped = 0
+        self.working = False
+
+    def owes_reply(self, account):
+        return self.working
 
     async def inbound(self, account, text, image=None):
         self.said.append(text)
@@ -198,6 +202,11 @@ async def test_sync_and_history(tmp_path):
     await phone.send({"t": "sync_request", "after": 3})
     sync = phone.inbox()[0]
     assert sync["t"] == "sync" and [x["seq"] for x in sync["items"]] == [4, 5, 6] and sync["last"] == 6
+    assert sync["working"] is False
+    # Seen: the phone was offline for the answer's `typing: false` and showed "working" under it for good.
+    rig.agent.working = True
+    await phone.send({"t": "sync_request", "after": 6})
+    assert phone.inbox()[0]["working"] is True
     await phone.send({"t": "history_request", "before": 4, "limit": 2})
     assert [x["seq"] for x in phone.inbox()[0]["items"]] == [2, 3]
     await phone.send({"t": "sync_request", "after": 0, "days": 0})
