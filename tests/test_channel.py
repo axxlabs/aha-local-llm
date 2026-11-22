@@ -34,8 +34,9 @@ class FakeAgent:
     async def approval_reply(self, account, approval_id, decision, values=None, note=""):
         self.replies.append((approval_id, decision, values, note))
 
-    async def stop(self, account):
+    async def stop(self, account, quiet=False):
         self.stopped += 1
+        self.quiet = quiet
 
 
 class Rig:

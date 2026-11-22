@@ -41,6 +41,7 @@ PAIR_LIFETIME = 600
 MAX_TEXT = 20_000
 SYNC_LIMIT = 500
 HISTORY_LIMIT = 50
+HISTORY_DAYS = (None, 365, 90, 30, 7, 1)  # how long the computer may keep a person's history (§3.8.1)
 CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 SendFrame = Callable[[Any], Awaitable[None]]
@@ -154,6 +155,16 @@ class Channel:
             elif notify:
                 await self._push(account, device, item)
         return item
+
+    async def to_devices(self, account: Account, message: dict) -> None:
+        """To every connected device of the account, outside the transcript (settings, not chat)."""
+        for device in list(account.devices.values()):
+            if device.dev in self.online:
+                await self._send(account, device, message)
+
+    async def history_changed(self, account: Account) -> None:
+        """History before `start` is gone (its length, or Clear history): connected devices delete it too."""
+        await self.to_devices(account, {"t": "history_start", "start": account.history_start()})
 
     async def _send(self, account: Account, device: Device, message: dict) -> bool:
         try:
@@ -273,7 +284,7 @@ class Channel:
             if after == 0 and isinstance(days, int) and 0 <= days < self.history_days:
                 since = time.time() - days * 86400
             items = account.items(after=after, since=since, limit=SYNC_LIMIT)
-            await reply({"t": "sync", "items": items, "last": account.seq})
+            await reply({"t": "sync", "items": items, "last": account.seq, "start": account.history_start()})
         elif t == "history_request":
             before = msg.get("before")
             limit = msg.get("limit")
@@ -281,6 +292,24 @@ class Channel:
                 return
             limit = limit if isinstance(limit, int) and 1 <= limit <= HISTORY_LIMIT else HISTORY_LIMIT
             await reply({"t": "history", "items": account.items(before=before, limit=limit)})
+        elif t == "history_settings_request":
+            await reply({"t": "history_settings", "days": account.history_days})
+        elif t == "history_settings_set":
+            days = msg.get("days")
+            if days not in HISTORY_DAYS:
+                await reply({"t": "error", "code": "bad_value"})
+                return
+            account.history_days = days
+            account.save()
+            await self.to_devices(account, {"t": "history_settings", "days": days})
+            if account.prune_history():
+                await self.history_changed(account)
+        elif t == "history_clear":
+            if self.agent is not None:
+                await self.agent.stop(account, quiet=True)
+            account.clear_history()
+            log.info("history cleared for an account")
+            await self.history_changed(account)
         elif t == "memories_request":
             items = [{"id": m.get("id"), "text": m.get("text")} for m in account.load_memory()]
             await reply({"t": "memories", "items": items})

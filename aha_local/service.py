@@ -26,6 +26,7 @@ from .tools.registry import Registry
 from .tunnel import Tunnel
 
 log = logging.getLogger("aha")
+PRUNE_EVERY = 3600
 
 
 class Service:
@@ -66,6 +67,17 @@ class Service:
         if acct is not None:
             await signins.restore(acct, session)
 
+    async def _prune_history(self) -> None:
+        """At start and every hour: each person's history is kept only as long as they chose (SPEC §3.8.1)."""
+        while True:
+            for account in self.accounts.all():
+                try:
+                    if account.prune_history():
+                        await self.channel.history_changed(account)
+                except Exception:
+                    log.exception("pruning history failed")
+            await asyncio.sleep(PRUNE_EVERY)
+
     async def _send_frame(self, frame) -> None:
         await self.tunnel.send(frame)
 
@@ -75,6 +87,7 @@ class Service:
         )
         self.browser.start()
         self.scheduler.start()
+        pruning = asyncio.create_task(self._prune_history())
         log.info("aha %s: %d tools (%d browser)", __version__, len(self.registry.names()), count)
         sock = self.config.data_dir / "agent.sock"
         sock.unlink(missing_ok=True)
@@ -84,6 +97,7 @@ class Service:
             async with admin:
                 await self.tunnel.run()
         finally:
+            pruning.cancel()
             await self.scheduler.stop()
             await self.browser.stop()
 

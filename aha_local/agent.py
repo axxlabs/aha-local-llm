@@ -178,13 +178,18 @@ class Agent:
         account.transcript({"kind": "approval_reply", "id": approval_id, "decision": decision})
         await self.approvals.answer(account, approval_id, decision, values, note)
 
-    async def stop(self, account: Account) -> None:
+    async def stop(self, account: Account, quiet: bool = False) -> None:
+        """Cancel the running task. `quiet`: say nothing, and wait for it to wind down (Clear history, §3.8.1)."""
         task = self.running.get(account.address)
         self.inbox.pop(account.address, None)
         if task is None:
-            await self.send(account, messages.NOTHING_TO_STOP)
+            if not quiet:
+                await self.send(account, messages.NOTHING_TO_STOP)
             return
         task.cancel()
+        if quiet:
+            await asyncio.wait({task}, timeout=10)
+            return
         await self.send(account, messages.STOPPED)
 
     # ---- tasks

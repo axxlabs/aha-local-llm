@@ -199,6 +199,20 @@ class Vault:
             offset += 4 + n
         return out
 
+    def rewrite(self, path: Path, records: list[bytes]) -> None:
+        """Replace a log with these records, sealed again at their new positions (SPEC §3.8.2)."""
+        if not records:
+            path.unlink(missing_ok=True)
+            self._logs.pop(path, None)
+            return
+        key = self._file_key(path)
+        blob = bytearray(LOG)
+        for i, data in enumerate(records):
+            record = self._seal(key, data, struct.pack(">Q", i))
+            blob += struct.pack(">I", len(record)) + record
+        self._replace_synced(path, bytes(blob))
+        self._logs[path] = (len(blob), len(records))
+
     def forget(self, path: Path) -> None:
         """Drop cached log state for files removed from disk (account deletion)."""
         for p in [p for p in self._logs if p == path or path in p.parents]:

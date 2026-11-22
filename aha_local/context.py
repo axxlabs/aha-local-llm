@@ -142,7 +142,14 @@ def turns_to_fold(conv: dict) -> list[dict]:
 
 def apply_fold(account: Account, folded: list[dict], summary: str) -> None:
     conv = account.load_context()
-    conv["turns"] = conv.get("turns", [])[len(folded) :]
+    turns = conv.get("turns", [])
+    if turns[: len(folded)] != folded:
+        return  # the history was cleared or cut while the summary was written (SPEC §3.8.1)
+    # The summary is as old as its oldest turn; one from before this was recorded stays undated, and a history
+    # length drops it (SPEC §3.8.1).
+    if not conv.get("summary") and folded and folded[0].get("ts"):
+        conv["summary_from"] = folded[0]["ts"]
+    conv["turns"] = turns[len(folded) :]
     conv["summary"] = summary.strip()[:SUMMARY_CHARS]
     account.save_context(conv)
 

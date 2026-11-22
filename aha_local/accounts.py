@@ -13,6 +13,7 @@ ratchet state.
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import hashlib
 import json
 import os
@@ -32,6 +33,30 @@ VERSION = 2
 def _log_line(entry: dict) -> bytes:
     entry = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), **entry}
     return json.dumps(entry, ensure_ascii=False).encode()
+
+
+def _epoch(stamp) -> float | None:
+    """A time as written in the logs or the context: epoch seconds, or ISO local time with or without an offset."""
+    if isinstance(stamp, (int, float)):
+        return float(stamp)
+    try:
+        return dt.datetime.fromisoformat(str(stamp)).timestamp()
+    except ValueError:
+        return None
+
+
+def _before(stamp, cutoff: float) -> bool:
+    t = _epoch(stamp)
+    return t is not None and t < cutoff
+
+
+def _older(record: bytes, cutoff: float) -> bool:
+    try:
+        entry = json.loads(record)
+    except json.JSONDecodeError:
+        return False
+    item = entry.get("item") if isinstance(entry.get("item"), dict) else {}
+    return _before(item.get("ts", entry.get("ts")), cutoff)
 
 
 def device_file_id(dev: str) -> str:
@@ -66,6 +91,7 @@ class Account:
     created: int = field(default_factory=lambda: int(time.time()))
     seq: int = 0
     devices: dict[str, Device] = field(default_factory=dict)
+    history_days: int | None = None  # how long the computer keeps this person's history; None: forever (§3.8.1)
 
     @property
     def address(self) -> str:
@@ -82,7 +108,15 @@ class Account:
         self.dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.vault.write_json(
             self.dir / "account.json",
-            {"v": VERSION, "id": self.id, "name": self.name, "tag": self.tag, "created": self.created, "seq": self.seq},
+            {
+                "v": VERSION,
+                "id": self.id,
+                "name": self.name,
+                "tag": self.tag,
+                "created": self.created,
+                "seq": self.seq,
+                **({"history_days": self.history_days} if self.history_days else {}),
+            },
         )
 
     def next_seq(self) -> int:
@@ -130,6 +164,49 @@ class Account:
             out.append(item)
         return out[-limit:]
 
+    # ---- history length and clearing (SPEC §3.8.1)
+
+    def history_start(self) -> int:
+        """The first sequence number still held: anything before it was deleted."""
+        for e in self.read_transcript():
+            if e.get("kind") == "item" and isinstance(e.get("item", {}).get("seq"), int):
+                return e["item"]["seq"]
+        return self.seq + 1
+
+    def _keep_log(self, name: str, cutoff: float) -> bool:
+        path = self.dir / name
+        records = self.vault.records(path)
+        kept = [r for r in records if not _older(r, cutoff)]
+        if len(kept) == len(records):
+            return False
+        self.vault.rewrite(path, kept)
+        return True
+
+    def prune_history(self, now: float | None = None) -> bool:
+        """Delete history older than the person's chosen length. True if anything was deleted."""
+        if not self.history_days:
+            return False
+        cutoff = (time.time() if now is None else now) - self.history_days * 86400
+        changed = self._keep_log("transcript.jsonl", cutoff)
+        changed = self._keep_log("audit.jsonl", cutoff) or changed
+        conv = self.load_context()
+        turns = [t for t in conv.get("turns", []) if not _before(t.get("ts"), cutoff)]
+        summary_old = conv.get("summary") and (not conv.get("summary_from") or _before(conv["summary_from"], cutoff))
+        if len(turns) != len(conv.get("turns", [])) or summary_old:
+            conv["turns"] = turns
+            if summary_old:
+                conv["summary"] = ""
+                conv.pop("summary_from", None)
+            self.save_context(conv)
+            changed = True
+        return changed
+
+    def clear_history(self) -> None:
+        """Delete the transcript, the audit and the conversation context. Sequence numbers carry on."""
+        for name in ("transcript.jsonl", "audit.jsonl"):
+            self.vault.rewrite(self.dir / name, [])
+        (self.dir / "context.json").unlink(missing_ok=True)
+
     def load_context(self) -> dict:
         return self.vault.read_json(self.dir / "context.json", {"summary": "", "turns": []})
 
@@ -160,6 +237,8 @@ class Accounts:
             acct = Account(
                 raw["id"], d, raw.get("name", ""), raw["tag"], vault, raw.get("created", 0), raw.get("seq", 0)
             )
+            days = raw.get("history_days")
+            acct.history_days = days if isinstance(days, int) and days > 0 else None
             for df in sorted((d / "devices").glob("*.json")) if (d / "devices").exists() else []:
                 device = Device(**vault.read_json(df))
                 acct.devices[device.dev] = device
