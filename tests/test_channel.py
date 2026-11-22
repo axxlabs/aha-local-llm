@@ -38,6 +38,16 @@ class FakeAgent:
         self.stopped += 1
         self.quiet = quiet
 
+    async def forget_site(self, account, site):
+        from aha_local.tools import signins
+
+        return signins.forget(account, site)
+
+    async def clear_browser(self, account):
+        from aha_local.tools import signins
+
+        signins.clear(account)
+
 
 class Rig:
     """A channel, a fake gateway that signs certificates, and helpers to play a device."""
@@ -259,6 +269,43 @@ async def test_revoking_another_device(tmp_path):
     assert rig.take(Revoke) == [Revoke(dev=laptop.dev)]
     await laptop.send({"t": "say", "text": "still here?"})
     assert rig.agent.said == []  # its frames are dropped now
+
+
+async def test_settings_show_and_forget_what_the_browser_remembers(tmp_path):
+    """Settings → Your browser (SPEC §7.4): the sites, Forget one, Clear browser data."""
+    from aha_local.tools import signins
+
+    rig = Rig(tmp_path)
+    _, phone = await rig.pair()
+    await phone.send({"t": "hello", "name": "P"})
+    phone.inbox()
+    acct = rig.accounts.find("Ana")
+    cookies = [
+        {"name": "sid", "value": "1", "domain": ".waitrose.com", "path": "/"},
+        {"name": "id", "value": "2", "domain": "www.news.example", "path": "/"},
+    ]
+    signins.save(
+        acct,
+        {
+            **signins.empty(),
+            "state": {"cookies": cookies, "origins": []},
+            "signed_in": {"waitrose.com": {"site": "waitrose.com"}},
+        },
+    )
+    await phone.send({"t": "browser_request"})
+    assert phone.inbox() == [
+        {
+            "t": "browser",
+            "sites": [{"site": "news.example", "signed_in": False}, {"site": "waitrose.com", "signed_in": True}],
+        }
+    ]
+    await phone.send({"t": "browser_forget", "site": "waitrose.com"})
+    assert phone.inbox()[0]["sites"] == [{"site": "news.example", "signed_in": False}]
+    await phone.send({"t": "browser_forget", "site": 5})  # malformed: nothing forgotten
+    assert phone.inbox()[0]["sites"] == [{"site": "news.example", "signed_in": False}]
+    await phone.send({"t": "browser_clear"})
+    assert phone.inbox() == [{"t": "browser", "sites": []}]
+    assert not (acct.dir / signins.FILE).exists()
 
 
 @pytest.mark.parametrize(

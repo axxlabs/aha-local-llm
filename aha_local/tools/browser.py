@@ -4,8 +4,9 @@
 
 One MCP connection to aha-browser per account, so one browser context per account: tabs, cookies, storage and
 logins never cross between people (SPEC §3.4). A task only ever reaches its own account's connection, through
-`ctx.browser`; the model can't name another. A connection opens on the account's first browser call, keeps
-its page between tasks, and closes after `idle_minutes` unused, on `aha delete`, and when the agent stops.
+`ctx.browser`; the model can't name another. A connection opens on the account's first browser call (its
+browser state is put back first), keeps its page between tasks, and closes after `idle_minutes` unused (its
+state saved first), on `aha delete`, and when the agent stops.
 
 Each browser tool the model sees is wrapped: the policy decides auto, approval or block from the real
 arguments; approvals are answered only by the person (approvals.py).
@@ -14,11 +15,13 @@ arguments; approvals are answered only by the person (approvals.py).
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import json
 import logging
 import re
+import struct
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -32,13 +35,14 @@ from ..approvals import Field
 from ..items import Image
 from ..policy.browser import decide, form_for, offered
 from ..policy.urls import check_url, site_of
-from . import signins
+from . import human, signins
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
 log = logging.getLogger("aha.browser")
 
 MAX_SNAPSHOT_CHARS = 30_000
 HTTP_STATUS = re.compile(r"^- HTTP status: (\d{3})", re.M)
+PAGE_URL = re.compile(r"^- Page URL: (\S+)", re.M)
 CANT_TELL = (
     "From here you can't tell why: tell the person you couldn't load the page and give the link; "
     "don't guess at a cause (region, IP, outage) the page didn't state."
@@ -59,7 +63,8 @@ class BrowserSession:
         self.tools: list[mt.Tool] = []
         self.busy = 0
         self.last_used = time.monotonic()
-        self.opening: asyncio.Task | None = None  # restoring kept sign-ins: calls wait for it
+        self.opening: asyncio.Task | None = None  # restoring the browser state: calls wait for it
+        self.restored = False  # the state went in; only then may this context's state be saved over it
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
@@ -123,8 +128,10 @@ class BrowserPool:
         self._sessions: dict[str, BrowserSession] = {}
         self._held: dict[str, int] = {}
         self._reaper: asyncio.Task | None = None
-        # Called once when an account's context opens, before its first call: restores kept sign-ins (SPEC §3.4).
+        # Called once when an account's context opens, before its first call: restores its state (SPEC §3.4).
         self.on_open = None
+        # Called before a context closes for being idle or the agent stopping: saves its state (SPEC §3.4).
+        self.on_close = None
 
     async def tools(self, wait: float = 60) -> list[mt.Tool]:
         """The browser's tool definitions, from a short-lived connection of no account's."""
@@ -146,14 +153,17 @@ class BrowserPool:
             s.start()
             if self.on_open is not None:
                 s.opening = asyncio.create_task(self._open(account_id, s))
+            else:
+                s.restored = True
             log.info("browser context opened for an account (%d open)", len(self._sessions))
         return s
 
     async def _open(self, account_id: str, s: BrowserSession) -> None:
         try:
             await self.on_open(account_id, s)
+            s.restored = True
         except Exception:
-            log.exception("preparing a browser context failed")
+            log.exception("restoring a browser state failed; this context's state won't be saved over it")
 
     def for_account(self, account_id: str) -> AccountBrowser:
         return AccountBrowser(self, account_id)
@@ -174,7 +184,18 @@ class BrowserPool:
     def is_open(self, account_id: str) -> bool:
         return account_id in self._sessions
 
-    async def close(self, account_id: str) -> None:
+    def open_session(self, account_id: str) -> BrowserSession | None:
+        """The account's context if it's open and its state was restored (so saving it is safe)."""
+        s = self._sessions.get(account_id)
+        return s if s is not None and s.restored and s.ready.is_set() else None
+
+    async def close(self, account_id: str, save: bool = True) -> None:
+        """Close the account's context. `save`: keep its state first (not when forgetting or clearing it)."""
+        if save and self.on_close is not None and (s := self.open_session(account_id)) is not None:
+            try:
+                await self.on_close(account_id, s)
+            except Exception:
+                log.exception("saving a browser state before closing failed")
         s = self._sessions.pop(account_id, None)
         if s is not None:
             await s.stop()
@@ -316,7 +337,63 @@ async def call_with_snapshot(session, name: str, args: dict, ctx: ToolContext) -
             )
     if m := YAML_BLOCK.search(result.text):
         ctx.task.last_snapshot = m.group(1)
+    note_page(ctx, result.text)
     return result
+
+
+def note_page(ctx: ToolContext, text: str) -> None:
+    """SPEC §5.6: has this task had a page of a site the person signed in on? From the browser's own address."""
+    if ctx.task.on_signed_in or not (m := PAGE_URL.search(text)):
+        return
+    host = urlsplit(m.group(1)).hostname or ""
+    if not host:
+        return
+    if ctx.task.signed_in_sites is None:
+        ctx.task.signed_in_sites = signins.signed_in_sites(ctx.account)
+    if site_of(host) in ctx.task.signed_in_sites:
+        ctx.task.on_signed_in = True
+
+
+async def run_code(session, code: str) -> bool:
+    """Run fixed harness code (SPEC §3.4). Its result echoes the code, so it's never passed on."""
+    try:
+        return human.ran(await session.call("browser_run_code_unsafe", {"code": code}))
+    except Exception:
+        log.warning("harness browser code failed")
+        return False
+
+
+async def human_type(session, ref: str, text: str, submit: bool) -> bool:
+    """Type into a field one key at a time (SPEC §3.4). False if it couldn't: the caller falls back."""
+    if not human.is_ref(ref) or len(text) > human.MAX_HUMAN_TYPING:
+        return False
+    return await run_code(session, human.type_code(ref, text, submit))
+
+
+async def run_approved(session, name: str, args: dict, ctx: ToolContext) -> ToolResult:
+    """Run an approved action; typing goes at human pace where it can (SPEC §3.4)."""
+    typing = name == "browser_type" and not args.get("slowly") and isinstance(args.get("text"), str)
+    if typing and await human_type(session, str(args.get("target", "")), args["text"], bool(args.get("submit"))):
+        return await call_with_snapshot(session, "browser_snapshot", {}, ctx)
+    if name == "browser_fill_form" and isinstance(args.get("fields"), list):
+        # In the form's order: text fields typed one key at a time, the others (checkboxes, lists) filled by the
+        # MCP in between, so a choice that reveals a later field still comes first.
+        pending: list = []
+        for f in args["fields"]:
+            text_field = isinstance(f, dict) and f.get("type") == "textbox" and isinstance(f.get("value"), str)
+            if text_field and human.is_ref(f.get("target")) and len(f["value"]) <= human.MAX_HUMAN_TYPING:
+                if pending:
+                    filled = await call_with_snapshot(session, name, {**args, "fields": pending}, ctx)
+                    if filled.error:
+                        return filled
+                    pending = []
+                if await human_type(session, f["target"], f["value"], False):
+                    continue
+            pending.append(f)
+        if pending:
+            return await call_with_snapshot(session, name, {**args, "fields": pending}, ctx)
+        return await call_with_snapshot(session, "browser_snapshot", {}, ctx)
+    return await call_with_snapshot(session, name, args, ctx)
 
 
 def labelled(name: str, args: dict, ctx: ToolContext) -> dict:
@@ -344,11 +421,15 @@ def make_handler(name: str):
         args = normalise_targets(args)
         if ctx.task.read_mail:  # SPEC §5.5: after reading mail, every address the model picks is a card
             verdict = decide(name, args, False, set())
+        elif ctx.task.on_signed_in:  # SPEC §5.6: after a signed-in page, a site not opened yet is a card
+            verdict = decide(name, args, False, ctx.task.approved_sites)
         else:
             verdict = decide(name, args, ctx.config.allow_all_sites, ctx.task.approved_sites)
         if verdict.outcome == "block":
             return ToolResult(f"Blocked by aha's safety policy: {verdict.reason}.", error=True)
         if verdict.outcome == "auto":
+            if name == "browser_click" and human.is_ref(args.get("target")):
+                await run_code(session, human.move_code(args["target"]))  # the mouse gets there first (§3.4)
             result = await call_with_snapshot(session, name, args, ctx)
             if verdict.site and not result.error:
                 ctx.task.approved_sites.add(verdict.site)
@@ -375,7 +456,7 @@ def make_handler(name: str):
             if why:
                 return ToolResult(f"Blocked by aha's safety policy: {why}.", error=True)
             ctx.task.approved_sites.add(new_site)
-        result = await call_with_snapshot(session, name, final, ctx)
+        result = await run_approved(session, name, final, ctx)
         notes = [APPROVED_NOTE]
         if final != args:
             notes.append(
@@ -432,7 +513,6 @@ SIGN_IN_FIELDS = (
     ("password_target", "secret", "Password"),
     ("code_target", "secret", "Code"),
 )
-KEEP_LABEL = "Keep me signed in on this computer"
 MAIL_NOTE = "This came up after Aha! read your email: sign in only if this is the site you meant."
 
 
@@ -474,9 +554,6 @@ async def browser_sign_in(args: dict, ctx: ToolContext) -> ToolResult:
     first = len(fields)
     for (_, kind, default), label in zip(targets, labels, strict=True):
         fields.append(Field(label or default, "", kind))
-    has_password = any(kind == "secret" and default == "Password" for _, kind, default in targets)
-    if has_password:
-        fields.append(Field(KEEP_LABEL, "false", "bool"))
     decision = await ctx.approvals.ask(ctx.account, "signin", f"Sign in to {shown}?", fields, await screenshot(session))
     if not decision.approved:
         if decision.reason == "expired":
@@ -497,6 +574,8 @@ async def browser_sign_in(args: dict, ctx: ToolContext) -> ToolResult:
         )
     for i, ((ref, _, _), value) in enumerate(filled):
         submit = bool(args.get("submit", True)) and i == len(filled) - 1
+        if await human_type(session, ref, value, submit):  # one key at a time, like a person (§3.4)
+            continue
         r = await session.call(
             "browser_type",
             {"element": labels[targets.index(filled[i][0])], "target": ref, "text": value, "submit": submit},
@@ -505,22 +584,105 @@ async def browser_sign_in(args: dict, ctx: ToolContext) -> ToolResult:
             return ToolResult("Typing into the sign-in form failed. Take a snapshot and try again.", error=True)
     with contextlib.suppress(Exception):
         await session.call("browser_wait_for", {"time": 2})
-    kept = has_password and decision.values[-1] == "true"
-    if kept:
-        try:
-            await signins.keep(ctx.account, session, shown, site)
-            ctx.task.signed_in.add(shown)
-        except Exception:
-            log.exception("couldn't keep a sign-in")
-            kept = False
+    try:  # they stay signed in, like "remember me" in their own browser (SPEC §3.4)
+        await signins.signed_in(ctx.account, session, shown, site)
+    except Exception:
+        log.exception("couldn't save the browser state after a sign-in")
+    if ctx.task.signed_in_sites is not None:
+        ctx.task.signed_in_sites.add(site)
+    ctx.task.on_signed_in = True  # this page is now a signed-in site's (SPEC §5.6)
     page = await call_with_snapshot(session, "browser_snapshot", {}, ctx)
     page.text = (
-        f"The person signed in on {shown} themselves; you never see what they typed. "
-        + ("They chose to stay signed in on this computer. " if kept else "")
-        + "If the page asks for a one-time code, call browser_sign_in again with the code field. The page now:\n\n"
-        + signins.redact(page.text, ctx.task.secrets)
+        f"The person signed in on {shown} themselves; you never see what they typed. They stay signed in on this "
+        "computer. If the page asks for a one-time code, call browser_sign_in again with the code field. The page "
+        "now:\n\n" + signins.redact(page.text, ctx.task.secrets)
     )
     ctx.task.last_snapshot = signins.redact(ctx.task.last_snapshot, ctx.task.secrets)
+    return page
+
+
+CHECK_ROUNDS = 15
+
+
+def image_size(image: Image) -> tuple[int, int] | None:
+    """Width and height of a PNG or JPEG screenshot, from its header."""
+    try:
+        b = base64.b64decode(image.b64)
+    except ValueError:
+        return None
+    if b[:8] == b"\x89PNG\r\n\x1a\n" and len(b) >= 24:
+        return struct.unpack(">II", b[16:24])
+    i = 2
+    while b[:2] == b"\xff\xd8" and i + 9 <= len(b):
+        marker, length = b[i + 1], struct.unpack(">H", b[i + 2 : i + 4])[0]
+        if marker in (0xC0, 0xC1, 0xC2):
+            h, w = struct.unpack(">HH", b[i + 5 : i + 9])
+            return w, h
+        i += 2 + length
+    return None
+
+
+async def page_size(session) -> tuple[int, int] | None:
+    """The page's size in CSS pixels, where the mouse moves (fixed harness code)."""
+    try:
+        r = await session.call(
+            "browser_run_code_unsafe",
+            {"code": "async (page) => JSON.stringify(await page.evaluate(() => [innerWidth, innerHeight]))"},
+        )
+        w, h = json.loads(signins._result(r))
+        return int(w), int(h)
+    except Exception:
+        return None
+
+
+async def browser_human_check(args: dict, ctx: ToolContext) -> ToolResult:
+    """The person does a site's "are you human?" check on a card: they tap the screenshot (SPEC §3.4)."""
+    session = ctx.browser
+    if session is None:
+        return ToolResult("The browser isn't available right now.", error=True)
+    url = await current_url(session) if session.is_open() else ""
+    if not url.startswith("http"):
+        return ToolResult("No page is open in the browser: open one with browser_navigate first.", error=True)
+    site, why = check_url(url)
+    if why or not site:
+        return ToolResult(f"Blocked by aha's safety policy: {why}.", error=True)
+    shown = (urlsplit(url).hostname or site).lower().removeprefix("www.")
+    taps_done = 0
+    for _ in range(CHECK_ROUNDS):
+        shot = await screenshot(session)
+        size = image_size(shot) if shot else None
+        if shot is None or size is None:
+            return ToolResult("The browser didn't return a screenshot. Try once more.", error=True)
+        fields = [Field("Site", shown, "info"), Field("Taps", "", "taps")]
+        decision = await ctx.approvals.ask(ctx.account, "check", f"Show {shown} you're human", fields, shot)
+        if not decision.approved:
+            if decision.reason == "expired":
+                return ToolResult("", error=True, kind="expired")
+            text = (
+                "The person gave up on the check. Tell them you couldn't get past it and give the link; don't try "
+                "the check yourself."
+            )
+            if decision.note:
+                text += f" They said: “{decision.note}”. Follow that."
+            return ToolResult(text, error=True)
+        taps = human.parse_taps(decision.values[1] if len(decision.values) > 1 else "", *size)
+        if taps is None:  # outside the screenshot: nothing is clicked; a fresh card
+            continue
+        if not taps:  # "It's done": look at the page
+            break
+        page = await page_size(session) or size
+        sx, sy = page[0] / size[0], page[1] / size[1]
+        points = [(round(x * sx), round(y * sy)) for x, y in taps]
+        if not await run_code(session, human.tap_code(points)):
+            log.warning("clicking a check card's taps failed")
+        taps_done += len(points)
+        with contextlib.suppress(Exception):
+            await session.call("browser_wait_for", {"time": 1.5})
+    page = await call_with_snapshot(session, "browser_snapshot", {}, ctx)
+    page.text = (
+        f"The person did the check on {shown} on a card ({taps_done} taps) and said it's done. Look at the page: if "
+        "the check is still there, tell them you couldn't get past it and give the link. The page now:\n\n" + page.text
+    )
     return page
 
 
@@ -550,6 +712,14 @@ HARNESS_TOOLS = (
             submit={"type": "boolean", "description": "Press Enter after the last field (default true)"},
         ),
         browser_sign_in,
+    ),
+    Tool(
+        "browser_human_check",
+        'When the page shows an "are you human?" check you can\'t pass with one click (a picture puzzle, "verify '
+        'you are human", a check that came back), let the user do it: they see the page on a card and tap where '
+        "to click. Never try to solve a picture puzzle yourself.",
+        params(),
+        browser_human_check,
     ),
 )
 

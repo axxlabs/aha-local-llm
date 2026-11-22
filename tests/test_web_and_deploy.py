@@ -2,6 +2,7 @@
 # Copyright (C) 2026 Axxlabs Limited
 """fetch_url's address checks (SPEC §5.2) and the rendered Quadlet units (SPEC §3.6)."""
 
+import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -129,10 +130,49 @@ def test_browser_results_flag_http_errors():
     assert not ok.text.startswith("The site")
 
 
-def test_the_browser_image_is_pinned_with_a_normal_user_agent():
-    unit = (Path(__file__).resolve().parents[1] / "deploy/quadlet/aha-browser.container").read_text()
+def test_the_browser_looks_like_a_persons(tmp_path, monkeypatch):
+    """SPEC §3.4 "Looking like a person's browser", test 20: headed, its own User-Agent, the household's ways."""
+    from aha_local import cli
+    from aha_local.config import Config
+
+    root = Path(__file__).resolve().parents[1]
+    unit = (root / "deploy/quadlet/aha-browser.container").read_text()
     assert "Image=mcr.microsoft.com/playwright/mcp@sha256:" in unit
-    assert '--user-agent "Mozilla/5.0' in unit and "HeadlessChrome" not in unit.split("Exec=")[1]
+    entry = json.loads(re.search(r"^Entrypoint=(.+)$", unit, re.M).group(1))
+    assert entry[:4] == ["/usr/bin/tini", "-s", "--", "xvfb-run"] and "--headless" not in entry
+    exec_line = re.search(r"^Exec=(.+)$", unit, re.M).group(1)
+    for flag in ("--headless", "--user-agent", "--viewport-size", "--shared-browser-context"):
+        assert flag not in exec_line, flag
+    assert "--isolated" in exec_line and "--config /etc/aha-browser/config.json" in exec_line
+
+    monkeypatch.setattr(cli, "HOME_DATA", tmp_path / "data")
+    config = Config(
+        gateway_url="wss://g.example/v1/tunnel", gateway_pin="x", timezone="Europe/Lisbon", language="pt-PT"
+    )
+    browser_config = json.loads(cli.render_browser_config(config))["browser"]
+    launch, context = browser_config["launchOptions"], browser_config["contextOptions"]
+    assert launch["headless"] is False and launch["ignoreDefaultArgs"] == ["--enable-automation"]
+    assert "--disable-blink-features=AutomationControlled" in launch["args"] and "--lang=pt-PT" in launch["args"]
+    assert context == {"locale": "pt-PT", "timezoneId": "Europe/Lisbon", "viewport": None}
+    assert browser_config["initScript"] == ["/etc/aha-browser/init.js"]
+    rendered = cli.render_units(config)["aha-browser.container"]
+    assert "Environment=TZ=Europe/Lisbon" in rendered and "Environment=LANG=pt_PT.UTF-8" in rendered
+    assert f"Volume={cli.BROWSER_CONFIG}:/etc/aha-browser/config.json:ro" in rendered
+    init = (root / "deploy/browser/init.js").read_text()
+    assert "SPDX-License-Identifier: AGPL-3.0-or-later" in init and "new Proxy" in init
+
+
+def test_the_browser_language_comes_from_the_computer(monkeypatch):
+    from aha_local.config import host_language, language_tag
+
+    assert language_tag("en_GB.UTF-8") == "en-GB" and language_tag("pt-br") == "pt-BR" and language_tag("de") == "de"
+    assert language_tag("nonsense; rm -rf") == "en-GB"
+    monkeypatch.setenv("LC_ALL", "")
+    monkeypatch.setenv("LC_MESSAGES", "")
+    monkeypatch.setenv("LANG", "fr_FR.UTF-8")
+    assert host_language() == "fr-FR"
+    monkeypatch.setenv("LANG", "C.UTF-8")
+    assert host_language() == "en-GB"
 
 
 def test_units_render_with_sandboxing(tmp_path, monkeypatch):

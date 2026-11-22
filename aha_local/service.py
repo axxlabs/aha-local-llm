@@ -41,6 +41,7 @@ class Service:
             module.register(self.registry)
         self.browser = browser.BrowserPool(config.browser_url, config.browser_idle_seconds)
         self.browser.on_open = self._browser_opened
+        self.browser.on_close = self._browser_closing
         self.llm = LLM(config.llm_url, config.llm_model)
         self.channel = Channel(
             self.accounts,
@@ -62,10 +63,16 @@ class Service:
         self.started = time.time()
 
     async def _browser_opened(self, account_id: str, session) -> None:
-        """A person's browser context just opened: put back the sites they chose to stay signed in on."""
+        """A person's browser context just opened: put back what their browser remembers (SPEC §3.4)."""
         acct = self.accounts.get(account_id)
         if acct is not None:
             await signins.restore(acct, session)
+
+    async def _browser_closing(self, account_id: str, session) -> None:
+        """A person's browser context is about to close (idle, or the agent stopping): save its state first."""
+        acct = self.accounts.get(account_id)
+        if acct is not None:
+            await signins.capture(acct, session)
 
     async def _prune_history(self) -> None:
         """At start and every hour: each person's history is kept only as long as they chose (SPEC §3.8.1)."""
@@ -232,7 +239,7 @@ class Service:
             for dev in list(acct.devices):
                 await self.channel.revoke(acct, dev)
             await self._mail_disconnect(acct)
-            await self.browser.close(acct.id)
+            await self.browser.close(acct.id, save=False)
             return {"ok": self.accounts.delete(acct.id) is not None}
         return {"ok": False, "error": f"unknown command {cmd!r}"}
 

@@ -65,6 +65,16 @@ def test_new_sites_follow_the_setting():
     assert decide("browser_tabs", {"action": "new", "url": "http://10.1.1.1"}, True, set()).outcome == "block"
 
 
+def test_after_a_signed_in_page_only_sites_already_opened_stay_automatic():
+    """SPEC §5.6: the handler then decides as if allow_all_sites were off, with the task's opened sites."""
+    opened = {"waitrose.com"}
+    assert decide("browser_navigate", {"url": "https://www.waitrose.com/orders"}, False, opened).outcome == "auto"
+    assert decide("browser_navigate", {"url": "https://evil.example/?d=1"}, False, opened).outcome == "approval"
+    new_tab = {"action": "new", "url": "https://evil.example/"}
+    assert decide("browser_tabs", new_tab, False, opened).outcome == "approval"
+    assert decide("browser_click", {"target": "e1"}, False, opened).outcome == "auto"  # clicks stay automatic
+
+
 def test_hidden_tools_are_not_offered():
     assert not offered("browser_evaluate") and not offered("browser_resize")
     assert offered("browser_click") and offered("browser_type")

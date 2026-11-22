@@ -1,0 +1,24 @@
+{
+  "browser": {
+    "browserName": "chromium",
+    "isolated": true,
+    "launchOptions": {
+      "headless": false,
+      "args": [
+        "--disable-blink-features=AutomationControlled",
+        "--lang=@LANGUAGE@",
+        "--window-size=1280,900",
+        "--enable-unsafe-swiftshader",
+        "--use-angle=swiftshader",
+        "--ignore-gpu-blocklist"
+      ],
+      "ignoreDefaultArgs": ["--enable-automation"]
+    },
+    "contextOptions": {
+      "locale": "@LANGUAGE@",
+      "timezoneId": "@TIMEZONE@",
+      "viewport": null
+    },
+    "initScript": ["/etc/aha-browser/init.js"]
+  }
+}

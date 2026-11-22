@@ -1,19 +1,28 @@
-# The browser (Playwright MCP, headless Chromium). Fresh profile every session, no saved logins; the
-# other aha services are blocked at the browser level, and the agent blocks private addresses in code.
+# The browser (Playwright MCP, Chromium). Run headed in a virtual display (Xvfb, inside the container) with the
+# household's language and timezone, like an ordinary browser (SPEC §3.4 "Looking like a person's browser").
+# Chromium writes no profile to disk (--isolated): each person's browser state is kept by the agent, encrypted.
+# The other aha services are blocked at the browser level, and the agent blocks private addresses in code.
 [Unit]
 Description=aha browser (Playwright MCP)
 
 [Container]
 ContainerName=aha-browser
-# Pinned (SPEC §3.4): @playwright/mcp 0.0.86 with Chromium 159. When you update the digest, update the Chrome
-# version in --user-agent to match: headless Chromium's own "HeadlessChrome" UA is refused by many sites.
+# Pinned (SPEC §3.4): @playwright/mcp 0.0.86 with Chromium 159.
 Image=mcr.microsoft.com/playwright/mcp@sha256:a5e6a24e8caf6493a0edd144dd15df5535b8255c3cea5b53a51a22a3abd2c2f0
 Network=aha-egress.network
 SecurityLabelDisable=true
 NoNewPrivileges=true
 ShmSize=1g
 PodmanArgs=--memory=4g --pids-limit=1024
-Exec=--host 0.0.0.0 --port 8931 --allowed-hosts aha-browser:8931 --caps vision --image-responses allow --isolated --viewport-size 1280,800 --user-agent "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/159.0.0.0 Safari/537.36" --blocked-origins "http://aha-search:8080;http://aha-llm:8081;http://aha-browser:8931"
+# Headed under xvfb-run: the image's own entrypoint passes --headless, so it's replaced here (same tini, same
+# no-sandbox as the image).
+Entrypoint=["/usr/bin/tini", "-s", "--", "xvfb-run", "-a", "-s", "-screen 0 1920x1080x24 -nolisten tcp", "node", "/app/cli.js", "--browser", "chromium", "--no-sandbox"]
+# Written by `aha install` from deploy/browser/config.json: launch arguments, language, timezone, init script.
+Volume=@BROWSER_CONFIG@:/etc/aha-browser/config.json:ro
+Volume=@DEPLOY@/browser/init.js:/etc/aha-browser/init.js:ro
+Environment=TZ=@TIMEZONE@
+Environment=LANG=@LANG@
+Exec=--config /etc/aha-browser/config.json --host 0.0.0.0 --port 8931 --allowed-hosts aha-browser:8931 --caps vision --image-responses allow --isolated --blocked-origins "http://aha-search:8080;http://aha-llm:8081;http://aha-browser:8931"
 
 [Service]
 Restart=on-failure

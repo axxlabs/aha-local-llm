@@ -40,6 +40,23 @@ async def after_mail(ctx: ToolContext, title: str, label: str, value: str) -> tu
     return decision.values[0].strip(), None
 
 
+async def after_signed_in(ctx: ToolContext, url: str) -> tuple[str, ToolResult | None]:
+    """SPEC §5.6: after a page of a signed-in site, a site not opened yet in the task is a card."""
+    site, _ = check_url(url)
+    if ctx.task.read_mail or not ctx.task.on_signed_in or not site or site in ctx.task.approved_sites:
+        return url, None
+    from .browser import declined
+
+    decision = await ctx.approvals.ask(
+        ctx.account, "action", f"Open {site}, a site not opened yet?", [Field("Address", url)]
+    )
+    if not decision.approved:
+        return url, declined(decision)
+    url = decision.values[0].strip()
+    ctx.task.approved_sites.add(check_url(url)[0] or "")
+    return url, None
+
+
 async def web_search(args: dict, ctx: ToolContext) -> ToolResult:
     query = str(args.get("query", "")).strip()
     if not query:
@@ -107,6 +124,9 @@ async def fetch_url(args: dict, ctx: ToolContext) -> ToolResult:
     url = str(args.get("url", "")).strip()
     if check_url(url)[1] is None:
         url, refused = await after_mail(ctx, "Open this page?", "Address", url)
+        if refused:
+            return refused
+        url, refused = await after_signed_in(ctx, url)
         if refused:
             return refused
     page = None

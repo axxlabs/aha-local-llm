@@ -10,6 +10,7 @@ addresses come from the Quadlet units, so the TOML only holds what a person choo
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,6 +29,7 @@ app = "{app_url}"          # where pairing links open the Aha! app
 [household]
 name = "{name}"
 timezone = "{timezone}"
+language = "{language}"   # the browser's language (Accept-Language); `aha install` after a change
 
 [models]
 dir = "{models_dir}"
@@ -42,8 +44,28 @@ push_preview = false       # true: notifications show the first line of the repl
 [browser]
 # true: any public site opens without asking; typing and forms still need approval (SPEC §5.2).
 allow_all_sites = true
-idle_minutes = 30     # a person's browser tabs and cookies are discarded after this long unused
+idle_minutes = 30     # a person's browser tabs close after this long unused; what it remembers is kept
 """
+
+
+LANGUAGE = re.compile(r"^[a-z]{2,3}(?:-[A-Z]{2})?$")
+
+
+def language_tag(value: str) -> str:
+    """'en_GB.UTF-8' or 'en-GB' → 'en-GB'; anything else → 'en-GB'."""
+    tag = str(value).split(".", 1)[0].split("@", 1)[0].replace("_", "-")
+    parts = tag.split("-")
+    tag = parts[0].lower() + (f"-{parts[1].upper()}" if len(parts) > 1 else "")
+    return tag if LANGUAGE.match(tag) else "en-GB"
+
+
+def host_language() -> str:
+    """The computer's own language, for the browser (SPEC §3.4): its LANG, else en-GB."""
+    for name in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        value = os.environ.get(name, "")
+        if value and value not in ("C", "POSIX") and not value.startswith(("C.", "POSIX.")):
+            return language_tag(value)
+    return "en-GB"
 
 
 @dataclass(frozen=True)
@@ -52,6 +74,7 @@ class Config:
     gateway_pin: str
     household_name: str = "Home"
     timezone: str = "Europe/London"
+    language: str = "en-GB"  # the browser's language, a BCP 47 tag (SPEC §3.4)
     models_dir: Path = Path.home() / "aha-models"
     approval_expiry: float = 24 * 3600
     max_model_calls: int = 40
@@ -83,6 +106,7 @@ class Config:
             gateway_pin=gw["pin"],
             household_name=hh.get("name", "Home"),
             timezone=hh.get("timezone", "Europe/London"),
+            language=language_tag(hh.get("language") or host_language()),
             models_dir=Path(models.get("dir", "~/aha-models")).expanduser(),
             approval_expiry=float(agent.get("approval_expiry_hours", 24)) * 3600,
             max_model_calls=int(agent.get("max_model_calls_per_task", 40)),

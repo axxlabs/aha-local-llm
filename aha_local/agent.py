@@ -128,19 +128,18 @@ class Agent:
             return
         if command in ("sign-ins", "signins", "sign ins"):
             kept = signins.sites(account)
-            await self.send(
-                account,
-                messages.SIGNINS.format(sites="\n".join(f"- {site}" for site in kept)) if kept else messages.NO_SIGNINS,
-            )
+            lines = "\n".join(f"- {s['site']}{messages.SIGNED_IN if s['signed_in'] else ''}" for s in kept)
+            await self.send(account, messages.SIGNINS.format(sites=lines) if kept else messages.NO_SIGNINS)
             return
         if command.startswith(("forget sign-in ", "forget signin ", "forget sign in ")):
             site = command.split(" ", 2)[2].removeprefix("in ").strip()
-            session = None
-            if self.browser is not None and self.browser.is_open(account.id):
-                session = self.browser.session(account.id)
-            found = await signins.forget(account, site, session)
+            found = await self.forget_site(account, site)
             reply = messages.SIGNIN_FORGOTTEN if found else messages.SIGNIN_UNKNOWN
-            await self.send(account, reply.format(site=site))
+            await self.send(account, reply.format(site=signins.site_name(site) or site))
+            return
+        if command in ("clear browser", "clear my browser", "clear browser data"):
+            await self.clear_browser(account)
+            await self.send(account, messages.BROWSER_CLEARED)
             return
         if command in ("reminders", "schedule", "scheduled", "scheduled tasks"):
             tz = schedule.tz_of(self.config.timezone)
@@ -214,16 +213,35 @@ class Agent:
                 await self._run(account, text, scheduled)
         finally:
             self.running.pop(account.address, None)
-            await self._refresh_sign_ins(account)
+            await self.save_browser(account)
 
-    async def _refresh_sign_ins(self, account: Account) -> None:
-        """Save kept sites' cookies again after a task, so sessions the site renewed stay valid (SPEC §3.4)."""
-        if self.browser is None or not self.browser.is_open(account.id) or not signins.sites(account):
+    # ---- the person's browser state (SPEC §3.4)
+
+    async def save_browser(self, account: Account) -> None:
+        """After a task: save what the browser remembers, so it's there next time (cookies the site renewed too)."""
+        session = self.browser.open_session(account.id) if self.browser is not None else None
+        if session is None:
             return
         try:
-            await signins.refresh(account, self.browser.session(account.id))
+            await signins.capture(account, session)
         except Exception:
-            log.warning("couldn't refresh kept sign-ins")
+            log.warning("couldn't save the browser state")
+
+    async def forget_site(self, account: Account, site: str) -> bool:
+        """Forget one site's cookies and data; the open context closes so nothing of it stays in memory."""
+        await self.save_browser(account)  # what the open context knows now, before taking the site out
+        found = signins.forget(account, site)
+        if found and self.browser is not None:
+            await self.browser.close(account.id, save=False)
+        return found
+
+    async def clear_browser(self, account: Account) -> None:
+        """Clear browser data: stop the running task, close the context without saving it, delete the state."""
+        await self.stop(account, quiet=True)
+        if self.browser is not None:
+            await self.browser.close(account.id, save=False)
+        signins.clear(account)
+        log.info("browser data cleared for an account")
 
     async def _run(self, account: Account, text: str, scheduled: str | None = None) -> None:
         while True:

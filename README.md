@@ -9,7 +9,9 @@ you, it shows you a card with the exact content: Approve, Edit, Decline.
 
 What it does: searches and reads the web (citing pages), uses websites in its own browser (bookings, forms,
 screenshots sent to your chat), signs in to sites when you want (you type your password on a card; the model
-never sees it; stay signed in per site if you choose), reads and writes your Gmail, reads photos you send
+never sees it) and stays signed in: each person's browser remembers cookies and site data like their own does,
+encrypted on this computer, until they forget a site or clear it in Settings. When a site still asks "are you
+human?", you tap the check on a card. It reads and writes your Gmail, reads photos you send
 (receipts, tickets), reminds you, runs tasks on a schedule and watches for changes (quiet until there's news),
 and remembers what you approve. Each person in the household has their own account, memories, browser and mail.
 
@@ -54,7 +56,7 @@ To keep it running while you're logged out: `loginctl enable-linger $USER`.
 |---|---|---|
 | `aha-llm` | llama.cpp with Qwen3.6-35B-A3B (vision) | internal only: no internet, no LAN |
 | `aha-search` | SearXNG | internet |
-| `aha-browser` | Playwright MCP, headless Chromium: a separate in-memory browser per person, discarded after 30 minutes unused | internet |
+| `aha-browser` | Playwright MCP, Chromium in a virtual display (Xvfb) with your household's language and timezone, so sites see an ordinary browser; a separate browser per person, its tabs closed after 30 minutes unused; what it remembers (cookies, site data) is kept by the agent, encrypted | internet |
 | `aha-agent` | this repo: agent loop, tools, policy, approvals, memories, end-to-end encryption, tunnel | both |
 
 All are rootless Podman containers managed by systemd Quadlet units (`deploy/quadlet/`), with capabilities

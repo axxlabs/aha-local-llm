@@ -25,8 +25,16 @@ Rules:
   both repos together (a test compares them).
 - Sign-in secrets (`aha_local/tools/browser.py` `browser_sign_in`, `signins.py`): what the person types on a
   sign-in card goes to the page and nowhere else. Never log, return, store or audit it; every tool result after
-  it is masked (`signins.redact`). Kept sign-ins are per account and only ever restored into that account's
-  browser context. `tests/test_signin.py` guards this.
+  it is masked (`signins.redact`). Each account's browser state (`signins.py`: cookies, site data, signed-in
+  sites) is encrypted in its own folder and only ever restored into that account's browser context; it's
+  never saved from a context whose restore failed. `tests/test_signin.py` and `tests/test_browser_state.py`
+  guard this.
+- Harness browser code (`signins.py`, `human.py`) runs through `browser_run_code_unsafe`, which the model can't
+  call. Only validated values go into it: references matching `human.REF`, numbers the harness made, text as
+  a JSON string literal. Its results echo the code (typed text included): never pass them on.
+- The browser must look like what it is, a person's browser (`deploy/browser/`, the browser unit): headed under
+  Xvfb, no User-Agent or fingerprint spoofing, the household's language and timezone. Check changes with
+  `scripts/browser_check.py` against a test browser, never one with a person's sign-ins.
 - Each account has its own browser context (`BrowserPool`); a tool reaches the browser only through
   `ctx.browser`. Never share a context or a connection between accounts.
 - All texts aha sends on its own live in `aha_local/messages.py`.
@@ -60,8 +68,9 @@ Steps:
    `podman info`, `nvidia-ctk cdi list` (must list `nvidia.com/gpu=all`). Installing system packages or
    generating the CDI spec needs `sudo`: show the user the command (e.g.
    `sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml`) and let them run it.
-2. **Configure.** `aha init --gateway <url> --name <household> --timezone <tz>
-   [--models <dir>]`. It prints the gateway key's fingerprint: show it to the user and have them compare it
+2. **Configure.** `aha init --gateway <url> --name <household> --timezone <tz> [--language <tag>]
+   [--models <dir>]`. `--language` is the browser's language (what sites see); it defaults to this computer's
+   own, so ask only if the household uses another. It prints the gateway key's fingerprint: show it to the user and have them compare it
    with the one the gateway operator publishes (for the hosted gateway: on the Aha! website). Don't confirm it yourself. A mismatch means stop.
    It also creates the data key and prints a **recovery code** once. Tell the user to write it down or put it
    in their password manager now. Don't copy it anywhere yourself, don't repeat it in chat, and don't run

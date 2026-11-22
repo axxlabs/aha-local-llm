@@ -24,7 +24,7 @@ from .conftest import person, settle
 
 PASSWORD = "correct-horse-battery"
 CODE = "482915"
-PNG = base64.b64encode(b"\x89PNG fake").decode()
+PNG = base64.b64encode(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01 fake").decode()  # 1×1
 TOOLS = [
     mt.Tool(name=n, description=n, inputSchema={"type": "object", "properties": {}})
     for n in (
@@ -34,6 +34,8 @@ TOOLS = [
         "browser_type",
         "browser_take_screenshot",
         "browser_wait_for",
+        "browser_click",
+        "browser_fill_form",
     )
 ]
 
@@ -42,12 +44,53 @@ def text_result(text: str, error: bool = False) -> mt.CallToolResult:
     return mt.CallToolResult(content=[mt.TextContent(type="text", text=text)], isError=error)
 
 
+LITERAL = re.compile(r'JSON\.parse\(("(?:[^"\\]|\\.)*")\)')
+SUBMITTED = "await page.keyboard.press('Enter'); return 'ok'; }"
+
+
 class FakeContext:
     def __init__(self) -> None:
         self.url = "about:blank"
         self.fields: dict[str, str] = {}
         self.cookies: list[dict] = []
+        self.origins: list[dict] = []
         self.calls: list[str] = []
+        self.codes: list[str] = []  # harness code run in this context
+        self.moves: list[str] = []  # elements the mouse moved to
+        self.taps: list[list[tuple[int, int]]] = []
+        self.order: list[str] = []  # fields typed or filled, in order
+        self.closed = False
+
+    def run_code(self, code: str) -> mt.CallToolResult:
+        """What Playwright MCP's browser_run_code_unsafe does with the harness's fixed code."""
+        self.codes.append(code)
+        echo = f"\n### Ran Playwright code\n```js\n{code}\n```"  # the real one echoes the code: typed text too
+        if code in (signins.GET_STATE, signins.GET_STATE_LIGHT):
+            state = {"cookies": self.cookies, "origins": [] if "indexedDB" not in code else self.origins}
+            return text_result("### Result\n" + json.dumps(json.dumps(state)) + echo)
+        if "setStorageState" in code:
+            state = json.loads(json.loads(LITERAL.search(code).group(1)))
+            self.cookies, self.origins = list(state["cookies"]), list(state["origins"])
+        elif "keyboard.type" in code:  # typing one key at a time
+            ref = re.search(r"aria-ref=(\w+)", code).group(1)
+            self.fields[ref] = json.loads(json.loads(LITERAL.search(code).group(1)))
+            self.order.append(f"typed {ref}")
+            if code.endswith(SUBMITTED):
+                self.cookies.append(
+                    {"name": "sid", "value": "s3ss10n", "domain": ".waitrose.com", "path": "/", "expires": -1}
+                )
+        elif "innerWidth" in code:
+            return text_result("### Result\n" + json.dumps(json.dumps([1280, 813])) + echo)
+        elif "page.mouse.down" in code:
+            points = re.findall(
+                r"page\.mouse\.move\((\d+), (\d+), \{ steps: \d+ \}\); await page\.waitForTimeout", code
+            )
+            self.taps.append([(int(x), int(y)) for x, y in points])
+        elif "aria-ref=" in code:
+            self.moves.append(re.search(r"aria-ref=(\w+)", code).group(1))
+        else:
+            return text_result("### Error\nunknown harness code", error=True)
+        return text_result('### Result\n"ok"' + echo)
 
     def snapshot(self) -> str:
         return (
@@ -62,6 +105,11 @@ class FakeContext:
         self.calls.append(name)
         if name == "browser_navigate":
             self.url = args["url"]
+            if "visit=" in self.url:  # a site that remembers the visitor
+                self.cookies.append({"name": "visitor", "value": "v1", "domain": ".shop.example", "path": "/"})
+                self.origins.append(
+                    {"origin": "https://www.shop.example", "localStorage": [{"name": "k", "value": "v"}]}
+                )
             return text_result(self.snapshot())
         if name == "browser_tabs":
             return text_result(f"### Result\n- 0: (current) [Sign in]({self.url})")
@@ -76,17 +124,15 @@ class FakeContext:
             return text_result(f"### Ran Playwright code\n```js\nawait page.fill('{args['text']}');\n```")
         if name == "browser_take_screenshot":
             return mt.CallToolResult(content=[mt.ImageContent(type="image", data=PNG, mimeType="image/jpeg")])
-        if name == "browser_wait_for":
-            return text_result("waited")
+        if name == "browser_fill_form":
+            for f in args["fields"]:
+                self.fields[f["target"]] = f["value"]
+                self.order.append(f"filled {f['target']}")
+            return text_result(self.snapshot())
+        if name in ("browser_wait_for", "browser_click"):
+            return text_result(self.snapshot() if name == "browser_click" else "waited")
         if name == "browser_run_code_unsafe":
-            code = args["code"]
-            if code == signins.GET_COOKIES:
-                return text_result("### Result\n" + json.dumps(json.dumps(self.cookies)))
-            literal = json.loads(re.search(r'JSON\.parse\(("(?:[^"\\]|\\.)*")\)', code).group(1))
-            if "clearCookies" in code:
-                self.cookies = []
-            self.cookies.extend(json.loads(literal))
-            return text_result('### Result\n"ok"')
+            return self.run_code(args["code"])
         return text_result(f"unknown tool {name}", error=True)
 
 
@@ -101,9 +147,12 @@ class FakeBrowser:
                 server.contexts.append(ctx)
                 self.tools = TOOLS
                 self.ready.set()
-                while (item := await self.queue.get()) is not None:
-                    fn, fut = item
-                    fut.set_result(await fn(ctx))
+                try:
+                    while (item := await self.queue.get()) is not None:
+                        fn, fut = item
+                        fut.set_result(await fn(ctx))
+                finally:
+                    ctx.closed = True
 
         self.Session = Session
 
@@ -116,8 +165,11 @@ async def setup(config, accounts, llm, registry, chat, tmp_path):
     async def opened(account_id, session):
         await signins.restore(accounts.get(account_id), session)
 
-    pool.on_open = opened
-    assert await browser.register(registry, pool, tmp_path / "pins.json", wait=2) == 6
+    async def closing(account_id, session):
+        await signins.capture(accounts.get(account_id), session)
+
+    pool.on_open, pool.on_close = opened, closing
+    assert await browser.register(registry, pool, tmp_path / "pins.json", wait=2) == len(TOOLS)
     agent = Agent(config, accounts, llm, registry, chat, pool)
     yield agent, pool, fake
     await pool.stop()
@@ -155,19 +207,21 @@ async def test_the_person_types_the_password_and_the_model_never_sees_it(setup, 
         ("Site", "waitrose.com", "info"),
         ("Email address", "", "text"),  # the page's own label
         ("Password", "", "secret"),
-        ("Keep me signed in on this computer", "false", "bool"),
-    ]
+    ]  # no "keep me signed in": the browser remembers, like the person's own (SPEC §3.4)
     assert c["buttons"] == ["Sign in", "Don't"] and c.get("image")
-    await agent.approval_reply(fe, c["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD, "false"])
+    await agent.approval_reply(fe, c["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD])
     await settle(agent)
     page = fake.contexts[-1]
     assert page.fields == {"e1": "fe@example.com", "e2": PASSWORD}
+    assert "browser_type" not in page.calls and len([c for c in page.codes if "keyboard.type" in c]) == 2  # human pace
     recorded = everything_recorded(agent, llm, chat, fe)
-    assert PASSWORD not in recorded
+    assert PASSWORD not in recorded  # the typing code echoed it back; that result is never passed on
     # The page echoed it back; the model saw it masked.
     assert "••••" in json.dumps(llm.requests[-1]["messages"], ensure_ascii=False)
-    assert "signed in on waitrose.com themselves" in recorded
-    assert not signins.sites(fe)  # not kept unless chosen
+    assert "signed in on waitrose.com themselves" in recorded and "stay signed in" in recorded
+    assert signins.sites(fe) == [{"site": "waitrose.com", "signed_in": True}]
+    raw = (fe.dir / signins.FILE).read_bytes()
+    assert b"s3ss10n" not in raw and b"waitrose" not in raw and PASSWORD.encode() not in raw  # encrypted at rest
 
 
 async def test_on_shared_hosting_the_card_names_the_exact_host(setup, llm, chat, accounts):
@@ -216,15 +270,12 @@ async def test_only_secure_pages_and_fields_on_the_page(setup, llm, chat, accoun
     assert not any(m.card for m in chat.sent)
 
 
-async def test_kept_sign_ins_come_back_only_for_the_same_person_and_can_be_forgotten(setup, llm, chat, accounts):
+async def test_sign_ins_come_back_only_for_the_same_person_and_can_be_forgotten(setup, llm, chat, accounts):
     agent, pool, fake = setup
     fe, hb = person(accounts), accounts.create("Hb")
     card = await start_sign_in(agent, llm, chat, fe)
-    await agent.approval_reply(fe, card.card["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD, "true"])
+    await agent.approval_reply(fe, card.card["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD])
     await settle(agent)
-    assert signins.sites(fe) == ["waitrose.com"]
-    raw = (fe.dir / "sign-ins.json").read_bytes()
-    assert b"s3ss10n" not in raw and b"waitrose" not in raw  # encrypted at rest
 
     await pool.close(fe.id)  # idle timeout: the context is gone…
     await pool.for_account(fe.id).call("browser_tabs", {"action": "list"})
@@ -233,11 +284,14 @@ async def test_kept_sign_ins_come_back_only_for_the_same_person_and_can_be_forgo
     assert fake.contexts[-1].cookies == []  # never into another person's browser
 
     await agent.inbound(fe, "sign-ins")
-    assert "waitrose.com" in chat.sent[-1].text
+    assert "- waitrose.com (signed in)" in chat.sent[-1].text
+    fe_context = fake.contexts[-2]
+    await agent.inbound(fe, "forget sign-in www.waitrose.com")
+    assert "forgotten waitrose.com" in chat.sent[-1].text
+    assert signins.sites(fe) == [] and not (fe.dir / signins.FILE).exists()
+    assert fe_context.closed and not pool.is_open(fe.id)  # nothing of it is left in memory either
     await agent.inbound(fe, "forget sign-in waitrose.com")
-    assert "Signed out of waitrose.com" in chat.sent[-1].text
-    assert not signins.sites(fe) and not (fe.dir / "sign-ins.json").exists()
-    assert fake.contexts[-2].cookies == []  # signed out of the open context too
+    assert "doesn't remember waitrose.com" in chat.sent[-1].text
 
 
 async def test_show_screenshot_sends_the_page_to_the_persons_chat(setup, llm, chat, accounts):

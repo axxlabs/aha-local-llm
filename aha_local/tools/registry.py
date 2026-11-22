@@ -38,7 +38,10 @@ class TaskState:
     last_snapshot: str = ""  # the latest page snapshot, to label approvals from the page itself
     read_mail: bool = False  # set by email_search/email_read: from then on, text going out is a card (SPEC §5.5)
     secrets: list[str] = field(default_factory=list)  # values the person typed on a sign-in card: never shown again
-    signed_in: set[str] = field(default_factory=set)  # sites the person chose to stay signed in on, this task
+    # The sites the person signed in on (read once per task), and whether this task has had a page of one: from
+    # then on a site not opened yet in the task is a card (SPEC §5.6).
+    signed_in_sites: set[str] | None = None
+    on_signed_in: bool = False
 
 
 @dataclass

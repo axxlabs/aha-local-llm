@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .config import DEFAULT_TOML, HOME_CONFIG, HOME_DATA, Config
+from .config import DEFAULT_TOML, HOME_CONFIG, HOME_DATA, Config, host_language, language_tag
 
 REPO = Path(__file__).resolve().parents[1]
 DEPLOY = REPO / "deploy"
@@ -35,6 +35,7 @@ UNITS = [
 SERVICES = ["aha-agent", "aha-browser", "aha-search", "aha-llm"]
 AGENT_IMAGE = "localhost/aha-agent:latest"
 DATA_KEY_CRED = HOME_CONFIG.parent / "data-key.cred"
+BROWSER_CONFIG = HOME_CONFIG.parent / "browser.json"  # the browser's Playwright MCP configuration (SPEC §3.7)
 
 
 def die(message: str) -> None:
@@ -192,6 +193,7 @@ def cmd_init(a) -> None:
             app_url=a.app,
             name=a.name,
             timezone=a.timezone,
+            language=language_tag(a.language) if a.language else host_language(),
             models_dir=Path(a.models).expanduser(),
         )
     )
@@ -223,6 +225,9 @@ def render_units(config: Config) -> dict[str, str]:
         "@GATEWAY_VOLUME@": gateway_volume,
         "@AGENT_IMAGE@": AGENT_IMAGE,
         "@DATA_KEY_CRED@": str(DATA_KEY_CRED),
+        "@BROWSER_CONFIG@": str(BROWSER_CONFIG),
+        "@TIMEZONE@": config.timezone,
+        "@LANG@": config.language.replace("-", "_") + ".UTF-8",
     }
     out = {}
     for unit in UNITS:
@@ -231,6 +236,14 @@ def render_units(config: Config) -> dict[str, str]:
             text = text.replace(k, v)
         out[unit] = text
     return out
+
+
+def render_browser_config(config: Config) -> str:
+    """The browser's configuration: launch arguments, the household's language and timezone (SPEC §3.4)."""
+    text = (DEPLOY / "browser" / "config.json").read_text()
+    text = text.replace("@LANGUAGE@", config.language).replace("@TIMEZONE@", config.timezone)
+    json.loads(text)  # a broken template must fail here, not in the browser
+    return text
 
 
 def cmd_install(a) -> None:
@@ -248,6 +261,7 @@ def cmd_install(a) -> None:
     QUADLET_DIR.mkdir(parents=True, exist_ok=True)
     for name, text in render_units(config).items():
         (QUADLET_DIR / name).write_text(text)
+    BROWSER_CONFIG.write_text(render_browser_config(config))
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     print(f"Installed {len(UNITS)} units in {QUADLET_DIR}. Start with `aha start`.")
     print("To keep aha running when you're logged out: loginctl enable-linger $USER")
@@ -541,6 +555,12 @@ def cmd_doctor(a) -> None:
     check(f"model {model.name}", model.exists(), "aha models download")
     check("vision file", (config.models_dir / "Qwen3.6-35B-A3B-mmproj-F16.gguf").exists(), "aha models download")
     check("units installed", all((QUADLET_DIR / u).exists() for u in UNITS), "aha install")
+    installed = BROWSER_CONFIG.read_text() if BROWSER_CONFIG.exists() else ""
+    check(
+        "browser configuration up to date",
+        installed == render_browser_config(config),
+        "aha install, then aha restart (it has the household's language and timezone, SPEC §3.4)",
+    )
     check(
         "data key sealed to this computer",
         DATA_KEY_CRED.exists() and unseal_data_key(DATA_KEY_CRED) is not None,
@@ -598,6 +618,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--pin", help="the gateway's public key, if you have it")
     s.add_argument("--name", default="Home", help="what your household is called in chats")
     s.add_argument("--timezone", default="Europe/London")
+    s.add_argument("--language", help="the browser's language, e.g. en-GB (default: this computer's)")
     s.add_argument("--models", default="~/aha-models")
     s.add_argument("--app", default="https://app.aha.axxlabs.ai", help="where pairing links open the Aha! app")
     s.add_argument("--force", action="store_true")

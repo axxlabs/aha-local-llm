@@ -33,6 +33,7 @@ from ..accounts import Account, Accounts, Device
 from ..certs import needs_renewal
 from ..items import Image
 from ..protocol import E2E, Cert, CertIssued, CertRequest, DeviceStatus, Pair, Push, Report, ReportResult, Revoke, b64
+from ..tools import signins
 from . import crypto, webpush
 
 log = logging.getLogger("aha.channel")
@@ -313,6 +314,16 @@ class Channel:
         elif t == "memories_request":
             items = [{"id": m.get("id"), "text": m.get("text")} for m in account.load_memory()]
             await reply({"t": "memories", "items": items})
+        elif t in ("browser_request", "browser_forget", "browser_clear"):
+            # Settings → Your browser (SPEC §3.4, §7.4): what the person's browser remembers.
+            if self.agent is not None:
+                if t == "browser_forget":
+                    site = clean_text(msg.get("site"), 255) or ""
+                    if site:
+                        await self.agent.forget_site(account, site)
+                elif t == "browser_clear":
+                    await self.agent.clear_browser(account)
+            await reply({"t": "browser", "sites": signins.sites(account)})
         elif t == "devices_request":
             await reply({"t": "devices", "items": self._device_list(account, device)})
         elif t == "revoke_device":

@@ -25,7 +25,7 @@ Before anything leaves this computer with your words or data in it (typing into 
 I save something about you, I'll show it to you with buttons: **Approve**, **Edit** or **Decline**.
 
 Commands: **stop** (cancel what I'm doing) · **memories** (what I remember about you) · **sign-ins** (sites \
-you stay signed in on) · **reminders** (reminders and scheduled tasks) · **forget last** (drop our last \
+my browser remembers for you) · **reminders** (reminders and scheduled tasks) · **forget last** (drop our last \
 exchange) · **help**
 
 Open source (AGPL-3.0): {source}"""
@@ -37,16 +37,22 @@ APPROVE_LABELS = {
     "email": ("Send", "Edit", "Don't send"),
     "draft": ("Save draft", "Edit", "Don't save"),
     "signin": ("Sign in", "Edit", "Don't"),
+    "check": ("Send taps", "Edit", "Give up"),
     "schedule": ("Schedule", "Edit", "Don't"),
 }
 EDIT_IN_CARD = "Type them into the card in the app, then tap its button."
 SIGNINS = (
-    "You're kept signed in on:\n{sites}\n\n"
-    "To sign out of one: **forget sign-in** and the site, e.g. forget sign-in example.com"
+    "My browser remembers these sites for you, like your own browser does:\n{sites}\n\n"
+    "To forget one (and be signed out there): **forget sign-in** and the site, e.g. forget sign-in example.com. "
+    "To forget everything: **clear browser**, or Settings → Your browser."
 )
-NO_SIGNINS = "You aren't kept signed in on any site. When a site asks you to sign in, I'll show you a sign-in card."
-SIGNIN_FORGOTTEN = "Signed out of {site}: I no longer keep you signed in there."
-SIGNIN_UNKNOWN = "You weren't kept signed in on {site}. Say **sign-ins** to see the list."
+SIGNED_IN = " (signed in)"
+NO_SIGNINS = (
+    "My browser doesn't remember any site for you yet. When a site asks you to sign in, I'll show you a sign-in card."
+)
+SIGNIN_FORGOTTEN = "Done: I've forgotten {site}, so you're signed out there."
+SIGNIN_UNKNOWN = "My browser doesn't remember {site} for you. Say **sign-ins** to see the list."
+BROWSER_CLEARED = "Done: my browser has forgotten every site for you, so you're signed out everywhere."
 REMINDERS = "Your reminders and scheduled tasks:\n{items}\n\nTo remove one: **cancel reminder** and its id."
 NO_REMINDERS = 'You have no reminders or scheduled tasks. Ask me, e.g. "remind me at 6 to call Sam".'
 REMINDER_CANCELLED = "Cancelled."

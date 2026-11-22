@@ -23,16 +23,19 @@ from .items import Image
 EDIT_LINE = re.compile(r"^\s*(\d{1,2})\s*[:.)-]\s*(.*)$")
 MAX_VALUE = 2000
 MAX_LONG = 10_000  # longtext fields: an email's message
-EDITABLE = ("text", "longtext", "secret")  # inputs on the card
+EDITABLE = ("text", "longtext", "secret", "taps")  # inputs on the card
 TYPED = ("text", "longtext")  # also editable by the text fallback; a secret never goes through the chat
 MASK = "••••"
+TAPS = re.compile(r"(?:\d{1,5},\d{1,5}(?:;\d{1,5},\d{1,5}){0,19})?")  # a check card's taps: "x,y;x,y", or none
 
 
 @dataclass
 class Field:
     label: str
     value: str
-    kind: str = "text"  # text | longtext | bool | info (shown, not editable) | secret (typed by the person, masked)
+    # text | longtext | bool | info (shown, not editable) | secret (typed by the person, masked) |
+    # taps (points the person tapped on a check card's screenshot)
+    kind: str = "text"
 
 
 @dataclass
@@ -63,7 +66,7 @@ class Out(Protocol):
     async def text(self, account: Account, text: str) -> None: ...
 
 
-OPEN_INPUTS = ("signin",)  # cards whose inputs are open from the start: the person types into them
+OPEN_INPUTS = ("signin", "check")  # cards whose inputs are open from the start: the person types or taps
 
 
 def masked(fields: list[Field], values: list[str]) -> list[str]:
@@ -125,7 +128,11 @@ def checked_values(fields: list[Field], values: list) -> list[str] | None:
     for f, v in zip(fields, values, strict=True):
         if not isinstance(v, str) or len(v) > (MAX_LONG if f.kind == "longtext" else MAX_VALUE):
             return None
-        if f.kind in EDITABLE:
+        if f.kind == "taps":
+            if not TAPS.fullmatch(v):
+                return None
+            out.append(v)
+        elif f.kind in EDITABLE:
             out.append(v)
         elif f.kind == "bool" and v.lower() in ("true", "false"):
             out.append(v.lower())

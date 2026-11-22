@@ -214,6 +214,28 @@ SIGNIN_REFUSAL_RETRY = retry(
 )
 
 
+CHECK_CLAIM = re.compile(
+    # "do the check on the card", "tap the picture on the card", "solve the captcha in the app"
+    r"\b(?:check|captcha|verification|human[- ]check|puzzle) card\b|"
+    r"\b(?:do|complete|solve|finish|pass)\b[^.?!\n]{0,30}\b(?:check|captcha|puzzle|verification)\b[^.?!\n]{0,30}"
+    r"\b(?:on|in|using) (?:the|a) (?:card|app)\b|"
+    r"\btap\b[^.?!\n]{0,40}\bon (?:the|a) (?:card|screenshot)\b",
+    re.I,
+)
+
+
+def unbacked_check_claim(answer: str, tools_called: set[str]) -> bool:
+    """The answer points the person at a check card, but browser_human_check didn't run: there's no card."""
+    return bool(CHECK_CLAIM.search(answer)) and "browser_human_check" not in tools_called
+
+
+CHECK_RETRY = retry(
+    "Your draft tells the person to do a check on a card, but you haven't called browser_human_check in this task, "
+    "so no card was shown. A card appears only when you call browser_human_check yourself, with the check on the "
+    "page. If there's no check on the page, say so plainly."
+)
+
+
 SCREENSHOT_REQUEST = re.compile(
     r"\bscreen ?shot|\b(?:show|send) me (?:the|a|that|this) (?:page|site|website|screen|picture)\b|"
     r"\blet me see (?:it|the page|the site)\b",
@@ -267,6 +289,12 @@ CLAIM_CHECKS = (
         lambda d: unbacked_schedule_claim(d.answer, d.called),
         SCHEDULE_RETRY,
         "draft answer claimed something was scheduled; no schedule_add ran",
+    ),
+    Check(
+        "check",
+        lambda d: unbacked_check_claim(d.answer, d.called),
+        CHECK_RETRY,
+        "draft answer pointed at a check card no tool showed; asking the model to call it",
     ),
     Check(
         "screenshot",
