@@ -296,16 +296,43 @@ async def test_settings_show_and_forget_what_the_browser_remembers(tmp_path):
     assert phone.inbox() == [
         {
             "t": "browser",
-            "sites": [{"site": "news.example", "signed_in": False}, {"site": "waitrose.com", "signed_in": True}],
+            "sites": [
+                {"site": "news.example", "signed_in": False, "trusted": False},
+                {"site": "waitrose.com", "signed_in": True, "trusted": False},
+            ],
         }
     ]
     await phone.send({"t": "browser_forget", "site": "waitrose.com"})
-    assert phone.inbox()[0]["sites"] == [{"site": "news.example", "signed_in": False}]
+    left = [{"site": "news.example", "signed_in": False, "trusted": False}]
+    assert phone.inbox()[0]["sites"] == left
     await phone.send({"t": "browser_forget", "site": 5})  # malformed: nothing forgotten
-    assert phone.inbox()[0]["sites"] == [{"site": "news.example", "signed_in": False}]
+    assert phone.inbox()[0]["sites"] == left
     await phone.send({"t": "browser_clear"})
     assert phone.inbox() == [{"t": "browser", "sites": []}]
     assert not (acct.dir / signins.FILE).exists()
+
+
+async def test_settings_trust_sites_and_forget_memories(tmp_path):
+    """SPEC §5.7 and §5.4: set only by the person, from Settings."""
+    from aha_local.tools import memory, trusted
+
+    rig = Rig(tmp_path)
+    _, phone = await rig.pair()
+    await phone.send({"t": "hello", "name": "P"})
+    phone.inbox()
+    acct = rig.accounts.find("Ana")
+    await phone.send({"t": "browser_trust", "site": "www.waitrose.com", "trusted": True})
+    assert phone.inbox() == [{"t": "browser", "sites": [{"site": "waitrose.com", "signed_in": False, "trusted": True}]}]
+    await phone.send({"t": "browser_trust", "site": "192.168.1.1", "trusted": True})
+    assert phone.inbox()[0] == {"t": "error", "code": "bad_site"}
+    await phone.send({"t": "browser_clear"})
+    assert phone.inbox()[0]["sites"][0]["trusted"]  # clearing browser data leaves trust
+    await phone.send({"t": "browser_trust", "site": "waitrose.com", "trusted": False})
+    assert phone.inbox() == [{"t": "browser", "sites": []}] and trusted.sites(acct) == []
+
+    keep, drop = memory.add_fact(acct, "Prefers window seats"), memory.add_fact(acct, "Lives in Leeds")
+    await phone.send({"t": "memory_forget", "id": drop["id"]})
+    assert phone.inbox() == [{"t": "memories", "items": [{"id": keep["id"], "text": "Prefers window seats"}]}]
 
 
 @pytest.mark.parametrize(

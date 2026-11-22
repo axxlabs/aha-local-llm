@@ -33,7 +33,7 @@ from ..accounts import Account, Accounts, Device
 from ..certs import needs_renewal
 from ..items import Image
 from ..protocol import E2E, Cert, CertIssued, CertRequest, DeviceStatus, Pair, Push, Report, ReportResult, Revoke, b64
-from ..tools import signins
+from ..tools import signins, trusted
 from . import crypto, webpush
 
 log = logging.getLogger("aha.channel")
@@ -87,6 +87,15 @@ def photo(value: object) -> Image | None:
     if not raw.startswith(PHOTO_MAGIC[value["mime"]]) or (value["mime"] == "image/webp" and raw[8:12] != b"WEBP"):
         return None
     return Image(mime=value["mime"], b64=b64)
+
+
+def browser_list(account: Account) -> list[dict]:
+    """Settings → Your browser: the sites it remembers and the trusted ones (SPEC §3.4, §5.7)."""
+    trust = set(trusted.sites(account))
+    listed = {s["site"]: {**s, "trusted": s["site"] in trust} for s in signins.sites(account)}
+    for site in trust - set(listed):
+        listed[site] = {"site": site, "signed_in": False, "trusted": True}
+    return [listed[s] for s in sorted(listed)]
 
 
 def clean_text(value: object, limit: int) -> str | None:
@@ -335,16 +344,27 @@ class Channel:
         elif t == "memories_request":
             items = [{"id": m.get("id"), "text": m.get("text")} for m in account.load_memory()]
             await reply({"t": "memories", "items": items})
-        elif t in ("browser_request", "browser_forget", "browser_clear"):
-            # Settings → Your browser (SPEC §3.4, §7.4): what the person's browser remembers.
-            if self.agent is not None:
-                if t == "browser_forget":
-                    site = clean_text(msg.get("site"), 255) or ""
-                    if site:
-                        await self.agent.forget_site(account, site)
+        elif t in ("browser_request", "browser_forget", "browser_clear", "browser_trust"):
+            # Settings → Your browser (SPEC §3.4, §5.7, §7.4): what the person's browser remembers, and trust.
+            site = clean_text(msg.get("site"), 255) or ""
+            if t == "browser_trust" and isinstance(msg.get("trusted"), bool):
+                if not trusted.set_trusted(account, site, msg["trusted"]):
+                    await reply({"t": "error", "code": "bad_site"})
+            elif self.agent is not None:
+                if t == "browser_forget" and site:
+                    await self.agent.forget_site(account, site)
                 elif t == "browser_clear":
                     await self.agent.clear_browser(account)
-            await reply({"t": "browser", "sites": signins.sites(account)})
+            await reply({"t": "browser", "sites": browser_list(account)})
+        elif t == "memory_forget":
+            # Settings → What Aha! remembers: the person's own action, so no card (SPEC §5.4).
+            memory_id = clean_text(msg.get("id"), 64)
+            items = account.load_memory()
+            if memory_id and any(m.get("id") == memory_id for m in items):
+                account.save_memory([m for m in items if m.get("id") != memory_id])
+                account.audit({"memory_forgotten_in_settings": memory_id})
+            items = [{"id": m.get("id"), "text": m.get("text")} for m in account.load_memory()]
+            await reply({"t": "memories", "items": items})
         elif t == "devices_request":
             await reply({"t": "devices", "items": self._device_list(account, device)})
         elif t == "revoke_device":

@@ -4,7 +4,7 @@
 
 import pytest
 
-from aha_local.policy.browser import decide, form_for, offered
+from aha_local.policy.browser import decide, form_for, offered, runs_trusted
 from aha_local.policy.urls import check_url, site_of
 
 
@@ -73,6 +73,18 @@ def test_after_a_signed_in_page_only_sites_already_opened_stay_automatic():
     new_tab = {"action": "new", "url": "https://evil.example/"}
     assert decide("browser_tabs", new_tab, False, opened).outcome == "approval"
     assert decide("browser_click", {"target": "e1"}, False, opened).outcome == "auto"  # clicks stay automatic
+
+
+def test_trusted_sites_skip_the_card_only_for_typing_and_never_after_mail():
+    """SPEC §5.7."""
+    trusted = {"waitrose.com"}
+    for name in ("browser_type", "browser_fill_form", "browser_select_option", "browser_press_key"):
+        assert runs_trusted(name, "waitrose.com", trusted, False), name
+        assert not runs_trusted(name, "waitrose.com", trusted, True), name  # after reading mail (§5.5)
+        assert not runs_trusted(name, "evil.example", trusted, False), name
+        assert not runs_trusted(name, "", trusted, False), name  # the page's site couldn't be read
+    for name in ("browser_navigate", "browser_tabs", "browser_sign_in", "browser_human_check", "browser_evaluate"):
+        assert not runs_trusted(name, "waitrose.com", trusted, False), name
 
 
 def test_hidden_tools_are_not_offered():

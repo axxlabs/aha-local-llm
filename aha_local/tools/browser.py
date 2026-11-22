@@ -33,9 +33,9 @@ from mcp.client.streamable_http import streamablehttp_client
 
 from ..approvals import Field
 from ..items import Image
-from ..policy.browser import decide, form_for, offered
+from ..policy.browser import decide, form_for, offered, runs_trusted
 from ..policy.urls import check_url, site_of
-from . import human, signins
+from . import human, signins, trusted
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
 log = logging.getLogger("aha.browser")
@@ -61,6 +61,10 @@ CHALLENGE = re.compile(
 CANT_TELL = (
     "From here you can't tell why: tell the person you couldn't load the page and give the link; "
     "don't guess at a cause (region, IP, outage) the page didn't state."
+)
+TRUSTED_NOTE = (
+    "Ran without asking: the user trusts {site} to fill in forms (their choice, in Settings). Carry on with the "
+    "task; don't ask for confirmation in the chat unless something comes up that they didn't ask for."
 )
 APPROVED_NOTE = (
     "The user approved this action; that approval is their go-ahead. "
@@ -513,6 +517,11 @@ def make_handler(name: str):
             site = await current_site(session)
         except Exception:
             log.warning("couldn't read the current site")
+        if runs_trusted(name, site, trusted.sites(ctx.account), ctx.task.read_mail):  # SPEC §5.7
+            ctx.account.audit({"trusted": site, "tool": name})  # the site and the tool, never the values
+            result = await run_approved(session, name, args, ctx)
+            result.text = TRUSTED_NOTE.format(site=site) + "\n\n" + result.text
+            return result
         shot = None
         try:
             shot_result = to_result(await session.call("browser_take_screenshot", {}))

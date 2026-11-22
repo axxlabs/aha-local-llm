@@ -315,3 +315,34 @@ def test_human_checks_are_spotted_from_the_page():
         assert CHALLENGE.search(page), page
     for page in ('- button "Add to trolley"', '- link "Robots and drones" [ref=e9]', '- heading "Human resources"'):
         assert not CHALLENGE.search(page), page
+
+
+async def test_on_a_trusted_site_typing_runs_without_a_card(setup, llm, chat, accounts):
+    """SPEC §5.7: the person's own choice, in Settings; never after reading mail."""
+    from aha_local.tools import trusted
+
+    agent, _, fake = setup
+    fe, hb = person(accounts), accounts.create("Hb")
+    assert trusted.set_trusted(fe, "https://www.shop.example/basket", True)
+    assert trusted.sites(fe) == ["shop.example"] and trusted.sites(hb) == []
+    assert not trusted.set_trusted(fe, "localhost", True) and not trusted.set_trusted(fe, "nonsense", True)
+    llm.call("browser_navigate", url="https://www.shop.example/")
+    llm.call("browser_type", element="Email", target="e1", text="fe@example.com")
+    llm.answer("Typed.")
+    await agent.inbound(fe, "type my email")
+    await settle(agent)
+    assert not any(m.card for m in chat.sent)
+    assert fake.contexts[-1].fields == {"e1": "fe@example.com"}
+    assert tool_results(llm)[1].startswith("Ran without asking: the user trusts shop.example")
+    audit = b"\n".join(fe.vault.records(fe.dir / "audit.jsonl")).decode()
+    assert '"trusted": "shop.example"' in audit and "fe@example.com" not in audit
+
+    chat.read = len(chat.sent)
+    llm.call("browser_navigate", url="https://www.shop.example/")  # another person: their own list, so a card
+    llm.call("browser_type", element="Email", target="e1", text="hb@example.com")
+    llm.answer("Typed.")
+    await agent.inbound(hb, "type my email")
+    card = await chat.next()
+    assert card.card and card.card["kind"] == "action"
+    await agent.approval_reply(hb, card.card["id"], "decline")
+    await settle(agent)
