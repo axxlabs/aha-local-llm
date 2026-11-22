@@ -42,6 +42,27 @@ PAIR_LIFETIME = 600
 MAX_TEXT = 20_000
 SYNC_LIMIT = 500
 HISTORY_LIMIT = 50
+REPLY_BYTES = 1_500_000  # items in one sync or history reply, as JSON: well inside a 2 MB ratchet message
+
+
+def fit(items: list[dict], budget: int = REPLY_BYTES) -> list[dict]:
+    """Items that fit one reply (SPEC §6.6): leave out the oldest items' pictures first (a card's screenshot is
+    a few hundred KB), then, only if still too large, the oldest items themselves."""
+    sizes = [len(json.dumps(it, ensure_ascii=False)) for it in items]
+    total = sum(sizes)
+    out = list(items)
+    for i, it in enumerate(out):
+        if total <= budget:
+            return out
+        if "image" in it:
+            slim = {k: v for k, v in it.items() if k != "image"}
+            total -= sizes[i] - len(json.dumps(slim, ensure_ascii=False))
+            out[i] = slim
+    while out and total > budget:
+        total -= len(json.dumps(out.pop(0), ensure_ascii=False))
+    return out
+
+
 HISTORY_DAYS = (None, 365, 90, 30, 7, 1)  # how long the computer may keep a person's history (§3.8.1)
 CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
@@ -284,7 +305,7 @@ class Channel:
             days = msg.get("days")
             if after == 0 and isinstance(days, int) and 0 <= days < self.history_days:
                 since = time.time() - days * 86400
-            items = account.items(after=after, since=since, limit=SYNC_LIMIT)
+            items = fit(account.items(after=after, since=since, limit=SYNC_LIMIT))
             await reply({"t": "sync", "items": items, "last": account.seq, "start": account.history_start()})
         elif t == "history_request":
             before = msg.get("before")
@@ -292,7 +313,7 @@ class Channel:
             if not isinstance(before, int) or before < 1:
                 return
             limit = limit if isinstance(limit, int) and 1 <= limit <= HISTORY_LIMIT else HISTORY_LIMIT
-            await reply({"t": "history", "items": account.items(before=before, limit=limit)})
+            await reply({"t": "history", "items": fit(account.items(before=before, limit=limit))})
         elif t == "history_settings_request":
             await reply({"t": "history_settings", "days": account.history_days})
         elif t == "history_settings_set":

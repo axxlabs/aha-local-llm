@@ -345,3 +345,18 @@ def test_short_fingerprint_is_what_people_compare():
     short = c.short_fingerprint(fp)
     assert len(short) == 19 and short.count(" ") == 3 and short.replace(" ", "").isalnum()
     assert short == "AAAQ EAYE AUDA OCAJ"
+
+
+def test_a_reply_never_outgrows_a_message():
+    """Seen 2026-11-22: a sync with many card screenshots was over the 2 MB limit, so a device couldn't sync."""
+    from aha_local.e2e.channel import fit
+
+    shot = {"mime": "image/jpeg", "b64": "A" * 300_000}
+    items = [{"seq": i, "t": "approval", "title": f"card {i}", "image": shot} for i in range(1, 11)]
+    out = fit(items, budget=1_000_000)
+    assert [it["seq"] for it in out] == list(range(1, 11))  # every item kept…
+    assert [("image" in it) for it in out] == [False] * 7 + [True] * 3  # …the oldest without their pictures
+    assert len(json.dumps(out)) <= 1_000_000
+    big = [{"seq": i, "t": "msg", "text": "x" * 400_000} for i in range(1, 6)]
+    assert [it["seq"] for it in fit(big, budget=1_000_000)] == [4, 5]  # text alone too big: oldest dropped
+    assert fit(items[:2]) == items[:2]  # small replies are untouched
