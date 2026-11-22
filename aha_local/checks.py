@@ -12,6 +12,8 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+from dataclasses import dataclass
 
 HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*#*$", re.M)
 
@@ -77,6 +79,35 @@ WARNING_MARK = "⚠️ _Not confirmed on a page I opened"
 
 
 MEMORY_REQUEST = re.compile(r"\b(forget|remember|memor\w*|save|saving|delete|remove|erase|update|change)\b", re.I)
+
+# ---- claims the tools must back (SPEC §3.5.1): each draft that fails one goes back to the model once
+
+FROM_SCRATCH = (
+    "Then write your reply to the person from scratch: they haven't seen your draft, and never mention this check."
+)
+
+
+def retry(instruction: str) -> str:
+    """What the model is told when a draft goes back: the problem and what to do, then the same closing."""
+    return f"[aha check] {instruction} {FROM_SCRATCH}"
+
+
+@dataclass(frozen=True)
+class Draft:
+    asked: str  # what the person said in this task
+    answer: str
+    called: set[str]  # tools that ran without error in this task
+    can_sign_in: bool
+
+
+@dataclass(frozen=True)
+class Check:
+    name: str
+    failed: Callable[[Draft], bool]
+    retry: str
+    log: str
+
+
 # Affirmative only: "I've forgotten", "Done, I deleted", "I'll no longer remember". "I haven't saved" and
 # "I never saved" don't match, because the verb must follow "I", "I've", "I have" directly.
 MEMORY_CLAIM = re.compile(
@@ -95,11 +126,10 @@ def unbacked_memory_claim(asked: str, answer: str, tools_called: set[str]) -> bo
     return bool(MEMORY_REQUEST.search(asked) and MEMORY_CLAIM.search(answer) and not tools_called & MEMORY_WRITE_TOOLS)
 
 
-MEMORY_RETRY = (
-    "[aha check] Your draft says a memory was saved, changed or forgotten, but you haven't called memory_add, "
-    "memory_update or memory_delete in this task, so nothing changed. Memories are listed in the <context> block. "
-    "If the person wants a change, call the tool now (they'll approve it); if not, correct your answer. "
-    "Then write your reply to the person from scratch: they haven't seen your draft, and never mention this check."
+MEMORY_RETRY = retry(
+    "Your draft says a memory was saved, changed or forgotten, but you haven't called memory_add, memory_update or "
+    "memory_delete in this task, so nothing changed. Memories are listed in the <context> block. If the person wants "
+    "a change, call the tool now (they'll approve it); if not, correct your answer."
 )
 
 
@@ -113,12 +143,11 @@ def unbacked_signin_claim(answer: str, tools_called: set[str]) -> bool:
     return bool(SIGNIN_CLAIM.search(answer)) and "browser_sign_in" not in tools_called
 
 
-SIGNIN_RETRY = (
-    "[aha check] Your draft tells the person to use a sign-in card, but you haven't called browser_sign_in in this "
-    "task, so no card was shown. A card appears only when you call browser_sign_in yourself, with the references "
-    "of the sign-in fields from the latest snapshot (take one if needed; if the page has only an email field "
-    "first, use that alone). If you can't find the fields, say so plainly. Then write your reply to the person "
-    "from scratch: they haven't seen your draft, and never mention this check."
+SIGNIN_RETRY = retry(
+    "Your draft tells the person to use a sign-in card, but you haven't called browser_sign_in in this task, so no "
+    "card was shown. A card appears only when you call browser_sign_in yourself, with the references of the sign-in "
+    "fields from the latest snapshot (take one if needed; if the page has only an email field first, use that alone). "
+    "If you can't find the fields, say so plainly."
 )
 
 
@@ -134,11 +163,10 @@ def unbacked_schedule_claim(answer: str, tools_called: set[str]) -> bool:
     return bool(SCHEDULE_CLAIM.search(answer)) and "schedule_add" not in tools_called
 
 
-SCHEDULE_RETRY = (
-    "[aha check] Your draft says a reminder or task is scheduled, but you haven't called schedule_add in this "
-    "task, so nothing is: you can't act later on your own. Call schedule_add now (a scheduled task shows the "
-    "person a card to approve), or correct your answer. Then write your reply to the person from scratch: they "
-    "haven't seen your draft, and never mention this check."
+SCHEDULE_RETRY = retry(
+    "Your draft says a reminder or task is scheduled, but you haven't called schedule_add in this task, so nothing "
+    "is: you can't act later on your own. Call schedule_add now (a scheduled task shows the person a card to "
+    "approve), or correct your answer."
 )
 
 SECRET = r"(?:password|passcode|one-time code|verification code|2fa code|security code|pin)"
@@ -156,11 +184,10 @@ def asks_for_secret(answer: str) -> bool:
     return bool(PASSWORD_ASK.search(answer))
 
 
-SECRET_RETRY = (
-    "[aha check] Your draft asks the person for a password or code in the chat. Never do that: passwords and codes "
-    "go only through browser_sign_in, where they type them on a card you never see. Offer to show the sign-in card "
-    "again instead, or another way forward. Then write your reply to the person from scratch: they haven't seen "
-    "your draft, and never mention this check."
+SECRET_RETRY = retry(
+    "Your draft asks the person for a password or code in the chat. Never do that: passwords and codes go only "
+    "through browser_sign_in, where they type them on a card you never see. Offer to show the sign-in card again "
+    "instead, or another way forward."
 )
 
 SIGNIN_REFUSAL = re.compile(
@@ -178,13 +205,12 @@ def refuses_sign_in(answer: str, tools_called: set[str], can_sign_in: bool) -> b
     return can_sign_in and "browser_sign_in" not in tools_called and bool(SIGNIN_REFUSAL.search(answer))
 
 
-SIGNIN_REFUSAL_RETRY = (
-    "[aha check] Your draft says you can't sign in or use the person's account on the site. You can: open the "
-    "site, go to its sign-in page, take a snapshot and call browser_sign_in with the references of the sign-in "
-    "fields. The person types their details on the card and you never see them, so there's nothing to refuse. "
-    "Then carry on with the task (their basket, orders, bookings). Only if the site can't be opened or has no "
-    "sign-in form, say that plainly. Write your reply to the person from scratch: they haven't seen your draft, "
-    "and never mention this check."
+SIGNIN_REFUSAL_RETRY = retry(
+    "Your draft says you can't sign in or use the person's account on the site. You can: open the site, go to its "
+    "sign-in page, take a snapshot and call browser_sign_in with the references of the sign-in fields. The person "
+    "types their details on the card and you never see them, so there's nothing to refuse. Then carry on with the "
+    "task (their basket, orders, bookings). Only if the site can't be opened or has no sign-in form, say that "
+    "plainly."
 )
 
 
@@ -204,20 +230,59 @@ def unshown_screenshot(asked: str, tools_called: set[str]) -> bool:
     )
 
 
-SCREENSHOT_RETRY = (
-    "[aha check] The person asked to see it, but you haven't sent them anything: browser_take_screenshot only "
-    "shows the page to you. Call show_screenshot to send it to their chat, then answer briefly. Never mention "
-    "this check."
+SCREENSHOT_RETRY = retry(
+    "The person asked to see it, but you haven't sent them anything: browser_take_screenshot only shows the page to "
+    "you. Call show_screenshot to send it to their chat, and keep your answer brief."
+)
+
+
+# In this order; each runs at most once per task.
+CLAIM_CHECKS = (
+    Check(
+        "memory",
+        lambda d: unbacked_memory_claim(d.asked, d.answer, d.called),
+        MEMORY_RETRY,
+        "draft answer claimed a memory change no tool made; asking the model to fix it",
+    ),
+    Check(
+        "signin",
+        lambda d: unbacked_signin_claim(d.answer, d.called),
+        SIGNIN_RETRY,
+        "draft answer pointed at a sign-in card no tool showed; asking the model to call it",
+    ),
+    Check(
+        "refusal",
+        lambda d: refuses_sign_in(d.answer, d.called, d.can_sign_in),
+        SIGNIN_REFUSAL_RETRY,
+        "draft answer refused to sign in to a site without trying the sign-in card",
+    ),
+    Check(
+        "secret",
+        lambda d: asks_for_secret(d.answer),
+        SECRET_RETRY,
+        "draft answer asked for a password or code in the chat",
+    ),
+    Check(
+        "schedule",
+        lambda d: unbacked_schedule_claim(d.answer, d.called),
+        SCHEDULE_RETRY,
+        "draft answer claimed something was scheduled; no schedule_add ran",
+    ),
+    Check(
+        "screenshot",
+        lambda d: unshown_screenshot(d.asked, d.called),
+        SCREENSHOT_RETRY,
+        "the person asked to see a page and nothing was sent; asking for show_screenshot",
+    ),
 )
 
 
 def retry_prompt(values: list[str]) -> str:
     shown = ", ".join(values[:8])
-    return (
-        f"[aha check] Your draft answer contains numbers that aren't on any page you opened in this task: {shown}. "
+    return retry(
+        f"Your draft answer contains numbers that aren't on any page you opened in this task: {shown}. "
         "Search snippets don't count. Open the page that shows them (fetch_url, or the browser if the site "
-        "blocks it) and confirm them, or give the answer without them and say you couldn't confirm them. "
-        "Then write your reply to the person from scratch: they haven't seen your draft, and never mention this check."
+        "blocks it) and confirm them, or give the answer without them and say you couldn't confirm them."
     )
 
 

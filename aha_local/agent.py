@@ -314,9 +314,7 @@ class Agent:
         ctx = ToolContext(account, self.approvals, self.config, TaskState(), browser, send)
         tools = self.registry.specs()
         last = ""
-        retried = False
-        memory_retried = False
-        signin_retried = schedule_retried = screenshot_retried = secret_retried = refusal_retried = False
+        retried: set[str] = set()  # the checks that already sent a draft back (SPEC §3.5.1): once each
         can_sign_in = "browser_sign_in" in self.registry.names()
         called: set[str] = set()  # tools that ran without error in this task
         # Where numbers in the answer may come from: what the person said or saved, earlier answers, and pages
@@ -339,50 +337,22 @@ class Agent:
             reply = await self.llm.chat(msgs, tools)
             log.info("model call: %d prompt tokens, %d cached", reply.prompt_tokens, reply.cached_tokens)
             if not reply.tool_calls:
-                if not memory_retried and checks.unbacked_memory_claim(text, reply.content or "", called):
-                    memory_retried = True
-                    log.info("draft answer claimed a memory change no tool made; asking the model to fix it")
-                    task.append({"role": "assistant", "content": reply.content or ""})
-                    task.append({"role": "user", "content": checks.MEMORY_RETRY})
-                    continue
-                if not signin_retried and checks.unbacked_signin_claim(reply.content or "", called):
-                    signin_retried = True
-                    log.info("draft answer pointed at a sign-in card no tool showed; asking the model to call it")
-                    task.append({"role": "assistant", "content": reply.content or ""})
-                    task.append({"role": "user", "content": checks.SIGNIN_RETRY})
-                    continue
-                if not refusal_retried and checks.refuses_sign_in(reply.content or "", called, can_sign_in):
-                    refusal_retried = True
-                    log.info("draft answer refused to sign in to a site without trying the sign-in card")
-                    task.append({"role": "assistant", "content": reply.content or ""})
-                    task.append({"role": "user", "content": checks.SIGNIN_REFUSAL_RETRY})
-                    continue
-                if not secret_retried and checks.asks_for_secret(reply.content or ""):
-                    secret_retried = True
-                    log.info("draft answer asked for a password or code in the chat")
-                    task.append({"role": "assistant", "content": reply.content or ""})
-                    task.append({"role": "user", "content": checks.SECRET_RETRY})
-                    continue
-                if not schedule_retried and checks.unbacked_schedule_claim(reply.content or "", called):
-                    schedule_retried = True
-                    log.info("draft answer claimed something was scheduled; no schedule_add ran")
-                    task.append({"role": "assistant", "content": reply.content or ""})
-                    task.append({"role": "user", "content": checks.SCHEDULE_RETRY})
-                    continue
-                if not screenshot_retried and checks.unshown_screenshot(text, called):
-                    screenshot_retried = True
-                    log.info("the person asked to see a page and nothing was sent; asking for show_screenshot")
-                    task.append({"role": "assistant", "content": reply.content or ""})
-                    task.append({"role": "user", "content": checks.SCREENSHOT_RETRY})
+                draft = checks.Draft(text, reply.content or "", called, can_sign_in)
+                failed = next((c for c in checks.CLAIM_CHECKS if c.name not in retried and c.failed(draft)), None)
+                if failed:
+                    retried.add(failed.name)
+                    log.info(failed.log)
+                    task.append({"role": "assistant", "content": draft.answer})
+                    task.append({"role": "user", "content": failed.retry})
                     continue
                 if has_photo:
                     # Numbers in the person's photo can't be matched as text: no retry, no warning, and the
                     # answer isn't a source later (SPEC §3.5.1).
                     return checks.chat_format(reply.content or ""), False, text
                 missing = checks.unverified(checks.chat_format(reply.content or ""), sources)
-                if missing and not retried:
+                if missing and "numbers" not in retried:
                     # One more go: ask the model to confirm the numbers on a page, or drop them (SPEC §3.5).
-                    retried = True
+                    retried.add("numbers")
                     log.info("draft answer had %d unconfirmed number(s); asking the model to check", len(missing))
                     task.append({"role": "assistant", "content": reply.content or ""})
                     task.append({"role": "user", "content": checks.retry_prompt(missing)})
