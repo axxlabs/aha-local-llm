@@ -101,6 +101,11 @@ class FakeContext:
                 f'- textbox "Verification code" [ref=e3]: {self.fields.get("e3", "")}\n'
                 '- button "Sign in" [ref=e4]\n```'
             )
+        if "account" in self.url:  # a page with a password field, not a sign-in page
+            return (
+                f"### Page\n- Page URL: {self.url}\n### Snapshot\n```yaml\n"
+                '- textbox "Your email" [ref=e1]\n- textbox "Account password" [ref=e7]\n```'
+            )
         if "queue" in self.url:  # an "are you human?" check
             return (
                 f"### Page\n- Page URL: {self.url}\n- HTTP status: 403\n### Snapshot\n```yaml\n"
@@ -110,6 +115,8 @@ class FakeContext:
             f"### Page\n- Page URL: {self.url}\n### Snapshot\n```yaml\n"
             f'- textbox "Your email" [ref=e1]: {self.fields.get("e1", "")}\n'
             f'- textbox "Postcode" [ref=e3]: {self.fields.get("e3", "")}\n'
+            '- combobox "Country" [ref=e9]\n'
+            '- iframe [ref=f8e1]:\n  - searchbox "Search:" [ref=f8e31]\n'
             '- button "Continue" [ref=e4]\n```'
         )
 

@@ -36,6 +36,8 @@ class TaskState:
 
     approved_sites: set[str] = field(default_factory=set)
     last_snapshot: str = ""  # the latest page snapshot, to label approvals from the page itself
+    page_url: str = ""  # the current page's address, from the browser
+    ref_lines: dict[str, str] = field(default_factory=dict)  # elements seen on the current page: ref → its line
     read_mail: bool = False  # set by email_search/email_read: from then on, text going out is a card (SPEC §5.5)
     secrets: list[str] = field(default_factory=list)  # values the person typed on a sign-in card: never shown again
     # The sites the person signed in on (read once per task), and whether this task has had a page of one: from

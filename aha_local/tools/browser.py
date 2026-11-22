@@ -317,7 +317,11 @@ async def current_site(session) -> str:
 
 
 SNAPSHOT_LINK = re.compile(r"### Snapshot\s*\n- \[Snapshot\]\([^)]*\)")
-REF_TARGET = re.compile(r"^\[?ref=(e\d+)\]?$")
+# The model writes references as "e23", "[ref=e23]", "ref=f8e31"…: the browser wants "e23" / "f8e31".
+REF_TARGET = re.compile(r"^\[?\s*(?:ref\s*[=:]\s*)?((?:f\d+)?e\d+)\s*\]?$")
+# A field only the sign-in card may fill: its page label says password or code (SPEC §3.4 "Signing in").
+SECRET_FIELD = re.compile(r"pass ?word|passcode|\bpin\b|one[- ]time|verification code|security code|\botp\b|2fa", re.I)
+TYPING = ("browser_type", "browser_select_option", "browser_fill_form")
 YAML_BLOCK = re.compile(r"```yaml\n(.*?)(?:```|\Z)", re.S)  # tolerant of a snapshot cut to fit
 
 
@@ -358,8 +362,22 @@ async def call_with_snapshot(session, name: str, args: dict, ctx: ToolContext) -
     return result
 
 
+REF_IN_LINE = re.compile(r"\[ref=((?:f\d+)?e\d+)\]")
+
+
+def remember_refs(ctx: ToolContext, text: str) -> None:
+    """The elements seen on the current page (snapshots and finds), so a card is never shown for one that isn't."""
+    m = PAGE_URL.search(text)
+    if m and m.group(1) != ctx.task.page_url:
+        ctx.task.page_url, ctx.task.ref_lines = m.group(1), {}
+    for line in text.splitlines():
+        for ref in REF_IN_LINE.findall(line):
+            ctx.task.ref_lines[ref] = line
+
+
 def annotate(ctx: ToolContext, result: ToolResult) -> None:
     """What the harness tells the model about a page it opened, in code (SPEC §3.4, §5.6)."""
+    remember_refs(ctx, result.text)
     if m := YAML_BLOCK.search(result.text):
         ctx.task.last_snapshot = m.group(1)
         note_sign_in_form(ctx, result, m.group(1))
@@ -473,6 +491,32 @@ async def run_approved(session, name: str, args: dict, ctx: ToolContext) -> Tool
     return await call_with_snapshot(session, name, args, ctx)
 
 
+def check_targets(name: str, args: dict, ctx: ToolContext) -> ToolResult | None:
+    """Typing goes only into elements of the latest snapshot, and never into a password or code field."""
+    if name not in TYPING:
+        return None
+    if name == "browser_fill_form":
+        fields = args.get("fields") if isinstance(args.get("fields"), list) else []
+        refs = [str(f.get("target", "")) for f in fields if isinstance(f, dict)]
+    else:
+        refs = [str(args.get("target", ""))]
+    for ref in refs:
+        if ref not in ctx.task.ref_lines:
+            return ToolResult(
+                f"{ref or 'That element'} isn't in the latest snapshot. Take a snapshot and give the element's "
+                "reference exactly as shown after ref=, like e12 or f8e31.",
+                error=True,
+            )
+        label = element_label(ctx.task.ref_lines[ref], ref)
+        if SECRET_FIELD.search(label):
+            return ToolResult(
+                f"“{label}” is a sign-in field: never fill it yourself. Call browser_sign_in with the references of "
+                "the sign-in fields; the user types their details on a sign-in card and you never see them.",
+                error=True,
+            )
+    return None
+
+
 def labelled(name: str, args: dict, ctx: ToolContext) -> dict:
     """Replace the model's element descriptions with the page's own labels, for the approval."""
     snap = ctx.task.last_snapshot
@@ -496,6 +540,8 @@ def make_handler(name: str):
         if session is None:
             return ToolResult("The browser isn't available right now.", error=True)
         args = normalise_targets(args)
+        if refused := check_targets(name, args, ctx):  # before any card: a call that would fail never asks
+            return refused
         if ctx.task.read_mail:  # SPEC §5.5: after reading mail, every address the model picks is a card
             verdict = decide(name, args, False, set())
         elif ctx.task.on_signed_in:  # SPEC §5.6: after a signed-in page, a site not opened yet is a card

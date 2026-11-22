@@ -346,3 +346,45 @@ async def test_on_a_trusted_site_typing_runs_without_a_card(setup, llm, chat, ac
     assert card.card and card.card["kind"] == "action"
     await agent.approval_reply(hb, card.card["id"], "decline")
     await settle(agent)
+
+
+async def test_a_card_is_never_shown_for_a_call_that_would_fail(setup, llm, chat, accounts):
+    """Seen with the real model (2026-11-22): it wrote "ref=f8e31"; the person approved, the browser refused the
+    selector, the model retried, and the person was asked the same thing twice."""
+    from aha_local.tools.browser import normalise_targets
+
+    assert normalise_targets({"target": "ref=f8e31"})["target"] == "f8e31"
+    assert normalise_targets({"target": "[ref=e12]"})["target"] == "e12"
+    agent, _, fake = setup
+    fe = person(accounts)
+    llm.call("browser_navigate", url="https://www.shop.example/")
+    llm.call("browser_type", element="Search", target="ref=e8e31", text="basmati rice")  # not on the page
+    llm.call("browser_type", element="Search", target="ref=f8e31", text="basmati rice")
+    llm.answer("Searched.")
+    await agent.inbound(fe, "search for basmati rice")
+    card = await chat.next()
+    assert card.card and card.card["title"] == "Type into Search on shop.example?"  # one card, the page's label
+    await agent.approval_reply(fe, card.card["id"], "approve")
+    await settle(agent)
+    assert "e8e31 isn't in the latest snapshot" in tool_results(llm)[1]
+    assert fake.contexts[-1].fields == {"f8e31": "basmati rice"}
+    assert sum(1 for m in chat.sent if m.card) == 1
+
+
+async def test_password_fields_are_only_ever_filled_through_the_sign_in_card(setup, llm, chat, accounts):
+    """Seen with the real model (2026-11-22): a login form as an ordinary form card, a real password typed into it."""
+    agent, _, _ = setup
+    fe = person(accounts)
+    fields = [
+        {"element": "Email", "target": "e1", "type": "textbox", "value": "test@test.com", "name": "Email"},
+        {"element": "Password", "target": "e7", "type": "textbox", "value": "password123", "name": "Password"},
+    ]
+    llm.call("browser_navigate", url="https://www.shop.example/account")
+    llm.call("browser_fill_form", fields=fields)
+    llm.call("browser_type", element="Password", target="e7", text="password123")
+    llm.answer("Couldn't.")
+    await agent.inbound(fe, "log me in")
+    await settle(agent)
+    assert not any(m.card for m in chat.sent)
+    results = tool_results(llm)
+    assert all("is a sign-in field" in r and "browser_sign_in" in r for r in results[1:3])
