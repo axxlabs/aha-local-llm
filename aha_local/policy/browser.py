@@ -67,15 +67,16 @@ SAFE_KEYS = {
 }
 
 
-# Typing on the page: auto on a site the person trusts (SPEC §5.7), never in a task that has read mail (§5.5).
+# Typing on the page: auto on a site the person trusts (SPEC §5.7), also after reading mail: what's typed goes only to
+# a site they chose to trust, and opening any other site after mail is still a card (§5.5).
 TRUSTABLE = {"browser_type", "browser_fill_form", "browser_select_option", "browser_press_key", "browser_handle_dialog"}
 
 
-def runs_trusted(name: str, page_site: str, trusted: set[str] | list[str], read_mail: bool) -> bool:
+def runs_trusted(name: str, page_site: str, trusted: set[str] | list[str]) -> bool:
     """Whether an action that needs approval runs without a card because the person trusts the page's site.
 
     `page_site` comes from the browser's own address, never from the model."""
-    return name in TRUSTABLE and not read_mail and bool(page_site) and page_site in trusted
+    return name in TRUSTABLE and bool(page_site) and page_site in trusted
 
 
 def offered(name: str) -> bool:

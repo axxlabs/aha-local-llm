@@ -654,8 +654,9 @@ def make_handler(name: str):
             site = await current_site(session)
         except Exception:
             log.warning("couldn't read the current site")
-        if runs_trusted(name, site, trusted.sites(ctx.account), ctx.task.read_mail):  # SPEC §5.7
-            ctx.account.audit({"trusted": site, "tool": name})  # the site and the tool, never the values
+        if runs_trusted(name, site, trusted.sites(ctx.account)):  # SPEC §5.7
+            # The site and the tool, never the values; and whether the task had read mail (§5.5).
+            ctx.account.audit({"trusted": site, "tool": name, **({"after_mail": True} if ctx.task.read_mail else {})})
             result = await run_approved(session, name, args, ctx)
             result.text = TRUSTED_NOTE.format(site=site) + "\n\n" + result.text
             return result
