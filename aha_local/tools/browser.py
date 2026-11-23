@@ -236,6 +236,8 @@ class BrowserPool:
             log.info("browser context closed for an account (%d open)", len(self._sessions))
 
     async def reap(self) -> None:
+        if self.idle_seconds <= 0:  # the default: windows stay open, like the person's own browser (SPEC §3.4)
+            return
         now = time.monotonic()
         for account_id, s in list(self._sessions.items()):
             if account_id not in self._held and not s.busy and now - s.last_used >= self.idle_seconds:

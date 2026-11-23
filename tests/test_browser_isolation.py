@@ -129,7 +129,7 @@ async def test_two_people_browse_at_the_same_time_on_their_own_pages(pool, fake_
 
 
 async def test_an_idle_context_is_discarded_and_the_next_one_starts_empty(fake_browser):
-    pool = BrowserPool("x", idle_seconds=0, session=fake_browser.Session)
+    pool = BrowserPool("x", idle_seconds=1e-9, session=fake_browser.Session)
     fe = pool.for_account("fe")
     await fe.call("browser_navigate", {"url": "https://shop.example/basket"})
     with pool.hold("fe"):  # while a task runs, it isn't closed
@@ -144,7 +144,7 @@ async def test_an_idle_context_is_discarded_and_the_next_one_starts_empty(fake_b
 
 
 async def test_a_context_in_use_is_not_closed_for_idleness(fake_browser):
-    pool = BrowserPool("x", idle_seconds=0, session=fake_browser.Session)
+    pool = BrowserPool("x", idle_seconds=1e-9, session=fake_browser.Session)
     s = pool.session("fe")
     await asyncio.wait_for(s.ready.wait(), 1)
     s.busy = 1
@@ -191,3 +191,14 @@ async def test_deleting_an_account_discards_its_browser_context(pool, fake_brows
 def test_the_browser_container_never_shares_a_context_between_connections():
     unit = (Path(__file__).parents[1] / "deploy" / "quadlet" / "aha-browser.container").read_text()
     assert "--isolated" in unit and "--shared-browser-context" not in unit
+
+
+async def test_by_default_a_window_stays_open(fake_browser):
+    """idle_minutes = 0 (the default): each person's window stays open, like their own browser (SPEC §3.4)."""
+    pool = BrowserPool("x", idle_seconds=0, session=fake_browser.Session)
+    s = pool.session("fe")
+    await asyncio.wait_for(s.ready.wait(), 1)
+    s.last_used -= 10 * 24 * 3600  # ten days unused
+    await pool.reap()
+    assert pool.is_open("fe")
+    await pool.stop()
