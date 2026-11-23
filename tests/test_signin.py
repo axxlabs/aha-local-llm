@@ -399,6 +399,7 @@ def test_asking_for_a_password_in_the_chat_is_caught():
         "Tell me your email and password and I'll walk you through the sign-in.",
         "Please send me the verification code from the text message.",
         "You can share your Waitrose password here.",
+        "I need you to provide a password for the account. What password would you like to use?",  # evri.com
     ):
         assert checks.asks_for_secret(bad), bad
     for fine in (
@@ -477,3 +478,30 @@ async def test_a_cookie_banner_past_where_a_long_page_is_cut_is_still_closed(set
     await start_sign_in(agent, llm, chat, fe, url="https://www.waitrose.com/login/cookies-ask/long")
     page = fake.contexts[-1]
     assert not page.banner and "e80" in page.moves
+
+
+def test_an_answer_that_only_announces_work_goes_back():
+    """Seen on evri.com sign-up: "Let me proceed with the account creation." as the final answer, nothing done."""
+    for bad in (
+        "I'll create a secure password for you and fill in the form. Let me proceed with the account creation.",
+        "I found 3 slots. I'll book the 10am one now.",
+    ):
+        assert checks.only_promises(bad), bad
+    for fine in (
+        "If there are more items you'd like me to find, please let me know and I will continue scrolling.",
+        "Here is your trolley. Let me know if you want to change anything.",
+        "Shall I book it now?",
+        "Your parcel is booked for Tuesday.",
+    ):
+        assert not checks.only_promises(fine), fine
+
+
+async def test_a_promise_as_the_final_answer_is_sent_back_once(setup, llm, chat, accounts):
+    agent, _, _ = setup
+    fe = person(accounts)
+    llm.answer("I'll fill in the form now. Let me proceed.")
+    llm.answer("I couldn't open the form: the page didn't load.")
+    await agent.inbound(fe, "make me an evri account")
+    await settle(agent)
+    assert "nothing runs after it" in json.dumps(llm.requests[1]["messages"])
+    assert chat.texts()[-1] == "I couldn't open the form: the page didn't load."

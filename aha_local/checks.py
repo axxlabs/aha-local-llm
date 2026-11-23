@@ -249,7 +249,10 @@ PASSWORD_ASK = re.compile(
     # "tell me your password", "send me the code", or "type/share your password here / in the chat"
     rf"\b(?:tell|send|give|share|provide|text)\s+me\b[^.?!\n]{{0,40}}\b{SECRET}\b|"
     rf"\b(?:type|share|send|paste|write|post|enter|put)\s+(?:your|the)\b[^.?!\n]{{0,30}}\b{SECRET}\b"
-    rf"[^.?!\n]{{0,30}}\b(?:here|in (?:the|this) chat)\b",
+    rf"[^.?!\n]{{0,30}}\b(?:here|in (?:the|this) chat)\b|"
+    # "What password would you like to use?", "I need you to provide a password" (seen on evri.com sign-up)
+    rf"\b(?:what|which)\s+{SECRET}\b[^.!\n]{{0,40}}\?|"
+    rf"\bneed (?:you to |from you )?(?:provide|give|choose|pick|tell|send|share)\b[^.?!\n]{{0,30}}\b{SECRET}\b",
     re.I,
 )
 
@@ -359,6 +362,39 @@ SCREENSHOT_RETRY = retry(
 )
 
 
+# A final answer that only announces work: "Let me proceed with the account creation." Nothing runs after a final
+# answer, so the person waits for something that never happens (seen on evri.com sign-up). Only in the last
+# sentences, and not when the answer asks the person something.
+PROMISE = re.compile(
+    r"\b(?:let me(?! know)|I'?ll(?! (?:need|have to|wait))|I will(?! (?:need|have to|wait))|I'?m going to|"
+    r"proceeding|I'?m about to)\b[^.!\n]{0,80}"
+    r"\b(?:now|proceed|continue|go ahead|fill|create|open|start|do (?:it|that|this)|try|click|sign|book|add|"
+    r"remove|set (?:it )?up|make|complete|finish|submit|search|check)\b",
+    re.I,
+)
+
+
+OFFER = re.compile(r"\b(?:if|let me know|would you like|whenever|once you|when you)\b", re.I)
+
+
+def only_promises(answer: str) -> bool:
+    """The answer ends by announcing work it didn't do, and doesn't ask the person anything. An offer ("if you'd
+    like more, let me know and I will continue") isn't a promise."""
+    if "?" in answer:
+        return False
+    for sentence in re.split(r"(?<=[.!])\s+", answer.strip()[-240:]):
+        if PROMISE.search(sentence) and not OFFER.search(sentence):
+            return True
+    return False
+
+
+PROMISE_RETRY = retry(
+    "Your draft says you're about to do something, but it's your final answer: nothing runs after it, so the "
+    "person would wait for nothing. Do it now with the tools. If you can't, or you need something from them, say "
+    "that plainly instead."
+)
+
+
 # In this order; each runs at most once per task.
 CLAIM_CHECKS = (
     Check(
@@ -426,6 +462,13 @@ CLAIM_CHECKS = (
         lambda d: unshown_screenshot(d.asked, d.called),
         SCREENSHOT_RETRY,
         "the person asked to see a page and nothing was sent; asking for show_screenshot",
+    ),
+    # Last: the specific checks above say better what's missing ("Scheduled… I'll check" is a schedule claim).
+    Check(
+        "promise",
+        lambda d: only_promises(d.answer),
+        PROMISE_RETRY,
+        "draft answer only announced work it didn't do; asking the model to do it",
     ),
 )
 
