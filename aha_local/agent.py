@@ -324,6 +324,8 @@ class Agent:
     async def _within_limit(self, account: Account, work):
         """Run the task with its time limit (SPEC §3.3), counting only the time it works: while a card waits for
         the person, the clock stops (seen: the 15 minutes ran out while the Evri sign-in card was being read)."""
+        if not self.config.max_task_seconds:  # the default: no time limit, only the step limit (SPEC §3.3)
+            return await work
         solving = asyncio.ensure_future(work)
         used, last = 0.0, time.monotonic()
         try:

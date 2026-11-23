@@ -409,3 +409,22 @@ async def test_a_task_that_keeps_working_past_the_limit_is_stopped(agent, llm, c
     await say(agent, "hello")
     await settle(agent)
     assert chat.texts()[-1] == messages.TOO_LONG
+
+
+async def test_by_default_cards_and_tasks_wait_for_the_person_however_long(agent, llm, chat, accounts):
+    """Async by default (SPEC §3.3, §5.3): no card expiry and no task time limit; the step limit stops loops."""
+    from aha_local.config import Config
+
+    defaults = Config(gateway_url="x", gateway_pin="x")
+    assert defaults.approval_expiry == 0 and defaults.max_task_seconds == 0
+    agent.config = dataclasses.replace(agent.config, max_task_seconds=0)
+    agent.approvals.expiry = 0
+    llm.call("memory_add", text="Name is Felipe")
+    llm.answer("Saved.")
+    await say(agent, "I'm Felipe")
+    ask = await chat.next()
+    await asyncio.sleep(0.3)  # the person is away
+    assert agent.running and messages.APPROVAL_EXPIRED not in chat.texts()
+    await say(agent, "✅ Save", button=ask.buttons[0].id)
+    await settle(agent)
+    assert chat.texts()[-1] == "Saved."

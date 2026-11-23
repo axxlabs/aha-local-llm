@@ -165,7 +165,8 @@ class Approvals:
         state = "stopped"
         try:
             await self.out.card(account, card(p))
-            decision = await asyncio.wait_for(asyncio.shield(p.future), timeout=self.expiry)
+            # No expiry by default: the person answers when they check in (SPEC §5.3).
+            decision = await asyncio.wait_for(asyncio.shield(p.future), timeout=self.expiry or None)
             state = "approved" if decision.approved else ("expired" if decision.reason == "expired" else "declined")
         except TimeoutError:
             decision = Decision(False, reason="expired")

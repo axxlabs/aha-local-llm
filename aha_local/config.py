@@ -35,9 +35,9 @@ language = "{language}"   # the browser's language (Accept-Language); `aha insta
 dir = "{models_dir}"
 
 [agent]
-approval_expiry_hours = 24
+approval_expiry_hours = 0  # 0: a card waits until it's answered (the person checks in when they can)
 max_model_calls_per_task = 40
-max_task_minutes = 15
+max_task_minutes = 0       # 0: no time limit; the step limit above stops a model stuck in a loop
 history_sync_days = 30     # the most a device may cache or re-sync
 push_preview = false       # true: notifications show the first line of the reply
 
@@ -76,9 +76,9 @@ class Config:
     timezone: str = "Europe/London"
     language: str = "en-GB"  # the browser's language, a BCP 47 tag (SPEC §3.4)
     models_dir: Path = Path.home() / "aha-models"
-    approval_expiry: float = 24 * 3600
+    approval_expiry: float = 0  # seconds; 0: never
     max_model_calls: int = 40
-    max_task_seconds: float = 15 * 60
+    max_task_seconds: float = 0  # 0: no time limit (the step limit stops a loop)
     allow_all_sites: bool = True
     browser_idle_seconds: float = 24 * 3600  # an account's browser context closes this long after its last use
     source_url: str = "https://github.com/axxlabs/aha-local-llm"  # named in `help` (AGPL §13, SPEC §10.1)
@@ -108,9 +108,9 @@ class Config:
             timezone=hh.get("timezone", "Europe/London"),
             language=language_tag(hh.get("language") or host_language()),
             models_dir=Path(models.get("dir", "~/aha-models")).expanduser(),
-            approval_expiry=float(agent.get("approval_expiry_hours", 24)) * 3600,
+            approval_expiry=float(agent.get("approval_expiry_hours", 0)) * 3600,
             max_model_calls=int(agent.get("max_model_calls_per_task", 40)),
-            max_task_seconds=float(agent.get("max_task_minutes", 15)) * 60,
+            max_task_seconds=float(agent.get("max_task_minutes", 0)) * 60,
             allow_all_sites=bool(browser.get("allow_all_sites", True)),
             browser_idle_seconds=float(browser.get("idle_minutes", 1440)) * 60,
             source_url=str(agent.get("source_url", "https://github.com/axxlabs/aha-local-llm")),
