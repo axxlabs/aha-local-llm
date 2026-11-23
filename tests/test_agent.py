@@ -175,10 +175,10 @@ async def test_messages_after_the_last_step_become_one_follow_up(agent, llm, cha
     gate = asyncio.Event()
     real_chat = llm.chat
 
-    async def slow_answer(messages, tools=None, max_tokens=4096):
+    async def slow_answer(messages, tools=None, max_tokens=4096, who=None):
         if len(llm.requests) == 0:
             await gate.wait()
-        return await real_chat(messages, tools, max_tokens)
+        return await real_chat(messages, tools, max_tokens, who)
 
     llm.chat = slow_answer
     llm.answer("first done")
@@ -257,10 +257,10 @@ async def test_typing_ends_before_the_answer_and_stays_off_during_the_summary(ag
     gate = asyncio.Event()
     real_chat = llm.chat
 
-    async def slow_summary(messages, tools=None, max_tokens=4096):
+    async def slow_summary(messages, tools=None, max_tokens=4096, who=None):
         if len(llm.requests) == 1:  # the fold, after the answer
             await gate.wait()
-        return await real_chat(messages, tools, max_tokens)
+        return await real_chat(messages, tools, max_tokens, who)
 
     llm.chat = slow_summary
     llm.answer("Fine.")
@@ -321,3 +321,43 @@ async def test_everyone_hears_when_aha_restarts(accounts):
     service = SimpleNamespace(accounts=accounts, agent=SimpleNamespace(send=send))
     await Service.announce_restart(service)
     assert sent == [(fe.name, messages.RESTARTING)]
+
+
+async def test_the_model_is_one_at_a_time_and_a_waiting_person_is_told_they_are_queued():
+    """SPEC §3.3: while another person's request runs, the app shows "waiting its turn", not "working"."""
+    from aha_local.llm import LLM
+
+    llm = LLM("http://llm", "m")
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def post(body):
+        started.set()
+        await release.wait()
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    llm._post = post
+    first = asyncio.create_task(llm.chat([], who="fe"))
+    await started.wait()
+    second = asyncio.create_task(llm.chat([], who="hb"))
+    await asyncio.sleep(0)
+    assert llm.queued("hb") and not llm.queued("fe")  # hb waits behind fe
+    release.set()
+    await asyncio.gather(first, second)
+    assert not llm.queued("hb") and llm.holder is None and not llm.waiting
+
+
+async def test_typing_says_queued_while_the_task_waits_for_another_persons_request(agent, llm, chat, accounts):
+    fe = person(accounts)
+    llm.queued_for.add(fe.address)
+    agent.typing_every = 0.01
+    real_chat = llm.chat
+
+    async def slow(messages, tools=None, max_tokens=4096, who=None):
+        await asyncio.sleep(0.05)
+        return await real_chat(messages, tools, max_tokens, who)
+
+    llm.chat = slow
+    llm.answer("done")
+    await say(agent, "hello")
+    await settle(agent)
+    assert "queued" in chat.typed and chat.typed[-1] is False

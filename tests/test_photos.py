@@ -56,10 +56,10 @@ async def test_a_photo_sent_while_working_reaches_the_running_task(agent, llm, c
     gate = asyncio.Event()
     real_chat = llm.chat
 
-    async def slow(messages, tools=None, max_tokens=4096):
+    async def slow(messages, tools=None, max_tokens=4096, who=None):
         if len(llm.requests) == 0:
             await gate.wait()
-        return await real_chat(messages, tools, max_tokens)
+        return await real_chat(messages, tools, max_tokens, who)
 
     llm.chat = slow
     llm.call("current_time")

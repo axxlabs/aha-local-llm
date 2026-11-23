@@ -48,7 +48,7 @@ class AgentOut(Protocol):
     """Where the agent's output goes: the end-to-end channel to the person's devices (e2e/channel.py)."""
 
     async def message(self, account: Account, text: str, image: Image | None = None) -> None: ...
-    async def typing(self, account: Account, on: bool) -> None: ...
+    async def typing(self, account: Account, on: bool, queued: bool = False) -> None: ...
     async def card(self, account: Account, card: dict) -> None: ...
     async def state(self, account: Account, approval_id: str, state: str) -> None: ...
     async def text(self, account: Account, text: str) -> None: ...
@@ -294,16 +294,20 @@ class Agent:
         """While a reply is owed: "typing…", refreshed, except while the person owes us an approval answer."""
         while True:
             if self.approvals.pending_for(account.address) is None:
-                await self._typing_frame(account, True)
+                await self._typing_frame(account, True, self.queued(account))
             await asyncio.sleep(self.typing_every)
 
     async def _stop_typing(self, account: Account, typing: asyncio.Task) -> None:
         typing.cancel()
         await self._typing_frame(account, False)
 
-    async def _typing_frame(self, account: Account, on: bool) -> None:
+    def queued(self, account: Account) -> bool:
+        """Its task waits for the model while another person's runs (SPEC §3.3): the app says so."""
+        return self.llm.queued(account.address)
+
+    async def _typing_frame(self, account: Account, on: bool, queued: bool = False) -> None:
         try:
-            await self.out.typing(account, on)
+            await self.out.typing(account, on, queued)
         except Exception:
             log.warning("couldn't send a typing message")
 
@@ -404,7 +408,7 @@ class Agent:
             msgs = context.build(
                 account, task, self.config.timezone, self.config.household_name, self.config.context_tokens
             )
-            reply = await self.llm.chat(msgs, tools)
+            reply = await self.llm.chat(msgs, tools, who=account.address)
             log.info("model call: %d prompt tokens, %d cached", reply.prompt_tokens, reply.cached_tokens)
             account.transcript(model_record(self.llm.model, reply, ctx.task.secrets))
             if not reply.tool_calls:
@@ -500,7 +504,7 @@ class Agent:
         if not folded:
             return
         try:
-            reply = await self.llm.chat(context.fold_request(conv, folded), max_tokens=1500)
+            reply = await self.llm.chat(context.fold_request(conv, folded), max_tokens=1500, who=account.address)
         except ModelUnavailable:
             return
         if reply.content:

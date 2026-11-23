@@ -47,16 +47,42 @@ class LLM:
         self.model = model
         self.client = httpx.AsyncClient(timeout=timeout)
         self.lock = asyncio.Lock()
+        # Who's using the model and who's waiting for it: one request at a time on the GPU (SPEC §3.3).
+        self.holder: str | None = None
+        self.waiting: dict[str, int] = {}
 
-    async def chat(self, messages: list[dict], tools: list[dict] | None = None, max_tokens: int = 4096) -> Reply:
+    def queued(self, who: str) -> bool:
+        """`who` is waiting for the model while someone else's request runs: their turn hasn't come yet."""
+        return self.waiting.get(who, 0) > 0 and self.holder is not None and self.holder != who
+
+    async def chat(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        max_tokens: int = 4096,
+        who: str | None = None,
+    ) -> Reply:
         body = {"model": self.model, "messages": messages, "max_tokens": max_tokens}
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
-        async with self.lock:
+        if who:
+            self.waiting[who] = self.waiting.get(who, 0) + 1
+        try:
+            await self.lock.acquire()
+        finally:
+            if who:
+                self.waiting[who] -= 1
+                if not self.waiting[who]:
+                    del self.waiting[who]
+        self.holder = who or ""
+        try:
             start = time.monotonic()
             data = await self._post(body)
             ms = int((time.monotonic() - start) * 1000)
+        finally:
+            self.holder = None
+            self.lock.release()
         msg = data["choices"][0]["message"]
         calls = [
             ToolCall(c.get("id") or f"call{i}", c["function"]["name"], c["function"].get("arguments") or "{}")

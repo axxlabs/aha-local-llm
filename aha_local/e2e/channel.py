@@ -209,10 +209,11 @@ class Channel:
     async def state(self, account: Account, approval_id: str, state: str) -> None:
         await self.publish(account, {"t": "approval_state", "id": approval_id, "state": state})
 
-    async def typing(self, account: Account, on: bool) -> None:
+    async def typing(self, account: Account, on: bool, queued: bool = False) -> None:
+        """ "Aha! is working…", or, while it waits for another person's request to finish, that it's queued."""
         for device in list(account.devices.values()):
             if device.dev in self.online:
-                await self._send(account, device, {"t": "typing", "on": on})
+                await self._send(account, device, {"t": "typing", "on": on, **({"queued": True} if queued else {})})
 
     async def publish(self, account: Account, item: dict, notify: bool = False) -> dict:
         """Number the item, keep it in the transcript, send it to every device of the account."""

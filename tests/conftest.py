@@ -31,6 +31,7 @@ class FakeLLM:
         self.script: list[Reply] = []
         self.requests: list[dict] = []
         self.lock = asyncio.Lock()
+        self.queued_for: set[str] = set()  # accounts whose request waits behind another's
 
     def answer(self, text: str) -> None:
         self.script.append(Reply(text))
@@ -38,7 +39,10 @@ class FakeLLM:
     def call(self, name: str, **args) -> None:
         self.script.append(Reply("", [ToolCall(f"c{len(self.script)}", name, json.dumps(args))]))
 
-    async def chat(self, messages, tools=None, max_tokens=4096) -> Reply:
+    def queued(self, who) -> bool:
+        return who in self.queued_for
+
+    async def chat(self, messages, tools=None, max_tokens=4096, who=None) -> Reply:
         self.requests.append({"messages": messages, "tools": tools})
         await asyncio.sleep(0)
         return self.script.pop(0) if self.script else Reply("(script ended)")
@@ -64,8 +68,8 @@ class Chat:
     async def text(self, account, text) -> None:
         await self.message(account, text)
 
-    async def typing(self, account, on) -> None:
-        self.typed.append(on)
+    async def typing(self, account, on, queued=False) -> None:
+        self.typed.append("queued" if on and queued else on)
 
     async def card(self, account, card) -> None:
         icon = "🧠" if card["kind"] in ("memory", "forget") else "✋"
