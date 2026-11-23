@@ -6,11 +6,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 
 import httpx
 
 log = logging.getLogger("aha.llm")
+
+
+TIMINGS = ("prompt_n", "prompt_ms", "predicted_n", "predicted_ms", "cache_n")
 
 
 class ModelUnavailable(Exception):
@@ -30,6 +34,9 @@ class Reply:
     tool_calls: list[ToolCall] = field(default_factory=list)
     prompt_tokens: int = 0
     cached_tokens: int = 0
+    reasoning: str = ""  # the model's thinking, when the server returns it separately
+    ms: int = 0  # how long the call took, waiting for the GPU included
+    timings: dict = field(default_factory=dict)  # llama.cpp's: prompt_ms, prompt_n, predicted_ms, predicted_n
 
 
 class LLM:
@@ -47,7 +54,9 @@ class LLM:
             body["tools"] = tools
             body["tool_choice"] = "auto"
         async with self.lock:
+            start = time.monotonic()
             data = await self._post(body)
+            ms = int((time.monotonic() - start) * 1000)
         msg = data["choices"][0]["message"]
         calls = [
             ToolCall(c.get("id") or f"call{i}", c["function"]["name"], c["function"].get("arguments") or "{}")
@@ -59,6 +68,9 @@ class LLM:
             calls,
             usage.get("prompt_tokens", 0),
             (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0),
+            (msg.get("reasoning_content") or "").strip(),
+            ms,
+            {k: v for k, v in (data.get("timings") or {}).items() if k in TIMINGS and isinstance(v, (int, float))},
         )
 
     async def _post(self, body: dict) -> dict:

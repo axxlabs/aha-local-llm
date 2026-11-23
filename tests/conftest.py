@@ -25,6 +25,8 @@ from aha_local.tools.registry import Registry
 class FakeLLM:
     """Returns scripted replies in order and records every request."""
 
+    model = "fake-model"
+
     def __init__(self) -> None:
         self.script: list[Reply] = []
         self.requests: list[dict] = []

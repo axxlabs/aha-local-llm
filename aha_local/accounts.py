@@ -92,6 +92,7 @@ class Account:
     seq: int = 0
     devices: dict[str, Device] = field(default_factory=dict)
     history_days: int | None = None  # how long the computer keeps this person's history; None: forever (§3.8.1)
+    task: str | None = field(default=None, repr=False, compare=False)  # the running task: tags its records (§3.8)
 
     @property
     def address(self) -> str:
@@ -138,6 +139,7 @@ class Account:
         return device
 
     def transcript(self, entry: dict) -> None:
+        entry = {**entry, "task": self.task} if self.task else entry
         self.vault.append(self.dir / "transcript.jsonl", _log_line(entry))
 
     def audit(self, entry: dict) -> None:

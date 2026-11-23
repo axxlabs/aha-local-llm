@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import secrets
 from collections import defaultdict
 from typing import Protocol
 
@@ -21,6 +22,25 @@ from .tools import memory, schedule, signins
 from .tools.registry import Registry, TaskState, ToolContext
 
 log = logging.getLogger("aha.agent")
+
+
+MAX_RECORDED = 20_000  # characters of a model call's text or thinking kept in the transcript
+
+
+def model_record(model: str, reply, secrets_typed: list[str]) -> dict:
+    """One model call, for the message's details (SPEC §3.8): what it wrote, its thinking, the tools it called."""
+    hide = lambda t: signins.redact(t, secrets_typed)[:MAX_RECORDED]  # noqa: E731
+    return {
+        "kind": "model",
+        "model": model,
+        "text": hide(reply.content),
+        "reasoning": hide(reply.reasoning),
+        "calls": [{"name": c.name, "args": hide(c.arguments)} for c in reply.tool_calls],
+        "prompt_tokens": reply.prompt_tokens,
+        "cached_tokens": reply.cached_tokens,
+        "ms": reply.ms,
+        **({"timings": reply.timings} if reply.timings else {}),
+    }
 
 
 class AgentOut(Protocol):
@@ -285,6 +305,14 @@ class Agent:
             log.warning("couldn't send a typing message")
 
     async def _task(self, account: Account, text: str, scheduled: str | None = None) -> None:
+        # The task's records in the transcript carry its id, so a message's details can be found (SPEC §3.8).
+        account.task = secrets.token_hex(6)
+        try:
+            await self._task_body(account, text, scheduled)
+        finally:
+            account.task = None
+
+    async def _task_body(self, account: Account, text: str, scheduled: str | None = None) -> None:
         sent_before = self.sent[account.address]
         typing = asyncio.create_task(self._typing(account))
         try:
@@ -373,6 +401,7 @@ class Agent:
             )
             reply = await self.llm.chat(msgs, tools)
             log.info("model call: %d prompt tokens, %d cached", reply.prompt_tokens, reply.cached_tokens)
+            account.transcript(model_record(self.llm.model, reply, ctx.task.secrets))
             if not reply.tool_calls:
                 draft = checks.Draft(
                     text,
@@ -389,6 +418,7 @@ class Agent:
                 if failed:
                     retried.add(failed.name)
                     log.info(failed.log)
+                    account.transcript({"kind": "check", "name": failed.name})
                     task.append({"role": "assistant", "content": draft.answer})
                     retry = failed.retry or checks.sign_in_page_retry(draft.sign_in_page)
                     task.append({"role": "user", "content": retry})
@@ -401,6 +431,7 @@ class Agent:
                 if missing and "numbers" not in retried:
                     # One more go: ask the model to confirm the numbers on a page, or drop them (SPEC §3.5).
                     retried.add("numbers")
+                    account.transcript({"kind": "check", "name": "numbers", "missing": missing[:20]})
                     log.info("draft answer had %d unconfirmed number(s); asking the model to check", len(missing))
                     task.append({"role": "assistant", "content": reply.content or ""})
                     task.append({"role": "user", "content": checks.retry_prompt(missing)})

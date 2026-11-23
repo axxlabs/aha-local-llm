@@ -45,6 +45,44 @@ HISTORY_LIMIT = 50
 REPLY_BYTES = 1_500_000  # items in one sync or history reply, as JSON: well inside a 2 MB ratchet message
 
 
+TRACE_KINDS = ("user", "model", "tool", "check", "item", "stopped", "answer")
+
+
+def trace(records: list[dict], seq: int, budget: int = REPLY_BYTES) -> list[dict]:
+    """The records of the task that sent item `seq`, oldest first, shortened to fit one reply. Empty when the
+    item isn't from a task, or from before tasks were tagged."""
+    task = next(
+        (r.get("task") for r in records if r.get("kind") == "item" and (r.get("item") or {}).get("seq") == seq),
+        None,
+    )
+    if not task:
+        return []
+    events = []
+    for r in records:
+        if r.get("task") != task or r.get("kind") not in TRACE_KINDS:
+            continue
+        e = {k: v for k, v in r.items() if k != "task"}
+        if e["kind"] == "item":
+            it = e.pop("item") or {}
+            e.update({"t": it.get("t"), "seq": it.get("seq"), "text": it.get("text") or it.get("title") or ""})
+        events.append(e)
+    cap = 20_000
+    while len(json.dumps(events, ensure_ascii=False)) > budget and cap > 200:
+        cap //= 2
+        events = [{k: _cut(v, cap) for k, v in e.items()} for e in events]
+    return events
+
+
+def _cut(value, cap: int):
+    if isinstance(value, str) and len(value) > cap:
+        return value[:cap] + "…"
+    if isinstance(value, list):
+        return [_cut(v, cap) for v in value]
+    if isinstance(value, dict):
+        return {k: _cut(v, cap) for k, v in value.items()}
+    return value
+
+
 def fit(items: list[dict], budget: int = REPLY_BYTES) -> list[dict]:
     """Items that fit one reply (SPEC §6.6): leave out the oldest items' pictures first (a card's screenshot is
     a few hundred KB), then, only if still too large, the oldest items themselves."""
@@ -359,6 +397,11 @@ class Channel:
                     self._spawn(self.agent.warm())
             listing = await self.models.listing()
             await (self.to_devices(account, listing) if t == "model_set" else reply(listing))
+        elif t == "trace_request":
+            # A message's ⋯ → Details (SPEC §3.8): what the model wrote, thought and called, with times.
+            seq = msg.get("seq")
+            if isinstance(seq, int) and seq > 0:
+                await reply({"t": "trace", "seq": seq, "events": trace(account.read_transcript(), seq)})
         elif t == "memories_request":
             items = [{"id": m.get("id"), "text": m.get("text")} for m in account.load_memory()]
             await reply({"t": "memories", "items": items})

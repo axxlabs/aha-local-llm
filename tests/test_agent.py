@@ -277,3 +277,27 @@ async def test_typing_ends_before_the_answer_and_stays_off_during_the_summary(ag
     gate.set()
     await settle(agent)
     assert context.estimate(acct.load_context()["turns"]) <= context.TURNS_BUDGET
+
+
+async def test_a_messages_details_are_its_tasks_model_calls_and_tools(agent, llm, chat, accounts):
+    """⋯ → Details (SPEC §3.8): each model call, with its thinking and timing, and each tool, tagged by task."""
+    from aha_local.e2e.channel import trace
+    from aha_local.llm import Reply
+
+    llm.call("current_time")
+    llm.script.append(Reply("It's noon.", reasoning="The tool said 12:00.", ms=850, timings={"prompt_n": 30}))
+    await say(agent, "what time is it?")
+    await settle(agent)
+    records = person(accounts).read_transcript()
+    model = [r for r in records if r["kind"] == "model"]
+    assert [r["calls"][0]["name"] if r["calls"] else r["text"] for r in model] == ["current_time", "It's noon."]
+    assert model[1]["reasoning"] == "The tool said 12:00." and model[1]["ms"] == 850
+    task = model[0]["task"]
+    assert all(r.get("task") == task for r in records if r["kind"] in ("model", "tool", "out", "answer"))
+    assert person(accounts).task is None  # cleared when the task ends
+    sent = {"kind": "item", "item": {"t": "msg", "role": "aha", "seq": 7, "text": "It's noon."}, "task": task}
+    events = trace([*records, sent], 7)
+    assert [e["kind"] for e in events] == ["model", "tool", "model", "answer", "item"]
+    assert "task" not in events[0] and events[-1]["text"] == "It's noon."
+    assert trace(records, 8) == []  # not a task's message
+    assert len(trace([*records, sent], 7, budget=600)) == 5  # shortened to fit, never dropped
