@@ -482,7 +482,7 @@ def cmd_mail(a) -> None:
     tokens = google_sign_in(client, a.email or "")
     granted = set(tokens.get("scope", "").split())
     if not set(client["scopes"]) <= granted:
-        die("Some permissions weren't granted (tick both boxes on Google's page). Nothing was saved.")
+        die("Some permissions weren't granted (tick every box on Google's page). Nothing was saved.")
     if not tokens.get("refresh_token"):
         die(
             "Google didn't return a long-lived token. Remove the app at https://myaccount.google.com/permissions "
@@ -497,8 +497,8 @@ def cmd_mail(a) -> None:
     email = profile.json()["emailAddress"]
     admin({"cmd": "mail_connect", "account": a.account, "email": email, "refresh_token": tokens["refresh_token"]})
     print(
-        f"Connected {email} for {a.account}. Aha! can now search and read it, and send or draft only after "
-        "they approve each email."
+        f"Connected {email} for {a.account}: their mail and calendar. Aha! can now read them, and sends, drafts "
+        "or changes events only after they approve each one."
     )
 
 
@@ -672,13 +672,13 @@ def main(argv: list[str] | None = None) -> None:
     s.set_defaults(fn=cmd_doctor)
     s = sub.add_parser(
         "mail",
-        help="connect a person's Gmail",
+        help="connect a person's Gmail and Google Calendar",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="""Gmail, per person. Once per household, make a Google OAuth client:
-  1. https://console.cloud.google.com: create a project, enable the Gmail API.
+  1. https://console.cloud.google.com: create a project, enable the Gmail API and the Google Calendar API.
   2. Google Auth Platform: Branding (app name "Aha!"), Audience "External", then Publish app
      ("In production"; it stays unverified, which is fine for your household: Google shows a warning).
-  3. Data access: add the scopes gmail.readonly and gmail.compose.
+  3. Data access: add the scopes gmail.readonly, gmail.compose and calendar.events.
   4. Clients: create an OAuth client of type "Desktop app" and download its JSON.
   5. aha mail setup --client <that file>
 Then for each person: aha mail connect <person>""",

@@ -45,6 +45,8 @@ APPROVE_LABELS = {
     "signin": ("Sign in", "Edit", "Don't"),
     "check": ("Send taps", "Edit", "Give up"),
     "schedule": ("Schedule", "Edit", "Don't"),
+    "calendar": ("Save", "Edit", "Don't"),
+    "calendar_delete": ("Delete it", "Edit", "Keep it"),
 }
 EDIT_IN_CARD = "Type them into the card in the app, then tap its button."
 SIGNINS = (

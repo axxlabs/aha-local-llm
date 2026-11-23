@@ -41,6 +41,7 @@ class TaskState:
     blank_page: bool = False  # the last page the model saw is a new window's blank page (SPEC §3.4)
     ref_lines: dict[str, str] = field(default_factory=dict)  # elements seen on the current page: ref → its line
     read_mail: bool = False  # set by email_search/email_read: the task holds private data (SPEC §5.2)
+    read_calendar: bool = False  # set by the calendar tools: the same
     secrets: list[str] = field(default_factory=list)  # values the person typed on a sign-in card: never shown again
     # The sites the person signed in on (read once per task), and whether this task has had a page of one: the
     # task then holds private data (SPEC §5.2).
@@ -58,8 +59,8 @@ class TaskState:
 
     @property
     def private(self) -> bool:
-        """The task read mail or had a page of a signed-in site (SPEC §5.2 "Private data")."""
-        return self.read_mail or self.on_signed_in
+        """The task read mail or the calendar, or had a page of a signed-in site (SPEC §5.2 "Private data")."""
+        return self.read_mail or self.read_calendar or self.on_signed_in
 
 
 @dataclass

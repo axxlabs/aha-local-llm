@@ -21,7 +21,7 @@ from .e2e.channel import Channel
 from .llm import LLM
 from .models import ModelChoice
 from .rest import RestError, Vault, load_or_create_instance_key
-from .tools import browser, conversation, mail, memory, schedule, signins, web
+from .tools import browser, calendar, conversation, mail, memory, schedule, signins, web
 from .tools.registry import Registry
 from .tunnel import Tunnel
 
@@ -38,7 +38,7 @@ class Service:
         self.key = load_or_create_instance_key(self.vault, data / "keys" / "instance.key")
         self.accounts = Accounts(self.vault)
         self.registry = Registry()
-        for module in (web, memory, mail, schedule, conversation):
+        for module in (web, memory, mail, calendar, schedule, conversation):
             module.register(self.registry)
         self.browser = browser.BrowserPool(config.browser_url, config.browser_idle_seconds)
         self.browser.on_open = self._browser_opened

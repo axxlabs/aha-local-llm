@@ -74,16 +74,17 @@ delete or change mail), and the token is kept encrypted in that person's folder.
 Setting it up takes about 15 minutes, once per household, on the computer:
 
 1. **Make the household's Google app** at https://console.cloud.google.com (free, any Google account):
-   - create a project and enable the **Gmail API** (APIs & Services → Library);
+   - create a project and enable the **Gmail API** and the **Google Calendar API** (APIs & Services → Library);
    - under Google Auth Platform: **Branding** (app name "Aha!", your email), **Audience** "External", then
      **Publish app** so it reads "In production" (in "Testing", Google ends every sign-in after 7 days; it stays
      "unverified", which is fine for a household of up to 100 people);
-   - **Data access**: add the scopes `https://www.googleapis.com/auth/gmail.readonly` and
-     `https://www.googleapis.com/auth/gmail.compose`;
+   - **Data access**: add the scopes `https://www.googleapis.com/auth/gmail.readonly`,
+     `https://www.googleapis.com/auth/gmail.compose` and `https://www.googleapis.com/auth/calendar.events`;
    - **Clients**: create a client of type **Desktop app** and download its JSON file.
 2. `aha mail setup --client ~/Downloads/client_secret_….json` (it's stored encrypted; delete the download).
 3. For each person: `aha mail connect <person>`. They open the link it prints and sign in with Google; past
-   "Google hasn't verified this app" (Advanced → Go to Aha!), they tick both permissions. On a phone, the last
+   "Google hasn't verified this app" (Advanced → Go to Aha!), they tick every permission (mail and calendar). Someone connected before the calendar existed runs
+   `aha mail connect <person>` again to add it. On a phone, the last
    page won't load: copy its address into the terminal. `aha mail status` shows who's connected;
    `aha mail disconnect <person>` revokes it.
 

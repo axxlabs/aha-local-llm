@@ -187,11 +187,11 @@ def test_the_model_never_hears_about_cards_or_trust():
     for f in prompts.glob("*.md"):
         found = AUDIT_WORDS.findall(f.read_text())
         assert not found, (f.name, found)
-    from aha_local.tools import guard, mail, memory, registry, schedule, web
+    from aha_local.tools import calendar, guard, mail, memory, registry, schedule, web
     from aha_local.tools.browser import HARNESS_TOOLS
 
     reg = registry.Registry()
-    for m in (mail, memory, schedule, web):
+    for m in (calendar, mail, memory, schedule, web):
         m.register(reg)
     for t in HARNESS_TOOLS:
         reg.add(t)

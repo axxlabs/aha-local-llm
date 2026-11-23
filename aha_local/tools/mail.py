@@ -28,7 +28,11 @@ GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-SCOPES = ("https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.compose")
+SCOPES = (
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/calendar.events",  # tools/calendar.py
+)
 MAX_RESULTS = 10
 MAX_READ = 12_000
 MAX_BODY = 10_000
