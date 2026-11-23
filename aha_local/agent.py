@@ -9,6 +9,7 @@ import contextlib
 import json
 import logging
 import secrets
+import time
 from collections import defaultdict
 from typing import Protocol
 
@@ -54,6 +55,7 @@ class AgentOut(Protocol):
     async def text(self, account: Account, text: str) -> None: ...
 
 
+LIMIT_TICK = 0.5  # seconds between looks at the task's time limit
 TYPING_EVERY = 4.0  # seconds between `typing` frames while a reply is owed (SPEC §3.3)
 STOP_WORDS = {"stop", "cancel", "stop it", "stop that"}
 NEW_MESSAGE = "[New message from the user while you were working]\n{text}"
@@ -319,13 +321,33 @@ class Agent:
         finally:
             account.task = None
 
+    async def _within_limit(self, account: Account, work):
+        """Run the task with its time limit (SPEC §3.3), counting only the time it works: while a card waits for
+        the person, the clock stops (seen: the 15 minutes ran out while the Evri sign-in card was being read)."""
+        solving = asyncio.ensure_future(work)
+        used, last = 0.0, time.monotonic()
+        try:
+            while True:
+                done, _ = await asyncio.wait({solving}, timeout=LIMIT_TICK)
+                now = time.monotonic()
+                if self.approvals.pending_for(account.address) is None:
+                    used += now - last
+                last = now
+                if done:
+                    return solving.result()
+                if used >= self.config.max_task_seconds:
+                    raise TimeoutError
+        finally:
+            if not solving.done():
+                solving.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await solving
+
     async def _task_body(self, account: Account, text: str, scheduled: str | None = None) -> None:
         sent_before = self.sent[account.address]
         typing = asyncio.create_task(self._typing(account))
         try:
-            answer, checked, text = await asyncio.wait_for(
-                self.solve(account, text), timeout=self.config.max_task_seconds
-            )
+            answer, checked, text = await self._within_limit(account, self.solve(account, text))
         except asyncio.CancelledError:
             account.transcript({"kind": "stopped"})
             await self._stop_typing(account, typing)

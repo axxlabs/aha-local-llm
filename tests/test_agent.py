@@ -3,8 +3,9 @@
 """The agent: memory approvals, context layers, commands, queueing (SPEC §3.3, §4, §5.4, §11.3–11.4)."""
 
 import asyncio
+import dataclasses
 
-from aha_local import context
+from aha_local import context, messages
 from aha_local.tools.registry import Tool, ToolResult, params
 
 from .conftest import person, say, settle
@@ -361,3 +362,37 @@ async def test_typing_says_queued_while_the_task_waits_for_another_persons_reque
     await say(agent, "hello")
     await settle(agent)
     assert "queued" in chat.typed and chat.typed[-1] is False
+
+
+async def test_the_time_limit_stops_while_a_card_waits_for_the_person(agent, llm, chat, accounts, monkeypatch):
+    """SPEC §3.3: the 15 minutes are the task's working time (seen: they ran out on the Evri sign-in card)."""
+    import aha_local.agent as agent_module
+
+    monkeypatch.setattr(agent_module, "LIMIT_TICK", 0.01)
+    agent.config = dataclasses.replace(agent.config, max_task_seconds=0.2)
+    llm.call("memory_add", text="Name is Felipe")
+    llm.answer("Saved.")
+    await say(agent, "I'm Felipe")
+    ask = await chat.next()
+    await asyncio.sleep(0.5)  # longer than the limit, reading the card
+    await say(agent, "✅ Save", button=ask.buttons[0].id)
+    await settle(agent)
+    assert chat.texts()[-1] == "Saved." and messages.TOO_LONG not in chat.texts()
+
+
+async def test_a_task_that_keeps_working_past_the_limit_is_stopped(agent, llm, chat, monkeypatch):
+    import aha_local.agent as agent_module
+
+    monkeypatch.setattr(agent_module, "LIMIT_TICK", 0.01)
+    agent.config = dataclasses.replace(agent.config, max_task_seconds=0.1)
+    real_chat = llm.chat
+
+    async def slow(messages_, tools=None, max_tokens=4096, who=None):
+        await asyncio.sleep(0.3)
+        return await real_chat(messages_, tools, max_tokens, who)
+
+    llm.chat = slow
+    llm.answer("too late")
+    await say(agent, "hello")
+    await settle(agent)
+    assert chat.texts()[-1] == messages.TOO_LONG
