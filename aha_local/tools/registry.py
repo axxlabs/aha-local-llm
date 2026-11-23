@@ -28,6 +28,7 @@ class ToolResult:
     images: list[Image] = field(default_factory=list)
     kind: str = "text"  # "page" results (browser snapshots) may be shortened later in a long task (SPEC §4.3)
     error: bool = False
+    full: str = field(default="", repr=False)  # a page before it was cut to fit, for the harness's own checks
 
 
 @dataclass

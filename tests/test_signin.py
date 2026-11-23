@@ -99,11 +99,16 @@ class FakeContext:
         page = self.page()
         if not self.banner:
             return page
-        return page[: -len("```")] + (
-            '- dialog "Our Cookies" [ref=e67]:\n  - heading "Our Cookies" [level=2] [ref=e71]\n'
-            "  - text: Our website uses cookies to analyse traffic.\n"
-            '  - link "cookies policy" [ref=e76]\n  - button "Allow all" [active] [ref=e78]\n'
-            '  - button "Reject all" [ref=e80]\n  - button "Manage cookies" [ref=e82]\n```'
+        filler = '  - link "Offer" [ref=e9000]\n' * 1500 if "long" in self.url else ""  # past the 30,000 cut
+        return (
+            page[: -len("```")]
+            + filler
+            + (
+                '- dialog "Our Cookies" [ref=e67]:\n  - heading "Our Cookies" [level=2] [ref=e71]\n'
+                "  - text: Our website uses cookies to analyse traffic.\n"
+                '  - link "cookies policy" [ref=e76]\n  - button "Allow all" [active] [ref=e78]\n'
+                '  - button "Reject all" [ref=e80]\n  - button "Manage cookies" [ref=e82]\n```'
+            )
         )
 
     def page(self) -> str:
@@ -463,3 +468,12 @@ def test_what_counts_as_a_cookie_banner():
     for name in ("Accept all", "Manage cookies"):
         assert browser.cookie_banner(banner + f'  - button "{name}" [ref=e2]') is None
     assert browser.cookie_banner('- button "Decline" [ref=e2]') is None  # no cookies around: not a banner
+
+
+async def test_a_cookie_banner_past_where_a_long_page_is_cut_is_still_closed(setup, llm, chat, accounts):
+    """Seen on evri.com: the banner was the last thing on a long page, cut off before the harness looked."""
+    agent, _, fake = setup
+    fe = person(accounts)
+    await start_sign_in(agent, llm, chat, fe, url="https://www.waitrose.com/login/cookies-ask/long")
+    page = fake.contexts[-1]
+    assert not page.banner and "e80" in page.moves

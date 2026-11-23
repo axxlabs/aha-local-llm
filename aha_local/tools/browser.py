@@ -284,9 +284,10 @@ def to_result(r: mt.CallToolResult) -> ToolResult:
     status = http_status(text)
     if status and status >= 400:
         text = f"The site answered HTTP {status}. {CANT_TELL}\n{text}"
+    full = text
     if len(text) > MAX_SNAPSHOT_CHARS:
         text = text[:MAX_SNAPSHOT_CHARS] + "\n[… snapshot cut to fit; use browser_find to look for something specific]"
-    return ToolResult(text, images, kind="page", error=bool(r.isError))
+    return ToolResult(text, images, kind="page", error=bool(r.isError), full=full)
 
 
 def http_status(text: str) -> int | None:
@@ -370,8 +371,11 @@ async def call_with_snapshot(session, name: str, args: dict, ctx: ToolContext) -
     if SNAPSHOT_LINK.search(result.text):
         snap = to_result(await session.call("browser_snapshot", {}))
         if not snap.error:
+            result.full = SNAPSHOT_LINK.sub(
+                lambda _: "### Snapshot\n" + snap.full.split("### Snapshot", 1)[-1].strip(), result.full or result.text
+            )
             result.text = SNAPSHOT_LINK.sub(
-                "### Snapshot\n" + snap.text.split("### Snapshot", 1)[-1].strip(), result.text
+                lambda _: "### Snapshot\n" + snap.text.split("### Snapshot", 1)[-1].strip(), result.text
             )
     await close_cookie_banner(session, ctx, result)
     annotate(ctx, result)
@@ -394,8 +398,9 @@ async def close_cookie_banner(session, ctx: ToolContext, result: ToolResult) -> 
     """Close a cookie banner in code, turning the optional cookies down (SPEC §3.4 "Cookie banners").
 
     Left to the model, a banner could stay over the page, and a sign-in card's typing then lands on it. Tried once
-    per page and button; the page the model gets is the one after."""
-    m = YAML_BLOCK.search(result.text)
+    per page and button; the page the model gets is the one after. Looked for in the whole page: a banner is often
+    the last thing on it, past where a long page is cut to fit (seen on evri.com)."""
+    m = YAML_BLOCK.search(result.full or result.text)
     found = cookie_banner(m.group(1)) if m else None
     if found is None:
         return
