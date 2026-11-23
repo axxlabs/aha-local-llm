@@ -590,6 +590,11 @@ MODEL_FILES = {
     "Qwen3.6-35B-A3B-mmproj-F16.gguf": "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/mmproj-F16.gguf",
     "Qwen3.5-9B-UD-Q6_K_XL.gguf": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-UD-Q6_K_XL.gguf",
     "Qwen3.5-9B-mmproj-F16.gguf": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-F16.gguf",
+    "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf": "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf",
+    "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf": "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-qat-GGUF/resolve/main/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
+    "gemma-4-26B-A4B-mmproj-F16.gguf": "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-qat-GGUF/resolve/main/mmproj-F16.gguf",
+    "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf": "https://huggingface.co/unsloth/gemma-4-12B-it-qat-GGUF/resolve/main/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+    "gemma-4-12B-mmproj-F16.gguf": "https://huggingface.co/unsloth/gemma-4-12B-it-qat-GGUF/resolve/main/mmproj-F16.gguf",
 }
 
 

@@ -32,6 +32,9 @@ class Model:
 MODELS: dict[str, Model] = {
     "qwen3.6-35b": Model("Qwen3.6 35B", "Best answers. Slower: on a 16 GB graphics card part of it runs from memory."),
     "qwen3.5-9b": Model("Qwen3.5 9B", "Faster replies. Fits on the graphics card; less careful on long tasks."),
+    "qwen3.6-35b-3bit": Model("Qwen3.6 35B, 3-bit", "The default, smaller: faster, less careful. Being tried."),
+    "gemma-4-26b": Model("Gemma 4 26B", "Google's model; mostly fits on the graphics card. Being tried."),
+    "gemma-4-12b": Model("Gemma 4 12B", "Google's smaller model; fits on the graphics card. Being tried."),
 }
 
 

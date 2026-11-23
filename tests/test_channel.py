@@ -351,7 +351,8 @@ async def test_settings_choose_the_households_model(tmp_path):
     await phone.send({"t": "model_request"})
     listing = phone.inbox()[0]
     assert listing["current"] == "qwen3.6-35b"
-    assert [(m["id"], m["ready"]) for m in listing["choices"]] == [("qwen3.6-35b", True), ("qwen3.5-9b", True)]
+    ready = {m["id"]: m["ready"] for m in listing["choices"]}
+    assert ready["qwen3.6-35b"] and ready["qwen3.5-9b"] and not ready["gemma-4-12b"]  # only what the server lists
     await phone.send({"t": "model_set", "model": "qwen3.5-9b"})
     await asyncio.sleep(0)
     assert phone.inbox()[0]["current"] == "qwen3.5-9b"
