@@ -3,8 +3,8 @@
 """Email through the Gmail REST API (SPEC §3.4 "Email", §5.5).
 
 Each account connects its own mailbox; the token is looked up from the account running the task, never from
-the model's arguments. Reading marks the task, so that from then on everything that could carry text out of
-the computer is an approval card (SPEC §5.5). Sending and drafts are always cards with the exact email.
+the model's arguments. Reading marks the task as holding private data (SPEC §5.2); sending and drafts are `send`
+actions, always shown to the person with the exact email (§5.5).
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ import httpx
 
 from ..approvals import Field
 from ..rest import Vault
+from . import guard
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
 GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me"
@@ -41,7 +42,6 @@ NOT_CONNECTED = (
     "then `aha mail connect <their name>` on the computer while this person signs in with Google. Their mail stays "
     "between Google and this computer. Don't suggest any other way to connect."
 )
-APPROVED = "The user approved this email; it was {done} exactly as shown."
 
 _tokens: dict[str, tuple[str, float]] = {}  # account id -> (access token, expiry), in memory only
 
@@ -268,11 +268,9 @@ def _compose(kind: str):
         if reply:
             fields.append(Field("In reply to", f"{reply.get('from', '')}: {reply.get('subject', '')}", "info"))
         title = "Send this email?" if kind == "email" else "Save this draft in your mailbox?"
-        decision = await ctx.approvals.ask(ctx.account, kind, title, fields)
-        if not decision.approved:
-            from .browser import declined
-
-            return declined(decision)
+        decision, refused = await guard.ask(ctx, kind, title, fields)  # a send: always a card (SPEC §5.2)
+        if refused:
+            return refused
         to, cc, subj, body = decision.values[:4]
         to_ok, cc_ok = _addresses(to), _addresses(cc) if cc.strip() else ""
         if not to_ok or cc_ok is None or "\n" in subj or "\r" in subj:
@@ -288,10 +286,7 @@ def _compose(kind: str):
         else:
             await gmail(ctx, "POST", "/drafts", json={"message": message})
             done = "saved as a draft (not sent)"
-        notes = [APPROVED.format(done=done)]
-        if decision.values[:4] != [f.value for f in fields[:4]]:
-            notes.append("The user edited it before it went; what went is: " + f"To {to_ok}; Subject {subj}.")
-        return ToolResult(" ".join(notes))
+        return ToolResult(f"The email was {done}. Subject: {subj}." + (f" Cc: {cc_ok}." if cc_ok else ""))
 
     return handler
 
@@ -329,8 +324,7 @@ def register(reg: Registry) -> None:
     reg.add(
         Tool(
             "email_send",
-            "Send an email from the user's own address. The user sees the exact email in an approval form, "
-            "can edit it, and nothing is sent unless they approve.",
+            "Send an email from the user's own address.",
             params(["to", "body"], **EMAIL_ARGS),
             email_send,
         )
@@ -338,7 +332,7 @@ def register(reg: Registry) -> None:
     reg.add(
         Tool(
             "email_draft",
-            "Save an email as a draft in the user's mailbox (not sent), after the user approves it.",
+            "Save an email as a draft in the user's mailbox (not sent).",
             params(["to", "body"], **EMAIL_ARGS),
             email_draft,
         )

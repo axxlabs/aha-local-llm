@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 from ..accounts import Account
 from ..approvals import Field
+from . import guard
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
 log = logging.getLogger("aha.schedule")
@@ -178,12 +179,9 @@ async def schedule_add(args: dict, ctx: ToolContext) -> ToolResult:
             Field("When", when.strftime("%Y-%m-%d %H:%M")),
             Field("Repeats", repeat),
         ]
-        d = await ctx.approvals.ask(ctx.account, "schedule", "Schedule this task?", fields)
-        if not d.approved:
-            if d.reason == "expired":
-                return ToolResult("", error=True, kind="expired")
-            note = f" They said: “{d.note}”. Follow that." if d.note else " Ask them how to proceed."
-            return ToolResult("The person declined; nothing was scheduled." + note, error=True)
+        d, refused = await guard.ask(ctx, "schedule", "Schedule this task?", fields)  # a send (SPEC §5.2)
+        if refused:
+            return refused
         text, repeat = _clean(d.values[0]), d.values[2].strip().lower()
         when = parse_local(d.values[1], tz)
         if not text or repeat not in REPEATS or when is None or when.timestamp() <= time.time():

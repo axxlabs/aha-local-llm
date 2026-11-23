@@ -99,9 +99,9 @@ class Draft:
     called: set[str]  # tools that ran without error in this task
     can_sign_in: bool
     sign_in_page: str = ""  # the site, when the last page the model saw is a sign-in form
-    sign_in_offered: bool = False  # a sign-in card was shown in this task
+    login_tried: bool = False  # browser_login ran in this task
     challenge_page: str = ""  # the site, when the last page the model saw shows an "are you human?" check
-    human_check_offered: bool = False  # a check card was shown in this task
+    human_check_offered: bool = False  # browser_human_check ran in this task
     blank_page: bool = False  # the last page the model saw is a new window's blank page (SPEC §3.4)
 
 
@@ -133,7 +133,7 @@ BROWSER_ACTION_TOOLS = {
     "browser_drag",
     "browser_file_upload",
     "browser_handle_dialog",
-    "browser_sign_in",
+    "browser_login",
     "browser_human_check",
 }
 
@@ -141,7 +141,7 @@ BROWSER_ACTION_TOOLS = {
 def unbacked_memory_claim(asked: str, answer: str, tools_called: set[str]) -> bool:
     """The person asked about their memories, the answer says it's done, and no memory tool ran in this task.
 
-    Memories change only through the tools (and the person's approval), so such an answer is untrue. Not when a
+    Memories change only through the tools, so such an answer is untrue. Not when a
     browser action ran: "remove the toilet paper" then "I've removed it" is about a trolley, not a memory.
     """
     return bool(
@@ -204,25 +204,7 @@ BLANK_RETRY = retry(
 MEMORY_RETRY = retry(
     "Your draft says a memory was saved, changed or forgotten, but you haven't called memory_add, memory_update or "
     "memory_delete in this task, so nothing changed. Memories are listed in the <context> block. If the person wants "
-    "a change, call the tool now (they'll approve it); if not, correct your answer."
-)
-
-
-SIGNIN_CLAIM = re.compile(
-    r"\bsign[- ]?in card\b|\bcard (?:that )?(?:has )?appeared\b|\bsign in (?:on|using|with) the card\b", re.I
-)
-
-
-def unbacked_signin_claim(answer: str, tools_called: set[str]) -> bool:
-    """The answer points the person at a sign-in card, but browser_sign_in didn't run: there's no card."""
-    return bool(SIGNIN_CLAIM.search(answer)) and "browser_sign_in" not in tools_called
-
-
-SIGNIN_RETRY = retry(
-    "Your draft tells the person to use a sign-in card, but you haven't called browser_sign_in in this task, so no "
-    "card was shown. A card appears only when you call browser_sign_in yourself, with the references of the sign-in "
-    "fields from the latest snapshot (take one if needed; if the page has only an email field first, use that alone). "
-    "If you can't find the fields, say so plainly."
+    "a change, call the tool now; if not, correct your answer."
 )
 
 
@@ -240,8 +222,7 @@ def unbacked_schedule_claim(answer: str, tools_called: set[str]) -> bool:
 
 SCHEDULE_RETRY = retry(
     "Your draft says a reminder or task is scheduled, but you haven't called schedule_add in this task, so nothing "
-    "is: you can't act later on your own. Call schedule_add now (a scheduled task shows the person a card to "
-    "approve), or correct your answer."
+    "is: you can't act later on your own. Call schedule_add now, or correct your answer."
 )
 
 SECRET = r"(?:password|passcode|one-time code|verification code|2fa code|security code|pin)"
@@ -258,14 +239,13 @@ PASSWORD_ASK = re.compile(
 
 
 def asks_for_secret(answer: str) -> bool:
-    """The answer asks the person to give a password or code in the chat (the sign-in card is the only way)."""
+    """The answer asks the person to give a password or code in the chat (browser_login is the only way)."""
     return bool(PASSWORD_ASK.search(answer))
 
 
 SECRET_RETRY = retry(
-    "Your draft asks the person for a password or code in the chat. Never do that: passwords and codes go only "
-    "through browser_sign_in, where they type them on a card you never see. Offer to show the sign-in card again "
-    "instead, or another way forward."
+    "Your draft asks the person for a password or code in the chat. Never do that: on a page that asks them to "
+    "sign in (or for a code, or to choose a password), call browser_login; you never see their details."
 )
 
 SIGNIN_REFUSAL = re.compile(
@@ -279,14 +259,14 @@ SIGNIN_REFUSAL = re.compile(
 
 
 def refuses_sign_in(answer: str, tools_called: set[str], can_sign_in: bool) -> bool:
-    """The answer refuses to sign in or use the person's account on a site, without having tried the sign-in card."""
-    return can_sign_in and "browser_sign_in" not in tools_called and bool(SIGNIN_REFUSAL.search(answer))
+    """The answer refuses to sign in or use the person's account on a site, without having tried browser_login."""
+    return can_sign_in and "browser_login" not in tools_called and bool(SIGNIN_REFUSAL.search(answer))
 
 
 SIGNIN_REFUSAL_RETRY = retry(
     "Your draft says you can't sign in or use the person's account on the site. You can: open the site, go to its "
-    "sign-in page, take a snapshot and call browser_sign_in with the references of the sign-in fields. The person "
-    "types their details on the card and you never see them, so there's nothing to refuse. Then carry on with the "
+    "sign-in page and call browser_login. You never see their details, so there's nothing to refuse. Then carry on "
+    "with the "
     "task (their basket, orders, bookings). Only if the site can't be opened or has no sign-in form, say that "
     "plainly."
 )
@@ -303,40 +283,39 @@ CHECK_CLAIM = re.compile(
 
 
 def unbacked_check_claim(answer: str, tools_called: set[str]) -> bool:
-    """The answer points the person at a check card, but browser_human_check didn't run: there's no card."""
+    """The answer points the person at a check, but browser_human_check didn't run: they have nothing to do it on."""
     return bool(CHECK_CLAIM.search(answer)) and "browser_human_check" not in tools_called
 
 
 CHECK_RETRY = retry(
-    "Your draft tells the person to do a check on a card, but you haven't called browser_human_check in this task, "
-    "so no card was shown. A card appears only when you call browser_human_check yourself, with the check on the "
-    "page. If there's no check on the page, say so plainly."
+    "Your draft tells the person to do a check themselves, but you haven't called browser_human_check in this "
+    "task, so they have nothing to do it on. Call browser_human_check with the check on the page. If there's no "
+    "check on the page, say so plainly."
 )
 
 
 def ignores_sign_in_page(d: Draft) -> bool:
-    """The task ends on a sign-in page and no sign-in card was shown: the model didn't notice, or gave up."""
-    return d.can_sign_in and bool(d.sign_in_page) and not d.sign_in_offered
+    """The task ends on a sign-in page and browser_login didn't run: the model didn't notice, or gave up."""
+    return d.can_sign_in and bool(d.sign_in_page) and not d.login_tried
 
 
 def ignores_challenge(d: Draft) -> bool:
-    """The task ends on a page with an "are you human?" check and no check card was shown."""
+    """The task ends on a page with an "are you human?" check and browser_human_check didn't run."""
     return d.can_sign_in and bool(d.challenge_page) and not d.human_check_offered
 
 
 CHALLENGE_RETRY = retry(
-    'The last page you saw shows an "are you human?" check, and you haven\'t shown the user a check card, so '
-    "they can't do it. Call browser_human_check now: they see the page on a card and tap where to click. Only for "
-    'a "press and hold" check, which the card can\'t do, tell them so and give the link.'
+    'The last page you saw shows an "are you human?" check, and you haven\'t called browser_human_check, so the '
+    'user can\'t do it. Call it now: they see the page and tap where to click. Only for a "press and hold" check, '
+    "which can't be done that way, tell them so and give the link."
 )
 
 
 def sign_in_page_retry(site: str) -> str:
     return retry(
-        f"The last page you saw is a sign-in form on {site}, and you haven't shown the user a sign-in card, so they "
-        "aren't signed in there now (an earlier session can end). If the task needs their account, call "
-        "browser_sign_in with the references of that page's sign-in fields (take a snapshot first if needed). If "
-        "it doesn't, answer without saying they're signed in."
+        f"The last page you saw is a sign-in form on {site}, and you haven't called browser_login, so the user "
+        "isn't signed in there now (an earlier session can end). If the task needs their account, call "
+        "browser_login on that page. If it doesn't, answer without saying they're signed in."
     )
 
 
@@ -416,16 +395,10 @@ CLAIM_CHECKS = (
         "draft answer claimed a memory change no tool made; asking the model to fix it",
     ),
     Check(
-        "signin",
-        lambda d: unbacked_signin_claim(d.answer, d.called),
-        SIGNIN_RETRY,
-        "draft answer pointed at a sign-in card no tool showed; asking the model to call it",
-    ),
-    Check(
         "refusal",
         lambda d: refuses_sign_in(d.answer, d.called, d.can_sign_in),
         SIGNIN_REFUSAL_RETRY,
-        "draft answer refused to sign in to a site without trying the sign-in card",
+        "draft answer refused to sign in to a site without trying browser_login",
     ),
     Check(
         "secret",
@@ -443,19 +416,19 @@ CLAIM_CHECKS = (
         "check",
         lambda d: unbacked_check_claim(d.answer, d.called),
         CHECK_RETRY,
-        "draft answer pointed at a check card no tool showed; asking the model to call it",
+        "draft answer pointed the person at a check no tool showed; asking the model to call it",
     ),
     Check(
         "challenge",
         ignores_challenge,
         CHALLENGE_RETRY,
-        'draft answer left the person on an "are you human?" check without a check card; asking for one',
+        'draft answer left the person on an "are you human?" check without browser_human_check; asking for it',
     ),
     Check(
         "sign_in_page",
         ignores_sign_in_page,
         "",  # depends on the site: sign_in_page_retry
-        "draft answer left the person on a sign-in page without a sign-in card; asking the model to show one",
+        "draft answer left the person on a sign-in page without browser_login; asking the model to call it",
     ),
     Check(
         "screenshot",

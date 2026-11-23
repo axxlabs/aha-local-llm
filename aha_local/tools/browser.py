@@ -24,6 +24,8 @@ import re
 import struct
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass, replace
+from dataclasses import field as dc_field
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -33,10 +35,9 @@ from mcp.client.streamable_http import streamablehttp_client
 
 from ..approvals import Field
 from ..items import Image
-from ..policy import addresses
-from ..policy.browser import decide, form_for, offered, runs_trusted
+from ..policy.browser import classify, form_for, offered, open_action, open_form
 from ..policy.urls import check_url, site_of
-from . import human, signins, trusted
+from . import guard, human, logins, signins
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
 log = logging.getLogger("aha.browser")
@@ -71,14 +72,6 @@ COOKIE_NEAR = 40  # lines around the button where the banner says "cookie"
 CANT_TELL = (
     "From here you can't tell why: tell the person you couldn't load the page and give the link; "
     "don't guess at a cause (region, IP, outage) the page didn't state."
-)
-TRUSTED_NOTE = (
-    "Ran without asking: the user trusts {site} to fill in forms (their choice, in Settings). Carry on with the "
-    "task; don't ask for confirmation in the chat unless something comes up that they didn't ask for."
-)
-APPROVED_NOTE = (
-    "The user approved this action; that approval is their go-ahead. "
-    "Continue the task without asking for confirmation in the chat."
 )
 
 
@@ -485,7 +478,7 @@ def note_challenge(ctx: ToolContext, result: ToolResult, snapshot: str) -> None:
     result.error = False
     result.text = (
         '[Aha!: this page shows an "are you human?" check. If one click on an "I\'m not a robot" box doesn\'t '
-        "pass it (or there's no box), call browser_human_check now: the user does it on a card. Don't just tell "
+        "pass it (or there's no box), call browser_human_check now: the user does it themselves. Don't just tell "
         "them about it, and never solve a picture puzzle yourself.]\n\n" + result.text
     )
 
@@ -519,7 +512,7 @@ def note_sign_in_form(ctx: ToolContext, result: ToolResult, snapshot: str) -> No
     )
     result.text = (
         f"[Aha!: this page is a sign-in form on {site}. {before}If the task needs their account, call "
-        "browser_sign_in now with this page's field references; don't tell them they're signed in.]\n\n" + result.text
+        "browser_login now; don't tell them they're signed in.]\n\n" + result.text
     )
 
 
@@ -597,8 +590,8 @@ def check_targets(name: str, args: dict, ctx: ToolContext) -> ToolResult | None:
         label = element_label(ctx.task.ref_lines[ref], ref)
         if SECRET_FIELD.search(label):
             return ToolResult(
-                f"“{label}” is a sign-in field: never fill it yourself. Call browser_sign_in with the references of "
-                "the sign-in fields; the user types their details on a sign-in card and you never see them.",
+                f"“{label}” is a sign-in field: never fill it yourself. Call browser_login instead: it signs the user "
+                "in, and you never see their details.",
                 error=True,
             )
     return None
@@ -629,90 +622,77 @@ def make_handler(name: str):
         args = normalise_targets(args)
         if refused := check_targets(name, args, ctx):  # before any card: a call that would fail never asks
             return refused
-        if ctx.task.read_mail:  # SPEC §5.5: after reading mail, every address the model picks is a card
-            verdict = decide(name, args, False, set())
-        elif ctx.task.on_signed_in:  # SPEC §5.6: after a signed-in page, a site not opened yet is a card
-            verdict = decide(name, args, False, ctx.task.approved_sites)
-        else:
-            verdict = decide(name, args, ctx.config.allow_all_sites, ctx.task.approved_sites)
+        action = classify(name, args)
+        if action.kind in ("type", "other"):
+            try:
+                action = replace(action, site=await current_site(session))  # the browser's own address
+            except Exception:
+                log.warning("couldn't read the current site")
+        verdict = guard.check(ctx, action, name)  # SPEC §5.2: the one place that decides
         if verdict.outcome == "block":
-            return ToolResult(f"Blocked by aha's safety policy: {verdict.reason}.", error=True)
-        # SPEC §5.2 "Addresses that carry data": an address the model wrote with key=value pairs in it is a card.
-        opens = name == "browser_navigate" or (name == "browser_tabs" and args.get("action") == "new")
-        url = str(args.get("url", "")) if opens else ""
-        carries = bool(url) and addresses.carries_data(url, ctx.task.seen_urls)
-        if verdict.outcome == "auto" and not carries:
-            if name == "browser_click" and human.is_ref(args.get("target")):
-                await run_code(session, human.move_code(args["target"]))  # the mouse gets there first (§3.4)
-            result = await call_with_snapshot(session, name, args, ctx)
-            if verdict.site and not result.error:
-                ctx.task.approved_sites.add(verdict.site)
-            return result
+            return ToolResult(f"Blocked by aha's safety policy: {verdict.why}.", error=True)
+        if verdict.outcome == "run":
+            if action.kind == "read":
+                if name == "browser_click" and human.is_ref(args.get("target")):
+                    await run_code(session, human.move_code(args["target"]))  # the mouse gets there first (§3.4)
+                return await call_with_snapshot(session, name, args, ctx)
+            return await ran(session, name, args, action, ctx)
 
-        site = ""
-        try:
-            site = await current_site(session)
-        except Exception:
-            log.warning("couldn't read the current site")
-        if runs_trusted(name, site, trusted.sites(ctx.account)):  # SPEC §5.7
-            # The site and the tool, never the values; and whether the task had read mail (§5.5).
-            ctx.account.audit({"trusted": site, "tool": name, **({"after_mail": True} if ctx.task.read_mail else {})})
-            result = await run_approved(session, name, args, ctx)
-            result.text = TRUSTED_NOTE.format(site=site) + "\n\n" + result.text
-            return result
         shot = None
         try:
             shot_result = to_result(await session.call("browser_take_screenshot", {}))
             shot = shot_result.images[0] if shot_result.images else None
         except Exception:
             log.warning("couldn't take a screenshot for the approval")
-        form = form_for(name, labelled(name, args, ctx), site)
-        if carries:
-            form = data_form(form, url)
-        decision = await ctx.approvals.ask(ctx.account, "action", form.title, form.fields, shot)
-        if not decision.approved:
-            return declined(decision)
+        if action.kind in ("open", "search"):
+            form = open_form(action.url, data=verdict.why == "data")
+        else:
+            form = form_for(name, labelled(name, args, ctx), action.site)
+        decision, refused = await guard.ask(ctx, "action", form.title, form.fields, shot)
+        if refused:
+            return refused
         final = form.apply(name, args, decision.values)
-        if name in ("browser_navigate", "browser_tabs"):
-            new_site, why = check_url(str(final.get("url", "")))
-            if why:
-                return ToolResult(f"Blocked by aha's safety policy: {why}.", error=True)
-            ctx.task.approved_sites.add(new_site)
-            if k := addresses.key(str(final.get("url", ""))):
-                ctx.task.seen_urls.add(k)  # approved as it is: not asked again in this task
-        result = await run_approved(session, name, final, ctx)
-        notes = [APPROVED_NOTE]
-        if final != args:
-            notes.append(
-                f"The user edited the values before it ran; use theirs from now on: {describe(form, decision)}"
-            )
-        result.text = " ".join(notes) + "\n\n" + result.text
-        return result
+        if action.kind in ("open", "search"):
+            again = open_action(str(final.get("url", "")))
+            if again.kind == "block":
+                return ToolResult(f"Blocked by aha's safety policy: {again.reason}.", error=True)
+            action = again
+        return await ran(session, name, final, action, ctx)
 
     return handler
 
 
-def data_form(form, url: str):
-    """The card for an address the model wrote with data in it: what the site would receive (SPEC §5.2)."""
-    site, _ = check_url(url)
-    form.title = f"Open this address? It sends what's in it to {site}"
-    form.fields.append(Field("It sends", addresses.describe(url), "info"))
-    return form
+async def ran(session, name: str, args: dict, action, ctx: ToolContext) -> ToolResult:
+    """Run an action that may go out (it passed the gate, with or without a card), and say what went, in the same
+    words either way (SPEC §5.1)."""
+    result = await run_approved(session, name, args, ctx)
+    if action.kind in ("open", "search"):
+        if not result.error:
+            guard.opened(ctx, str(args.get("url", "")))
+        return result
+    if what := entered(name, args, ctx):
+        result.text = what + "\n\n" + result.text
+    return result
 
 
-def describe(form, decision) -> str:
-    return "; ".join(f"{f.label}: {v}" for f, v in zip(form.fields, decision.values, strict=False))
-
-
-def declined(decision) -> ToolResult:
-    if decision.reason == "expired":
-        return ToolResult("", error=True, kind="expired")
-    text = "The user declined this action, so it was not run. Don't retry it unchanged."
-    if decision.note:
-        text += f" They said: “{decision.note}”. Follow that."
-    else:
-        text += " Ask them how to proceed."
-    return ToolResult(text, error=True)
+def entered(name: str, args: dict, ctx: ToolContext) -> str:
+    """What was typed or chosen, as plain fact (the person may have changed it on a card; the model can't tell)."""
+    if name == "browser_type":
+        return f"Typed: “{args.get('text', '')}”."
+    if name == "browser_fill_form" and isinstance(args.get("fields"), list):
+        parts = []
+        for f in args["fields"]:
+            if isinstance(f, dict):
+                label = element_label(ctx.task.last_snapshot, str(f.get("target", ""))) or f.get("name") or "a field"
+                parts.append(f"{label}: “{f.get('value', '')}”")
+        return ("Filled in: " + "; ".join(parts) + ".") if parts else ""
+    if name == "browser_select_option":
+        return "Chose: " + ", ".join(str(v) for v in args.get("values") or []) + "."
+    if name == "browser_press_key":
+        return f"Pressed: {args.get('key', '')}."
+    if name == "browser_handle_dialog":
+        return f"Answered the pop-up: “{args.get('promptText', '')}”."
+    return ""
 
 
 async def screenshot(session) -> Image | None:
@@ -740,97 +720,144 @@ async def show_screenshot(args: dict, ctx: ToolContext) -> ToolResult:
     return ToolResult("Sent the screenshot to the person's chat. Carry on; don't describe it unless they ask.")
 
 
-SIGN_IN_FIELDS = (
-    ("username_target", "text", "Email or username"),
-    ("password_target", "secret", "Password"),
-    ("code_target", "secret", "Code"),
-)
+# Sign-in fields, found by the harness from the page's own labels (SPEC §5.8): the model names none of them.
+LOGIN_BOX = re.compile(r'^\s*- textbox "([^"]*)"[^\n]*?\[ref=((?:f\d+)?e\d+)\]', re.M)
+CODE_LABEL = re.compile(r"one[- ]time|verification|security code|\bcode\b|\botp\b|2fa", re.I)
+PASSWORD_LABEL = re.compile(r"pass ?word|passcode|passwort|mot de passe|senha|contrase|\bpin\b", re.I)
+USER_LABEL = re.compile(r"e-?mail|user ?name|user id|log ?in|sign ?in|phone|mobile|account", re.I)
 MAIL_NOTE = "This came up after Aha! read your email: sign in only if this is the site you meant."
+SAVE_LABEL = "Save this login on this computer"
+WAIT_AFTER_SUBMIT = 2.5
 
 
-def _ref(value) -> str:
-    v = str(value or "").strip()
-    m = REF_TARGET.match(v)
-    return m.group(1) if m else v
+@dataclass
+class LoginFields:
+    username: str = ""
+    passwords: list[str] = dc_field(default_factory=list)  # a sign-up page also has "confirm password"
+    code: str = ""
+
+    def __bool__(self) -> bool:
+        return bool(self.username or self.passwords or self.code)
 
 
-async def browser_sign_in(args: dict, ctx: ToolContext) -> ToolResult:
-    """The person signs in on the current page: they type on a card, the harness types into the page (SPEC §3.4)."""
+def login_fields(snapshot: str) -> LoginFields:
+    found = LoginFields()
+    for label, ref in LOGIN_BOX.findall(snapshot):
+        if CODE_LABEL.search(label) and not PASSWORD_LABEL.search(label):
+            found.code = found.code or ref
+        elif PASSWORD_LABEL.search(label):
+            found.passwords.append(ref)
+        elif USER_LABEL.search(label) and not found.username:
+            found.username = ref
+    return found
+
+
+async def type_secret(session, ref: str, value: str, submit: bool) -> bool:
+    """Type a login value into the page. The tool's own result echoes what was typed: it's never passed on."""
+    if await human_type(session, ref, value, submit):  # one key at a time, like a person (§3.4)
+        return True
+    r = await session.call("browser_type", {"element": "sign-in field", "target": ref, "text": value, "submit": submit})
+    return not r.isError
+
+
+async def look(session, ctx: ToolContext, wait: bool = True) -> tuple[ToolResult, LoginFields]:
+    """The page now (after a submit, once it had time to load) and its sign-in fields."""
+    if wait:
+        with contextlib.suppress(Exception):
+            await session.call("browser_wait_for", {"time": WAIT_AFTER_SUBMIT})
+    page = await call_with_snapshot(session, "browser_snapshot", {}, ctx)
+    return page, login_fields(ctx.task.last_snapshot)
+
+
+async def browser_login(args: dict, ctx: ToolContext) -> ToolResult:
+    """Sign the person in on the current page (SPEC §5.8): a saved login, or a login card; a code card if asked.
+
+    The model gives nothing and learns only whether they're signed in now."""
     session = ctx.browser
     if session is None:
         return ToolResult("The browser isn't available right now.", error=True)
-    targets = [(ref, kind, default) for key, kind, default in SIGN_IN_FIELDS if (ref := _ref(args.get(key)))]
-    if not targets:
-        return ToolResult("Give the references of the sign-in fields from the latest snapshot.", error=True)
-    url = await current_url(session)
+    ctx.task.login_tried = True
+    url = await current_url(session) if session.is_open() else ""
     site, why = check_url(url)
     if why or not site:
         return ToolResult(f"Blocked by aha's safety policy: {why or 'no page is open'}.", error=True)
     if urlsplit(url).scheme != "https":
-        return ToolResult("Signing in is only offered on secure (https) pages. Tell the person.", error=True)
-    # The card names the exact host: on shared hosting (x.herokuapp.com, y.github.io) the site alone would let a
-    # look-alike page borrow a trusted name.
-    shown = (urlsplit(url).hostname or site).lower().removeprefix("www.")
-    labels = []
-    for ref, _, _ in targets:
-        label = element_label(ctx.task.last_snapshot, ref)
-        if not label:
-            return ToolResult(
-                f"{ref} isn't in the latest snapshot. Take a snapshot and use the sign-in fields' references.",
-                error=True,
-            )
-        labels.append(label)
-    fields = [Field("Site", shown, "info")]
-    if ctx.task.read_mail:
-        fields.append(Field("Check", MAIL_NOTE, "info"))
-    first = len(fields)
-    for (_, kind, default), label in zip(targets, labels, strict=True):
-        fields.append(Field(label or default, "", kind))
-    ctx.task.sign_in_offered = True
-    decision = await ctx.approvals.ask(ctx.account, "signin", f"Sign in to {shown}?", fields, await screenshot(session))
-    if not decision.approved:
-        if decision.reason == "expired":
-            return ToolResult("", error=True, kind="expired")
-        text = (
-            "The person didn't sign in. Don't show the sign-in card again unless they ask, and don't ask for their "
-            "password or code in the chat."
-        )
-        if decision.note:
-            text += f" They said: “{decision.note}”. Follow that."
-        return ToolResult(text, error=True)
-    values = decision.values[first : first + len(targets)]
-    ctx.task.secrets.extend(v for (_, kind, _), v in zip(targets, values, strict=True) if kind == "secret" and v)
-    filled = [(t, v) for t, v in zip(targets, values, strict=True) if v]
-    if not filled:
+        return ToolResult("Signing in only works on secure (https) pages. Tell the user.", error=True)
+    # The exact host: on shared hosting (x.herokuapp.com, y.github.io) the site alone would let a look-alike page
+    # borrow a trusted name, and a saved login is only ever typed where it was saved.
+    host = (urlsplit(url).hostname or site).lower().removeprefix("www.")
+    page, fields = await look(session, ctx, wait=False)
+    if not (is_sign_in_form(ctx.task.last_snapshot, url) or fields.code):
         return ToolResult(
-            "The person approved but typed nothing, so nothing was entered. Ask what they want.", error=True
+            "There's no sign-in form on this page. Open the site's sign-in page (or its account page) first.",
+            error=True,
         )
-    for i, ((ref, _, _), value) in enumerate(filled):
-        submit = bool(args.get("submit", True)) and i == len(filled) - 1
-        if await human_type(session, ref, value, submit):  # one key at a time, like a person (§3.4)
-            continue
-        r = await session.call(
-            "browser_type",
-            {"element": labels[targets.index(filled[i][0])], "target": ref, "text": value, "submit": submit},
-        )
-        if r.isError:  # the result echoes the typed text: never pass it on
+    if fields.username or fields.passwords:
+        saved = None if host in ctx.task.saved_login_failed else logins.get(ctx.account, host)
+        if saved:
+            username, password, keep = saved.get("username", ""), saved["password"], False
+        else:
+            card = [Field("Site", host, "info")]
+            if ctx.task.read_mail:
+                card.append(Field("Check", MAIL_NOTE, "info"))
+            first = len(card)
+            card += [Field("Email or username", "", "text"), Field("Password", "", "secret")]
+            card.append(Field(SAVE_LABEL, "false", "bool"))
+            decision, refused = await guard.ask(
+                ctx, "signin", f"Sign in to {host}?", card, await screenshot(session), "Don't ask for it in the chat."
+            )
+            if refused:
+                return refused
+            username, password = decision.values[first], decision.values[first + 1]
+            keep = decision.values[first + 2] == "true"
+        if password:
+            ctx.task.secrets.append(password)
+        if (
+            fields.username
+            and username
+            and not await type_secret(session, fields.username, username, submit=not fields.passwords)
+        ):
             return ToolResult("Typing into the sign-in form failed. Take a snapshot and try again.", error=True)
-    with contextlib.suppress(Exception):
-        await session.call("browser_wait_for", {"time": 2})
-    try:  # they stay signed in, like "remember me" in their own browser (SPEC §3.4)
-        await signins.signed_in(ctx.account, session, shown, site)
-    except Exception:
-        log.exception("couldn't save the browser state after a sign-in")
-    if ctx.task.signed_in_sites is not None:
-        ctx.task.signed_in_sites.add(site)
-    ctx.task.on_signed_in = True  # this page is now a signed-in site's (SPEC §5.6)
-    page = await call_with_snapshot(session, "browser_snapshot", {}, ctx)
-    page.text = (
-        f"The person signed in on {shown} themselves; you never see what they typed. They stay signed in on this "
-        "computer. If the page asks for a one-time code, call browser_sign_in again with the code field. The page "
-        "now:\n\n" + signins.redact(page.text, ctx.task.secrets)
-    )
+        if not fields.passwords and password:  # a two-step login: the password comes on the next page
+            page, fields = await look(session, ctx)
+        for i, ref in enumerate(fields.passwords if password else []):
+            if not await type_secret(session, ref, password, submit=i == len(fields.passwords) - 1):
+                return ToolResult("Typing into the sign-in form failed. Take a snapshot and try again.", error=True)
+        page, fields = await look(session, ctx)
+        if saved and fields.passwords:  # back at a sign-in form: the saved login no longer works
+            ctx.task.saved_login_failed.add(host)
+            log.info("a saved login led back to a sign-in form; asking the person")
+            return await browser_login(args, ctx)
+        if keep and password and not fields.passwords:
+            logins.save(ctx.account, host, username, password)
+    if fields.code and not fields.passwords:  # a one-time code: asked every time, never saved
+        decision, refused = await guard.ask(
+            ctx,
+            "signin",
+            f"Enter the code for {host}?",
+            [Field("Site", host, "info"), Field("Code", "", "secret")],
+            await screenshot(session),
+            "Don't ask for it in the chat.",
+        )
+        if refused:
+            return refused
+        code = decision.values[1].strip()
+        ctx.task.secrets.append(code)
+        if not await type_secret(session, fields.code, code, submit=True):
+            return ToolResult("Typing into the sign-in form failed. Take a snapshot and try again.", error=True)
+        page, fields = await look(session, ctx)
+    signed = not is_sign_in_form(ctx.task.last_snapshot, await current_url(session))
+    if signed:
+        try:  # they stay signed in, like "remember me" in their own browser (SPEC §3.4)
+            await signins.signed_in(ctx.account, session, host, site)
+        except Exception:
+            log.exception("couldn't save the browser state after a sign-in")
+        if ctx.task.signed_in_sites is not None:
+            ctx.task.signed_in_sites.add(site)
+        ctx.task.on_signed_in = True  # the task now holds private data (SPEC §5.2)
     ctx.task.last_snapshot = signins.redact(ctx.task.last_snapshot, ctx.task.secrets)
+    said = f"Signed in on {host}." if signed else f"Not signed in on {host}: look at the page for why."
+    page.text = said + " The page now:\n\n" + signins.redact(page.text, ctx.task.secrets)
     return page
 
 
@@ -914,7 +941,7 @@ async def browser_human_check(args: dict, ctx: ToolContext) -> ToolResult:
             await session.call("browser_wait_for", {"time": 1.5})
     page = await call_with_snapshot(session, "browser_snapshot", {}, ctx)
     page.text = (
-        f"The person did the check on {shown} on a card ({taps_done} taps) and said it's done. Look at the page: if "
+        f"The person did the check on {shown} ({taps_done} taps) and said it's done. Look at the page: if "
         "the check is still there, tell them you couldn't get past it and give the link. The page now:\n\n" + page.text
     )
     return page
@@ -935,23 +962,17 @@ HARNESS_TOOLS = (
         show_screenshot,
     ),
     Tool(
-        "browser_sign_in",
-        "When the page asks the user to sign in (or for a one-time code), let them do it: give the references of "
-        "the fields from the latest snapshot. The user types their details on a sign-in card; they're entered "
-        "for them and you never see them. Never ask for passwords or codes in the chat.",
-        params(
-            username_target=string("Reference of the email or username field, if the page has one"),
-            password_target=string("Reference of the password field, if the page has one"),
-            code_target=string("Reference of the one-time code field, if the page has one"),
-            submit={"type": "boolean", "description": "Press Enter after the last field (default true)"},
-        ),
-        browser_sign_in,
+        "browser_login",
+        "When the page asks the user to sign in (or for a one-time code), sign them in: call it on the page with "
+        "the sign-in form. You never see their details. Returns whether they're signed in now and the page.",
+        params(),
+        browser_login,
     ),
     Tool(
         "browser_human_check",
         'When the page shows an "are you human?" check you can\'t pass with one click (a picture puzzle, "verify '
-        'you are human", a check that came back), let the user do it: they see the page on a card and tap where '
-        "to click. Never try to solve a picture puzzle yourself.",
+        'you are human", a check that came back), let the user do it: they see the page and tap where to '
+        "click. Never try to solve a picture puzzle yourself.",
         params(),
         browser_human_check,
     ),

@@ -2,38 +2,48 @@
 # Copyright (C) 2026 Axxlabs Limited
 """SPEC §5.2: every row of the browser policy, from the real arguments."""
 
+import json
+import re
+from pathlib import Path
+
 import pytest
 
-from aha_local.policy.browser import decide, form_for, offered, runs_trusted
+from aha_local.policy.addresses import key
+from aha_local.policy.browser import classify, form_for, offered
+from aha_local.policy.gate import Action, Facts, decide
 from aha_local.policy.urls import check_url, site_of
+
+
+def gate(name, args, page="shop.example", **facts):
+    return decide(classify(name, args, page), Facts(**facts)).outcome
 
 
 @pytest.mark.parametrize(
     "name,args,outcome",
     [
-        ("browser_type", {"text": "Felipe"}, "approval"),
-        ("browser_fill_form", {"fields": []}, "approval"),
-        ("browser_select_option", {"values": ["2"]}, "approval"),
-        ("browser_press_key", {"key": "a"}, "approval"),
-        ("browser_press_key", {"key": "Control+V"}, "approval"),
-        ("browser_press_key", {"key": "Enter"}, "auto"),
-        ("browser_press_key", {"key": "Tab"}, "auto"),
-        ("browser_handle_dialog", {"accept": True, "promptText": "hi"}, "approval"),
-        ("browser_handle_dialog", {"accept": True}, "auto"),
-        ("browser_click", {"target": "e12"}, "auto"),
-        ("browser_mouse_click_xy", {"x": 1, "y": 2}, "auto"),
-        ("browser_snapshot", {}, "auto"),
-        ("browser_take_screenshot", {}, "auto"),
-        ("browser_tabs", {"action": "list"}, "auto"),
+        ("browser_type", {"text": "Felipe"}, "card"),
+        ("browser_fill_form", {"fields": []}, "card"),
+        ("browser_select_option", {"values": ["2"]}, "card"),
+        ("browser_press_key", {"key": "a"}, "card"),
+        ("browser_press_key", {"key": "Control+V"}, "card"),
+        ("browser_press_key", {"key": "Enter"}, "run"),
+        ("browser_press_key", {"key": "Tab"}, "run"),
+        ("browser_handle_dialog", {"accept": True, "promptText": "hi"}, "card"),
+        ("browser_handle_dialog", {"accept": True}, "run"),
+        ("browser_click", {"target": "e12"}, "run"),
+        ("browser_mouse_click_xy", {"x": 1, "y": 2}, "run"),
+        ("browser_snapshot", {}, "run"),
+        ("browser_take_screenshot", {}, "run"),
+        ("browser_tabs", {"action": "list"}, "run"),
         ("browser_evaluate", {"function": "() => 1"}, "block"),
         ("browser_run_code_unsafe", {"code": "x"}, "block"),
         ("browser_file_upload", {"paths": ["/etc/passwd"]}, "block"),
         ("browser_network_requests", {}, "block"),
-        ("browser_something_new", {}, "approval"),
+        ("browser_something_new", {}, "card"),
     ],
 )
-def test_browser_policy(name, args, outcome):
-    assert decide(name, args, allow_all_sites=True, approved_sites=set()).outcome == outcome
+def test_browser_actions(name, args, outcome):
+    assert gate(name, args) == outcome
 
 
 @pytest.mark.parametrize(
@@ -53,37 +63,63 @@ def test_browser_policy(name, args, outcome):
     ],
 )
 def test_local_and_odd_urls_are_blocked(url):
-    assert decide("browser_navigate", {"url": url}, True, set()).outcome == "block"
+    assert gate("browser_navigate", {"url": url}) == "block"
+    assert gate("browser_navigate", {"url": url}, trusted={"127.0.0.1", "example.com"}) == "block"
     assert check_url(url)[1]
 
 
-def test_new_sites_follow_the_setting():
-    assert decide("browser_navigate", {"url": "https://thefork.co.uk/x"}, True, set()).outcome == "auto"
-    v = decide("browser_navigate", {"url": "https://www.thefork.co.uk/x"}, False, set())
-    assert v.outcome == "approval" and v.site == "thefork.co.uk"
-    assert decide("browser_navigate", {"url": "https://thefork.co.uk/y"}, False, {"thefork.co.uk"}).outcome == "auto"
-    assert decide("browser_tabs", {"action": "new", "url": "http://10.1.1.1"}, True, set()).outcome == "block"
+def nav(url):
+    return ("browser_navigate", {"url": url})
 
 
-def test_after_a_signed_in_page_only_sites_already_opened_stay_automatic():
-    """SPEC §5.6: the handler then decides as if allow_all_sites were off, with the task's opened sites."""
-    opened = {"waitrose.com"}
-    assert decide("browser_navigate", {"url": "https://www.waitrose.com/orders"}, False, opened).outcome == "auto"
-    assert decide("browser_navigate", {"url": "https://evil.example/?d=1"}, False, opened).outcome == "approval"
-    new_tab = {"action": "new", "url": "https://evil.example/"}
-    assert decide("browser_tabs", new_tab, False, opened).outcome == "approval"
-    assert decide("browser_click", {"target": "e1"}, False, opened).outcome == "auto"  # clicks stay automatic
+SHOWN = {key("https://evil.example/?d=1")}
+TRUSTED = {"waitrose.com"}
 
 
-def test_trusted_sites_skip_the_card_only_for_typing():
-    """SPEC §5.7."""
-    trusted = {"waitrose.com"}
-    for name in ("browser_type", "browser_fill_form", "browser_select_option", "browser_press_key"):
-        assert runs_trusted(name, "waitrose.com", trusted), name  # after reading mail too: it goes only there
-        assert not runs_trusted(name, "evil.example", trusted), name
-        assert not runs_trusted(name, "", trusted), name  # the page's site couldn't be read
-    for name in ("browser_navigate", "browser_tabs", "browser_sign_in", "browser_human_check", "browser_evaluate"):
-        assert not runs_trusted(name, "waitrose.com", trusted), name
+# SPEC §5.2: kind × trusted / private / shown / data in the address / allow_all_sites. One row per rule.
+@pytest.mark.parametrize(
+    "call,facts,outcome",
+    [
+        # 3. a trusted destination runs, whatever else holds
+        (("browser_type", {"text": "x"}), {"trusted": TRUSTED}, "run"),
+        (("browser_type", {"text": "x"}), {"trusted": TRUSTED, "private": True}, "run"),
+        (nav("https://www.waitrose.com/search?q=fluid"), {"trusted": TRUSTED}, "run"),  # data in it: the bug
+        (nav("https://www.waitrose.com/search?q=fluid"), {"trusted": TRUSTED, "private": True}, "run"),
+        (nav("https://www.waitrose.com/x"), {"trusted": TRUSTED, "allow_all_sites": False}, "run"),
+        # 5. typing elsewhere is a card
+        (("browser_type", {"text": "x"}), {"trusted": {"other.example"}}, "card"),
+        # 7. open
+        (nav("https://thefork.co.uk/x"), {}, "run"),
+        (nav("https://thefork.co.uk/x"), {"allow_all_sites": False}, "card"),
+        (nav("https://thefork.co.uk/x"), {"allow_all_sites": False, "opened": {"thefork.co.uk"}}, "run"),
+        (nav("https://evil.example/?d=1"), {}, "card"),  # the model wrote data into it
+        (nav("https://evil.example/?d=1"), {"shown": SHOWN}, "run"),  # a link the page showed
+        (nav("https://evil.example/?d=1"), {"opened": {"evil.example"}}, "card"),
+        (nav("https://evil.example/"), {"private": True}, "card"),  # after mail or a signed-in page
+        (nav("https://evil.example/"), {"private": True, "opened": {"evil.example"}}, "run"),
+        (nav("https://evil.example/#a=b"), {}, "card"),
+        # 6. search
+        (nav("https://www.google.com/search?q=lisbon"), {}, "run"),
+        (nav("https://www.google.com/search?q=lisbon"), {"private": True}, "card"),
+        (nav("https://docs.google.com/forms/d/x/formResponse?entry.1=secret"), {}, "card"),  # not a search
+        (("browser_tabs", {"action": "new", "url": "https://evil.example/?d=1"}), {}, "card"),
+    ],
+)
+def test_the_gate(call, facts, outcome):
+    assert gate(*call, page="waitrose.com" if call[0] == "browser_type" else "", **facts) == outcome
+
+
+def test_send_is_always_a_card():
+    """SPEC §5.2 rule 2: email, memories, schedules, MCP writes; trust doesn't apply."""
+    for facts in ({}, {"trusted": {"gmail.com", ""}}, {"private": True}):
+        assert decide(Action("send"), Facts(**facts)).outcome == "card"
+    assert decide(Action("search"), Facts()).outcome == "run"
+    assert decide(Action("search"), Facts(private=True)).outcome == "card"
+
+
+def test_trusted_runs_are_marked_for_the_audit():
+    assert decide(classify("browser_type", {}, "waitrose.com"), Facts(trusted=TRUSTED)).why == "trusted"
+    assert decide(classify(*nav("https://evil.example/?d=1")), Facts()).why == "data"
 
 
 def test_hidden_tools_are_not_offered():
@@ -137,3 +173,29 @@ def test_label_found_in_a_snapshot_cut_to_fit():
 
     text = '### Snapshot\n```yaml\n- searchbox "Search Wikipedia" [ref=e23]\n- link "x" [ref=e24]\n[… snapshot cut'
     assert element_label(YAML_BLOCK.search(text).group(1), "e23") == "Search Wikipedia"
+
+
+AUDIT_WORDS = re.compile(
+    r"\bapprov|(?<!payment )\bcards?\b(?! (?:details|guarantee|or id))|\btrust(?:ed|s)?\b(?! more)", re.I
+)
+
+
+def test_the_model_never_hears_about_cards_or_trust():
+    """SPEC §5.1: prompts and tool descriptions say nothing of cards, approvals or trust."""
+
+    prompts = Path(__file__).parents[1] / "aha_local" / "prompts"
+    for f in prompts.glob("*.md"):
+        found = AUDIT_WORDS.findall(f.read_text())
+        assert not found, (f.name, found)
+    from aha_local.tools import guard, mail, memory, registry, schedule, web
+    from aha_local.tools.browser import HARNESS_TOOLS
+
+    reg = registry.Registry()
+    for m in (mail, memory, schedule, web):
+        m.register(reg)
+    for t in HARNESS_TOOLS:
+        reg.add(t)
+    for spec in reg.specs():
+        text = json.dumps(spec)
+        assert not AUDIT_WORDS.search(text), spec["function"]["name"]
+    assert not AUDIT_WORDS.search(guard.STOPPED)

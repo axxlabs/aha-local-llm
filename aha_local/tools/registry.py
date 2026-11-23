@@ -35,25 +35,31 @@ class ToolResult:
 class TaskState:
     """What tools may remember during one task."""
 
-    approved_sites: set[str] = field(default_factory=set)
+    opened_sites: set[str] = field(default_factory=set)  # sites opened in the task (SPEC §5.2)
     last_snapshot: str = ""  # the latest page snapshot, to label approvals from the page itself
     page_url: str = ""  # the current page's address, from the browser
     blank_page: bool = False  # the last page the model saw is a new window's blank page (SPEC §3.4)
     ref_lines: dict[str, str] = field(default_factory=dict)  # elements seen on the current page: ref → its line
-    read_mail: bool = False  # set by email_search/email_read: from then on, text going out is a card (SPEC §5.5)
+    read_mail: bool = False  # set by email_search/email_read: the task holds private data (SPEC §5.2)
     secrets: list[str] = field(default_factory=list)  # values the person typed on a sign-in card: never shown again
-    # The sites the person signed in on (read once per task), and whether this task has had a page of one: from
-    # then on a site not opened yet in the task is a card (SPEC §5.6).
+    # The sites the person signed in on (read once per task), and whether this task has had a page of one: the
+    # task then holds private data (SPEC §5.2).
     signed_in_sites: set[str] | None = None
     on_signed_in: bool = False
     sign_in_page: str = ""  # the site, when the latest page is a sign-in form (SPEC §3.4 "Signing in")
-    sign_in_offered: bool = False  # a sign-in card was shown in this task (whatever the answer)
+    login_tried: bool = False  # browser_login ran in this task (whatever happened)
+    saved_login_failed: set[str] = field(default_factory=set)  # hosts whose saved login led back to a form
     challenge_page: str = ""  # the site, when the latest page shows an "are you human?" check
     human_check_offered: bool = False  # a check card was shown in this task
     # Addresses shown to the task (links on pages, search results, the person's messages): opening one of these
-    # exactly isn't the model writing data into an address (SPEC §5.2 "Addresses that carry data").
+    # exactly isn't the model writing an address (SPEC §5.2 rule 7).
     seen_urls: set[tuple] = field(default_factory=set)
     banners_tried: set[tuple[str, str]] = field(default_factory=set)  # cookie banners closed: (page, button)
+
+    @property
+    def private(self) -> bool:
+        """The task read mail or had a page of a signed-in site (SPEC §5.2 "Private data")."""
+        return self.read_mail or self.on_signed_in
 
 
 @dataclass

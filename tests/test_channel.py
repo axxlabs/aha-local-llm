@@ -285,7 +285,7 @@ async def test_revoking_another_device(tmp_path):
 
 async def test_settings_show_and_forget_what_the_browser_remembers(tmp_path):
     """Settings → Your browser (SPEC §7.4): the sites, Forget one, Clear browser data."""
-    from aha_local.tools import signins
+    from aha_local.tools import logins, signins
 
     rig = Rig(tmp_path)
     _, phone = await rig.pair()
@@ -309,13 +309,24 @@ async def test_settings_show_and_forget_what_the_browser_remembers(tmp_path):
         {
             "t": "browser",
             "sites": [
-                {"site": "news.example", "signed_in": False, "trusted": False},
-                {"site": "waitrose.com", "signed_in": True, "trusted": False},
+                {"site": "news.example", "signed_in": False, "trusted": False, "login_saved": False},
+                {"site": "waitrose.com", "signed_in": True, "trusted": False, "login_saved": False},
             ],
         }
     ]
+    logins.save(acct, "www.waitrose.com", "ana@example.com", "pw-not-shown")
+    await phone.send({"t": "browser_request"})
+    sent = phone.inbox()[0]["sites"]
+    assert sent[1]["login_saved"] and "pw-not-shown" not in json.dumps(sent) and "ana@" not in json.dumps(sent)
+    await phone.send({"t": "login_forget", "site": "waitrose.com"})  # Forget login: the sign-in stays
+    assert phone.inbox()[0]["sites"][1] == {
+        "site": "waitrose.com",
+        "signed_in": True,
+        "trusted": False,
+        "login_saved": False,
+    }
     await phone.send({"t": "browser_forget", "site": "waitrose.com"})
-    left = [{"site": "news.example", "signed_in": False, "trusted": False}]
+    left = [{"site": "news.example", "signed_in": False, "trusted": False, "login_saved": False}]
     assert phone.inbox()[0]["sites"] == left
     await phone.send({"t": "browser_forget", "site": 5})  # malformed: nothing forgotten
     assert phone.inbox()[0]["sites"] == left
@@ -378,12 +389,14 @@ async def test_settings_trust_sites_and_forget_memories(tmp_path):
     phone.inbox()
     acct = rig.accounts.find("Ana")
     await phone.send({"t": "browser_trust", "site": "www.waitrose.com", "trusted": True})
-    assert phone.inbox() == [{"t": "browser", "sites": [{"site": "waitrose.com", "signed_in": False, "trusted": True}]}]
+    assert phone.inbox() == [
+        {"t": "browser", "sites": [{"site": "waitrose.com", "signed_in": False, "trusted": True, "login_saved": False}]}
+    ]
     await phone.send({"t": "browser_trust", "site": "192.168.1.1", "trusted": True})
     assert phone.inbox()[0] == {"t": "error", "code": "bad_site"}
     await phone.send({"t": "browser_clear"})
     assert phone.inbox()[0]["sites"][0]["trusted"]  # clearing browser data leaves trust
-    await phone.send({"t": "browser_trust", "site": "waitrose.com", "trusted": False})
+    await phone.send({"t": "browser_trust", "site": "waitrose.com", "trusted": False, "login_saved": False})
     assert phone.inbox() == [{"t": "browser", "sites": []}] and trusted.sites(acct) == []
 
     keep, drop = memory.add_fact(acct, "Prefers window seats"), memory.add_fact(acct, "Lives in Leeds")

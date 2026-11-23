@@ -20,7 +20,7 @@ from .config import Config
 from .items import Image
 from .llm import LLM, ModelUnavailable
 from .policy import addresses
-from .tools import memory, schedule, signins
+from .tools import logins, memory, schedule, signins
 from .tools.registry import Registry, TaskState, ToolContext
 
 log = logging.getLogger("aha.agent")
@@ -270,6 +270,7 @@ class Agent:
         """Forget one site's cookies and data; the open context closes so nothing of it stays in memory."""
         await self.save_browser(account)  # what the open context knows now, before taking the site out
         found = signins.forget(account, site)
+        found = logins.forget(account, signins.site_name(site) or site) or found  # its saved logins go too (§5.8)
         if found and self.browser is not None:
             await self.browser.close(account.id, save=False)
         return found
@@ -280,6 +281,7 @@ class Agent:
         if self.browser is not None:
             await self.browser.close(account.id, save=False)
         signins.clear(account)
+        logins.clear(account)
         log.info("browser data cleared for an account")
 
     async def _run(self, account: Account, text: str, scheduled: str | None = None) -> None:
@@ -412,7 +414,7 @@ class Agent:
         tools = self.registry.specs()
         last = ""
         retried: set[str] = set()  # the checks that already sent a draft back (SPEC §3.5.1): once each
-        can_sign_in = "browser_sign_in" in self.registry.names()
+        can_sign_in = "browser_login" in self.registry.names()
         called: set[str] = set()  # tools that ran without error in this task
         # Where numbers in the answer may come from: what the person said or saved, earlier answers, and pages
         # opened in this task. Search snippets don't count (SPEC §3.5).
@@ -442,7 +444,7 @@ class Agent:
                     called,
                     can_sign_in,
                     ctx.task.sign_in_page,
-                    ctx.task.sign_in_offered,
+                    ctx.task.login_tried,
                     ctx.task.challenge_page,
                     ctx.task.human_check_offered,
                     ctx.task.blank_page,

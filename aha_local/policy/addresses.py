@@ -1,12 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
-"""Addresses the model wrote that carry data (SPEC §5.2 "Addresses that carry data").
+"""Addresses for the gate (SPEC §5.2 rule 7): which were shown to the task, and what one carries.
 
 Opening an address sends it: `https://x.example/?d=<anything>` hands the text to that site without any typing.
-So an address the model opens (browser_navigate, a new tab, fetch_url) whose query or fragment has `key=value`
-pairs is a card, unless that exact address was shown to the task: a link on a page, a search result, a link the
-person sent. Clicks aren't checked: a link's address is the page's, not the model's. Search engines are left
-out: a query typed into one goes where web_search already sends queries without a card (§5.5 covers both).
+An address shown to the task (a link on a page, a search result, a link the person sent) is the page's or the
+person's; one the model wrote with `key=value` pairs in it carries the model's data. A search engine's own
+results page is a search, not an open.
 """
 
 from __future__ import annotations
@@ -25,6 +24,12 @@ SEARCH_SITES = {"bing.com", "duckduckgo.com", "brave.com", "startpage.com", "eco
 
 
 SEARCH_PATHS = {"/", "/search", "/html", "/sp/search", "/do/search"}
+
+
+def is_search(url: str) -> bool:
+    """A search engine's own results page: opening it is a search, not an open (SPEC §5.2)."""
+    k = key(url)
+    return k is not None and search_engine(k[0], k[1])
 
 
 def search_engine(host: str, path: str) -> bool:
@@ -76,12 +81,6 @@ def data_pairs(url: str) -> list[tuple[str, str]]:
     except ValueError:
         return []
     return [(k, v) for k, v in parse_qsl(p.query) + parse_qsl(p.fragment) if v]
-
-
-def carries_data(url: str, seen: set[tuple]) -> bool:
-    """The model wrote this address with data in it: it has `key=value` pairs and wasn't shown to the task."""
-    k = key(url)
-    return bool(data_pairs(url)) and k is not None and k not in seen and not search_engine(k[0], k[1])
 
 
 def describe(url: str, limit: int = 300) -> str:

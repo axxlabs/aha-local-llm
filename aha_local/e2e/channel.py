@@ -33,7 +33,7 @@ from ..accounts import Account, Accounts, Device
 from ..certs import needs_renewal
 from ..items import Image
 from ..protocol import E2E, Cert, CertIssued, CertRequest, DeviceStatus, Pair, Push, Report, ReportResult, Revoke, b64
-from ..tools import mail, signins, trusted
+from ..tools import logins, mail, signins, trusted
 from . import crypto, webpush
 
 log = logging.getLogger("aha.channel")
@@ -128,12 +128,12 @@ def photo(value: object) -> Image | None:
 
 
 def browser_list(account: Account) -> list[dict]:
-    """Settings → Your browser: the sites it remembers and the trusted ones (SPEC §3.4, §5.7)."""
-    trust = set(trusted.sites(account))
+    """Settings → Your browser: the sites it remembers, the trusted ones, and saved logins (SPEC §3.4, §5.7, §5.8)."""
+    trust, saved = set(trusted.sites(account)), logins.sites(account)
     listed = {s["site"]: {**s, "trusted": s["site"] in trust} for s in signins.sites(account)}
-    for site in trust - set(listed):
-        listed[site] = {"site": site, "signed_in": False, "trusted": True}
-    return [listed[s] for s in sorted(listed)]
+    for site in (trust | saved) - set(listed):
+        listed[site] = {"site": site, "signed_in": False, "trusted": site in trust}
+    return [{**listed[s], "login_saved": s in saved} for s in sorted(listed)]
 
 
 def clean_text(value: object, limit: int) -> str | None:
@@ -406,10 +406,13 @@ class Channel:
         elif t == "memories_request":
             items = [{"id": m.get("id"), "text": m.get("text")} for m in account.load_memory()]
             await reply({"t": "memories", "items": items})
-        elif t in ("browser_request", "browser_forget", "browser_clear", "browser_trust"):
+        elif t in ("browser_request", "browser_forget", "browser_clear", "browser_trust", "login_forget"):
             # Settings → Your browser (SPEC §3.4, §5.7, §7.4): what the person's browser remembers, and trust.
             site = clean_text(msg.get("site"), 255) or ""
-            if t == "browser_trust" and isinstance(msg.get("trusted"), bool):
+            if t == "login_forget" and site:  # the person's own action: no card (SPEC §5.8)
+                if logins.forget(account, signins.site_name(site) or site):
+                    account.audit({"login_forgotten_in_settings": signins.site_name(site) or site})
+            elif t == "browser_trust" and isinstance(msg.get("trusted"), bool):
                 if not trusted.set_trusted(account, site, msg["trusted"]):
                     await reply({"t": "error", "code": "bad_site"})
             elif self.agent is not None:

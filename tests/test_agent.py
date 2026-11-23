@@ -37,7 +37,8 @@ async def test_memory_save_needs_approval_and_lands_in_context(agent, llm, chat,
     await settle(agent)
     assert [m["text"] for m in person(accounts).load_memory()] == ["Prefers to be called Fe"]
     tool_result = [m for m in llm.requests[-1]["messages"] if m["role"] == "tool"][-1]["content"]
-    assert "The user edited it" in tool_result and "Carry on" in tool_result
+    assert "Prefers to be called Fe" in tool_result and "Carry on" in tool_result
+    assert "edited" not in tool_result and "approv" not in tool_result  # the model can't tell a card was there
 
     llm.answer("Sure.")
     await say(agent, "thanks")

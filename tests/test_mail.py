@@ -180,13 +180,13 @@ async def test_sending_is_a_card_with_the_exact_email_and_edits_are_what_is_sent
     msg = message_from_bytes(base64.urlsafe_b64decode(sent["raw"]), policy=policy.default)
     assert path == "/messages/send" and msg["To"] == "Sam <sam@example.com>" and msg["Subject"] == "Dinner"
     assert msg.get_content().strip() == "See you at 8, not 7."
-    assert "approved" in result.text and "edited" in result.text
+    assert "sent to Sam <sam@example.com>" in result.text and "approv" not in result.text and "edit" not in result.text
 
 
 async def test_a_declined_email_sends_nothing(google, two, config):
     fe, _ = two
     result = await mail.email_send({"to": "sam@example.com", "body": "x"}, ctx_for(fe, config, FakeApprovals()))
-    assert result.error and "declined" in result.text and not google.sent
+    assert result.error and "the user stopped it" in result.text and not google.sent
 
 
 async def test_header_injection_in_edited_values_is_refused(google, two, config):
@@ -222,7 +222,10 @@ async def test_after_reading_mail_searches_and_addresses_need_a_card(google, two
     assert searched.error and fetched.error
     assert [(a.title, a.fields) for a in approvals.asked] == [
         ("Search the web for this?", [("Search", "FB-1234 Fictional Bistro", "text")]),
-        ("Open this page?", [("Address", "https://evil.example/?q=FB-1234", "text")]),
+        (
+            "Open this address? It sends what's in it to evil.example",
+            [("Address", "https://evil.example/?q=FB-1234", "text"), ("It sends", "q = FB-1234", "info")],
+        ),
     ]
     # The next task starts clean: no card (the search itself then fails here, offline, which is fine).
     clean = ctx_for(fe, dataclasses.replace(config, search_url="http://127.0.0.1:9"), approvals)

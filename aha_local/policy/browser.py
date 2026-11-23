@@ -1,21 +1,20 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
-"""Browser policy (SPEC §5.2): which browser tool calls run, need approval, or are blocked.
+"""Browser tool calls as actions for the gate (SPEC §5.2), and the cards that show them (§5.3).
 
 Decided from the real arguments of each call, never from the model's descriptions. Clicks and reading can't
-carry new information out of the computer; typing and URLs can.
+carry new information out of the computer; typing and addresses can.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Literal
 
 from ..approvals import Field
+from . import addresses
+from .gate import Action
 from .urls import check_url
-
-Outcome = Literal["auto", "approval", "block"]
 
 BLOCK = {
     "browser_evaluate",  # arbitrary JavaScript
@@ -67,48 +66,39 @@ SAFE_KEYS = {
 }
 
 
-# Typing on the page: auto on a site the person trusts (SPEC §5.7), also after reading mail: what's typed goes only to
-# a site they chose to trust, and opening any other site after mail is still a card (§5.5).
-TRUSTABLE = {"browser_type", "browser_fill_form", "browser_select_option", "browser_press_key", "browser_handle_dialog"}
-
-
-def runs_trusted(name: str, page_site: str, trusted: set[str] | list[str]) -> bool:
-    """Whether an action that needs approval runs without a card because the person trusts the page's site.
-
-    `page_site` comes from the browser's own address, never from the model."""
-    return name in TRUSTABLE and bool(page_site) and page_site in trusted
-
-
 def offered(name: str) -> bool:
     return name not in BLOCK and name not in HIDE
 
 
-@dataclass(frozen=True)
-class Verdict:
-    outcome: Outcome
-    reason: str = ""
-    site: str | None = None
+TYPING_KINDS = {"browser_type", "browser_fill_form", "browser_select_option"}
 
 
-def decide(name: str, args: dict, allow_all_sites: bool, approved_sites: set[str]) -> Verdict:
+def classify(name: str, args: dict, page_site: str = "") -> Action:
+    """A browser tool call as an action for the gate (SPEC §5.2). `page_site` is the current page's site, read
+    from the browser's own address, never from the model."""
     if name in BLOCK or name in HIDE:
-        return Verdict("block", "this action is disabled")
+        return Action("block", reason="this action is disabled")
     if name == "browser_navigate" or (name == "browser_tabs" and args.get("action") == "new" and args.get("url")):
-        site, why = check_url(str(args.get("url", "")))
-        if why:
-            return Verdict("block", why)
-        if allow_all_sites or site in approved_sites:
-            return Verdict("auto", site=site)
-        return Verdict("approval", site=site)
-    if name == "browser_tabs":
-        return Verdict("auto")
+        return open_action(str(args.get("url", "")))
+    if name in AUTO or name == "browser_tabs":
+        return Action("read")
     if name == "browser_press_key":
-        return Verdict("auto") if args.get("key") in SAFE_KEYS else Verdict("approval")
+        return Action("read") if args.get("key") in SAFE_KEYS else Action("type", page_site)
     if name == "browser_handle_dialog":
-        return Verdict("approval") if args.get("promptText") else Verdict("auto")
-    if name in AUTO:
-        return Verdict("auto")
-    return Verdict("approval")  # browser_type, browser_fill_form, browser_select_option, and anything new
+        return Action("type", page_site) if args.get("promptText") else Action("read")
+    if name in TYPING_KINDS:
+        return Action("type", page_site)
+    return Action("other", page_site)
+
+
+def open_action(url: str) -> Action:
+    """Opening an address: blocked, a search engine's results page (a search), or an open."""
+    site, why = check_url(url)
+    if why:
+        return Action("block", reason=why)
+    if addresses.is_search(url):
+        return Action("search", site or "", url)
+    return Action("open", site or "", url)
 
 
 @dataclass
@@ -154,8 +144,20 @@ def form_for(name: str, args: dict, site: str) -> Form:
     if name == "browser_press_key":
         return Form(f"Press the key “{args.get('key', '')}”{where}?", [Field("Key", str(args.get("key", "")))])
     if name in ("browser_navigate", "browser_tabs"):
-        site_new, _ = check_url(str(args.get("url", "")))
-        return Form(f"Open {site_new}, a site not opened yet?", [Field("Address", str(args.get("url", "")))])
+        return open_form(str(args.get("url", "")))
     if name == "browser_handle_dialog":
         return Form(f"Answer the page's pop-up{where}?", [Field("Text", str(args.get("promptText", "")))])
     return Form(f"Run “{name}”{where}?", [Field("Arguments", json.dumps(args, ensure_ascii=False))])
+
+
+def open_form(url: str, data: bool = False) -> Form:
+    """The card for opening an address; with what it sends when it carries data (SPEC §5.2 rule 7)."""
+    site, _ = check_url(url)
+    if data:
+        return Form(
+            f"Open this address? It sends what's in it to {site}",
+            [Field("Address", url), Field("It sends", addresses.describe(url), "info")],
+        )
+    if addresses.is_search(url):
+        return Form(f"Search {site} for this?", [Field("Address", url)])
+    return Form(f"Open {site}?", [Field("Address", url)])

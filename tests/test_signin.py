@@ -17,7 +17,7 @@ import pytest
 
 from aha_local import checks
 from aha_local.agent import Agent
-from aha_local.tools import browser, signins
+from aha_local.tools import browser, logins, signins
 from aha_local.tools.browser import BrowserPool, BrowserSession
 
 from .conftest import person, settle
@@ -77,9 +77,7 @@ class FakeContext:
             self.fields[ref] = json.loads(json.loads(LITERAL.search(code).group(1)))
             self.order.append(f"typed {ref}")
             if code.endswith(SUBMITTED):
-                self.cookies.append(
-                    {"name": "sid", "value": "s3ss10n", "domain": ".waitrose.com", "path": "/", "expires": -1}
-                )
+                self.submitted(ref)
         elif code == signins.GET_URL:
             return text_result("### Result\n" + json.dumps(self.url) + echo)
         elif "innerWidth" in code:
@@ -94,6 +92,21 @@ class FakeContext:
         else:
             return text_result("### Error\nunknown harness code", error=True)
         return text_result('### Result\n"ok"' + echo)
+
+    def submitted(self, ref: str) -> None:
+        """A sign-in form sent: the next step, or the site's home page signed in."""
+        if not ("login" in self.url or "signin" in self.url):
+            return
+        if "email-first" in self.url:
+            self.url = "https://www.waitrose.com/login/password"
+            return
+        if "2fa" in self.url and ref != "e3":
+            self.url = "https://www.waitrose.com/login/2fa/code"
+            return
+        if self.fields.get("e2") == "wrong":
+            return
+        self.cookies.append({"name": "sid", "value": "s3ss10n", "domain": ".waitrose.com", "path": "/", "expires": -1})
+        self.url = "https://www.waitrose.com/home"
 
     def snapshot(self) -> str:
         page = self.page()
@@ -114,6 +127,19 @@ class FakeContext:
     def page(self) -> str:
         if self.url == "about:blank":  # a new window
             return "### Page\n- Page URL: about:blank\n### Snapshot\n```yaml\n\n```"
+        head = f"### Page\n- Page URL: {self.url}\n### Snapshot\n```yaml\n"
+        if self.url.endswith("/code"):  # a one-time code, on its own page
+            return (
+                head
+                + f'- textbox "Verification code" [ref=e3]: {self.fields.get("e3", "")}\n'
+                + '- button "Verify" [ref=e4]\n```'
+            )
+        if "email-first" in self.url:
+            return (
+                head + '- heading "Sign in" [ref=e9]\n- textbox "Email address" [ref=e1]\n- button "Next" [ref=e4]\n```'
+            )
+        if self.url.endswith("/login/password"):
+            return head + '- textbox "Password" [ref=e2]\n- button "Sign in" [ref=e4]\n```'
         if "login" in self.url or "signin" in self.url:
             return (
                 f"### Page\n- Page URL: {self.url}\n### Snapshot\n```yaml\n"
@@ -159,9 +185,7 @@ class FakeContext:
         if name == "browser_type":
             self.fields[args["target"]] = args["text"]
             if args.get("submit"):
-                self.cookies.append(
-                    {"name": "sid", "value": "s3ss10n", "domain": ".waitrose.com", "path": "/", "expires": -1}
-                )
+                self.submitted(args["target"])
             return text_result(f"### Ran Playwright code\n```js\nawait page.fill('{args['text']}');\n```")
         if name == "browser_take_screenshot":
             return mt.CallToolResult(content=[mt.ImageContent(type="image", data=PNG, mimeType="image/jpeg")])
@@ -233,8 +257,8 @@ def everything_recorded(agent, llm, chat, account) -> str:
 
 async def start_sign_in(agent, llm, chat, account, url="https://www.waitrose.com/login"):
     llm.call("browser_navigate", url=url)
-    llm.call("browser_sign_in", username_target="e1", password_target="[ref=e2]")
-    llm.call("browser_snapshot")  # a later page that shows the field again
+    llm.call("browser_login")
+    llm.call("browser_navigate", url=url)  # a later page that shows the typed values again
     llm.answer("You're signed in.")
     await agent.inbound(account, "sign in to my Waitrose account")
     return await chat.next()
@@ -248,11 +272,12 @@ async def test_the_person_types_the_password_and_the_model_never_sees_it(setup, 
     assert c["kind"] == "signin" and c["title"] == "Sign in to waitrose.com?"  # from the address bar
     assert [(f["label"], f["value"], f["kind"]) for f in c["fields"]] == [
         ("Site", "waitrose.com", "info"),
-        ("Email address", "", "text"),  # the page's own label
+        ("Email or username", "", "text"),
         ("Password", "", "secret"),
-    ]  # no "keep me signed in": the browser remembers, like the person's own (SPEC §3.4)
+        ("Save this login on this computer", "false", "bool"),  # off unless they tick it (SPEC §5.8)
+    ]
     assert c["buttons"] == ["Sign in", "Don't"] and c.get("image")
-    await agent.approval_reply(fe, c["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD])
+    await agent.approval_reply(fe, c["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD, "false"])
     await settle(agent)
     page = fake.contexts[-1]
     assert page.fields == {"e1": "fe@example.com", "e2": PASSWORD}
@@ -261,7 +286,8 @@ async def test_the_person_types_the_password_and_the_model_never_sees_it(setup, 
     assert PASSWORD not in recorded  # the typing code echoed it back; that result is never passed on
     # The page echoed it back; the model saw it masked.
     assert "••••" in json.dumps(llm.requests[-1]["messages"], ensure_ascii=False)
-    assert "signed in on waitrose.com themselves" in recorded and "stay signed in" in recorded
+    assert "Signed in on waitrose.com." in recorded
+    assert not (fe.dir / logins.FILE).exists()  # the box wasn't ticked: nothing saved
     assert signins.sites(fe) == [{"site": "waitrose.com", "signed_in": True}]
     raw = (fe.dir / signins.FILE).read_bytes()
     assert b"s3ss10n" not in raw and b"waitrose" not in raw and PASSWORD.encode() not in raw  # encrypted at rest
@@ -283,7 +309,7 @@ async def test_a_declined_sign_in_types_nothing(setup, llm, chat, accounts):
     await settle(agent)
     assert len(fake.contexts) == 2 and fake.contexts[-1].url.startswith("https://www.waitrose.com")
     assert fake.contexts[-1].fields == {} and "browser_type" not in fake.contexts[-1].calls
-    assert "didn't sign in" in json.dumps(llm.requests[-1]["messages"])
+    assert "the user stopped it" in json.dumps(llm.requests[-1]["messages"])
 
 
 async def test_typed_text_never_fills_a_sign_in_card(setup, llm, chat, accounts):
@@ -301,15 +327,15 @@ async def test_only_secure_pages_and_fields_on_the_page(setup, llm, chat, accoun
     agent, _, _ = setup
     fe = person(accounts)
     llm.call("browser_navigate", url="http://shop.example.com/login")
-    llm.call("browser_sign_in", password_target="e2")
-    llm.call("browser_navigate", url="https://shop.example.com/login")
-    llm.call("browser_sign_in", password_target="e99")
+    llm.call("browser_login")
+    llm.call("browser_navigate", url="https://shop.example.com/basket")
+    llm.call("browser_login")
     llm.answer("Couldn't.")
     await agent.inbound(fe, "sign in")
     await settle(agent)
     results = [m["content"] for m in llm.requests[-1]["messages"] if m.get("role") == "tool"]
-    assert "only offered on secure (https) pages" in results[1]
-    assert "e99 isn't in the latest snapshot" in results[3]
+    assert "only works on secure (https) pages" in results[1]
+    assert "no sign-in form on this page" in results[3]
     assert not any(m.card for m in chat.sent)
 
 
@@ -317,7 +343,7 @@ async def test_sign_ins_come_back_only_for_the_same_person_and_can_be_forgotten(
     agent, pool, fake = setup
     fe, hb = person(accounts), accounts.create("Hb")
     card = await start_sign_in(agent, llm, chat, fe)
-    await agent.approval_reply(fe, card.card["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD])
+    await agent.approval_reply(fe, card.card["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD, "false"])
     await settle(agent)
 
     await pool.close(fe.id)  # idle timeout: the context is gone…
@@ -353,16 +379,16 @@ async def test_show_screenshot_sends_the_page_to_the_persons_chat(setup, llm, ch
     assert any(e.get("image") for e in fe.read_transcript() if e["kind"] == "out")
 
 
-async def test_pointing_at_a_sign_in_card_without_showing_one_goes_back_once(setup, llm, chat, accounts):
+async def test_an_answer_left_on_a_sign_in_page_goes_back_once(setup, llm, chat, accounts):
     agent, _, _ = setup
     fe = person(accounts)
     llm.call("browser_navigate", url="https://www.waitrose.com/login")
-    llm.answer("Please sign in using the sign-in card that has appeared in the app.")  # no card exists
-    llm.call("browser_sign_in", username_target="e1", password_target="e2")
+    llm.answer("Please sign in on the Waitrose page first.")
+    llm.call("browser_login")
     await agent.inbound(fe, "add toilet paper to my Waitrose basket")
     card = await chat.next()
     assert card.card and card.card["kind"] == "signin"
-    assert "haven't called browser_sign_in" in json.dumps(llm.requests[2]["messages"])
+    assert "haven't called browser_login" in json.dumps(llm.requests[2]["messages"])
     await agent.approval_reply(fe, card.card["id"], "decline")
     await settle(agent)
 
@@ -422,7 +448,7 @@ async def test_refusing_to_sign_in_without_trying_goes_back_once(setup, llm, cha
     fe = person(accounts)
     llm.answer(WAITROSE_REFUSAL)
     llm.call("browser_navigate", url="https://www.waitrose.com/login")
-    llm.call("browser_sign_in", username_target="e1", password_target="e2")
+    llm.call("browser_login")
     await agent.inbound(fe, "can you log into waitrose website and add toilet papers to the cart?")
     card = await chat.next()
     assert card.card and card.card["kind"] == "signin"
@@ -440,7 +466,7 @@ def test_what_counts_as_refusing_to_sign_in():
         "Logging in needs your password, so I can't access your account.",
     ):
         assert checks.refuses_sign_in(bad, set(), True), bad
-    assert not checks.refuses_sign_in(WAITROSE_REFUSAL, {"browser_sign_in"}, True)  # it tried: an honest report
+    assert not checks.refuses_sign_in(WAITROSE_REFUSAL, {"browser_login"}, True)  # it tried: an honest report
     assert not checks.refuses_sign_in(WAITROSE_REFUSAL, set(), False)  # no browser on this computer
     for fine in (
         "I couldn't find a sign-in form on that page.",
@@ -505,3 +531,81 @@ async def test_a_promise_as_the_final_answer_is_sent_back_once(setup, llm, chat,
     await settle(agent)
     assert "nothing runs after it" in json.dumps(llm.requests[1]["messages"])
     assert chat.texts()[-1] == "I couldn't open the form: the page didn't load."
+
+
+async def login(agent, llm, chat, account, url="https://www.waitrose.com/login", answer="Done."):
+    llm.call("browser_navigate", url=url)
+    llm.call("browser_login")
+    llm.answer(answer)
+    await agent.inbound(account, "sign in to Waitrose")
+
+
+async def test_a_saved_login_signs_in_without_a_card_and_reads_the_same(setup, llm, chat, accounts):
+    """SPEC §5.8: the box ticked, the next login needs no card; the model can't tell the difference."""
+    agent, _, fake = setup
+    fe = person(accounts)
+    await login(agent, llm, chat, fe)
+    card = await chat.next()
+    await agent.approval_reply(fe, card.card["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD, "true"])
+    await settle(agent)
+    with_card = [m["content"] for m in llm.requests[-1]["messages"] if m.get("role") == "tool"][-1]
+    assert logins.get(fe, "www.waitrose.com") == {
+        "username": "fe@example.com",
+        "password": PASSWORD,
+        "saved": logins.get(fe, "waitrose.com")["saved"],
+    }
+    assert PASSWORD.encode() not in (fe.dir / logins.FILE).read_bytes()  # encrypted at rest
+    assert logins.sites(fe) == {"waitrose.com"}
+
+    fake.contexts[-1].cookies.clear()  # the site ended the session
+    fake.contexts[-1].fields.clear()
+    cards = len([m for m in chat.sent if m.card])
+    await login(agent, llm, chat, fe)
+    await settle(agent)
+    assert len([m for m in chat.sent if m.card]) == cards  # no card this time
+    without = [m["content"] for m in llm.requests[-1]["messages"] if m.get("role") == "tool"][-1]
+    assert fake.contexts[-1].url.endswith("/home")
+    assert without.split(" The page now")[0] == with_card.split(" The page now")[0] == "Signed in on waitrose.com."
+    assert PASSWORD not in everything_recorded(agent, llm, chat, fe)
+    await agent.forget_site(fe, "www.waitrose.com")  # forgetting the site takes its saved login too
+    assert not (fe.dir / logins.FILE).exists()
+
+
+async def test_a_saved_login_that_no_longer_works_falls_back_to_the_card(setup, llm, chat, accounts):
+    agent, _, fake = setup
+    fe = person(accounts)
+    logins.save(fe, "www.waitrose.com", "fe@example.com", "wrong")
+    await login(agent, llm, chat, fe)
+    card = await chat.next()
+    assert card.card["kind"] == "signin"  # the saved one led back to the form
+    await agent.approval_reply(fe, card.card["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD, "false"])
+    await settle(agent)
+    assert fake.contexts[-1].url.endswith("/home")
+
+
+async def test_a_one_time_code_is_its_own_card_and_never_saved(setup, llm, chat, accounts):
+    agent, _, fake = setup
+    fe = person(accounts)
+    await login(agent, llm, chat, fe, url="https://www.waitrose.com/login/2fa")
+    first = await chat.next()
+    await agent.approval_reply(fe, first.card["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD, "true"])
+    code = await chat.next()
+    assert code.card["title"] == "Enter the code for waitrose.com?"
+    assert [(f["label"], f["kind"]) for f in code.card["fields"]] == [("Site", "info"), ("Code", "secret")]
+    await agent.approval_reply(fe, code.card["id"], "approve", ["waitrose.com", CODE])
+    await settle(agent)
+    assert fake.contexts[-1].url.endswith("/home") and fake.contexts[-1].fields["e3"] == CODE
+    recorded = everything_recorded(agent, llm, chat, fe)
+    assert CODE not in recorded and PASSWORD not in recorded
+    assert logins.get(fe, "waitrose.com")["password"] == PASSWORD  # the password, never the code
+
+
+async def test_a_two_step_login_types_the_password_on_the_next_page(setup, llm, chat, accounts):
+    agent, _, fake = setup
+    fe = person(accounts)
+    await login(agent, llm, chat, fe, url="https://www.waitrose.com/login/email-first")
+    card = await chat.next()
+    await agent.approval_reply(fe, card.card["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD, "false"])
+    await settle(agent)
+    page = fake.contexts[-1]
+    assert page.fields == {"e1": "fe@example.com", "e2": PASSWORD} and page.url.endswith("/home")
