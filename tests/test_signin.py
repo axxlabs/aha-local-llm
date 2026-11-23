@@ -140,8 +140,8 @@ class FakeContext:
         self.calls.append(name)
         if name == "browser_navigate":
             self.url = args["url"]
-            self.banner = "cookies=ask" in self.url
-            if "visit=" in self.url:  # a site that remembers the visitor
+            self.banner = "cookies-ask" in self.url
+            if "visit-1" in self.url:  # a site that remembers the visitor
                 self.cookies.append({"name": "visitor", "value": "v1", "domain": ".shop.example", "path": "/"})
                 self.origins.append(
                     {"origin": "https://www.shop.example", "localStorage": [{"name": "k", "value": "v"}]}
@@ -448,7 +448,7 @@ async def test_a_cookie_banner_is_closed_with_reject_before_the_sign_in_card(set
     """SPEC §3.4 "Cookie banners": left over the page, the card's typing landed on the banner."""
     agent, _, fake = setup
     fe = person(accounts)
-    card = await start_sign_in(agent, llm, chat, fe, url="https://www.waitrose.com/login?cookies=ask")
+    card = await start_sign_in(agent, llm, chat, fe, url="https://www.waitrose.com/login/cookies-ask")
     page = fake.contexts[-1]
     assert not page.banner and "e80" in page.moves  # "Reject all", the mouse there first; never "Allow all"
     seen = json.dumps(llm.requests[1]["messages"])

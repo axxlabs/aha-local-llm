@@ -49,6 +49,9 @@ class TaskState:
     sign_in_offered: bool = False  # a sign-in card was shown in this task (whatever the answer)
     challenge_page: str = ""  # the site, when the latest page shows an "are you human?" check
     human_check_offered: bool = False  # a check card was shown in this task
+    # Addresses shown to the task (links on pages, search results, the person's messages): opening one of these
+    # exactly isn't the model writing data into an address (SPEC §5.2 "Addresses that carry data").
+    seen_urls: set[tuple] = field(default_factory=set)
     banners_tried: set[tuple[str, str]] = field(default_factory=set)  # cookie banners closed: (page, button)
 
 

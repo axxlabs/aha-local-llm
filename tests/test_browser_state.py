@@ -25,7 +25,7 @@ def tool_results(llm) -> list[str]:
 async def test_any_site_is_remembered_between_tasks_and_contexts(setup, llm, chat, accounts):
     agent, pool, fake = setup
     fe = person(accounts)
-    llm.call("browser_navigate", url="https://www.shop.example/?visit=1")
+    llm.call("browser_navigate", url="https://www.shop.example/visit-1/")
     llm.answer("Opened.")
     await agent.inbound(fe, "open the shop")
     await settle(agent)
@@ -93,7 +93,7 @@ async def test_clear_browser_forgets_everything(setup, llm, chat, accounts):
     agent, pool, fake = setup
     fe, hb = person(accounts), accounts.create("Hb")
     for who in (fe, hb):
-        llm.call("browser_navigate", url="https://www.shop.example/?visit=1")
+        llm.call("browser_navigate", url="https://www.shop.example/visit-1/")
         llm.answer("Opened.")
         await agent.inbound(who, "open the shop")
         await settle(agent)
@@ -120,7 +120,7 @@ async def test_after_a_signed_in_page_a_new_site_is_a_card(setup, llm, chat, acc
     llm.answer("Done.")
     await agent.inbound(fe, "what did I order last week?")
     card = await chat.next()
-    assert card.card and card.card["title"] == "Open evil.example, a site not opened yet?"
+    assert card.card and card.card["title"] == "Open this address? It sends what's in it to evil.example"
     await agent.approval_reply(fe, card.card["id"], "decline")
     await settle(agent)
     assert "declined" in tool_results(llm)[-1]
@@ -395,13 +395,13 @@ async def test_a_new_windows_blank_page_is_said_and_the_last_page_given(setup, l
     told the person to check the site themselves. The state was all there."""
     agent, pool, _ = setup
     fe = person(accounts)
-    llm.call("browser_navigate", url="https://www.shop.example/trolley?visit=1")
+    llm.call("browser_navigate", url="https://www.shop.example/trolley/visit-1/")
     llm.answer("Opened.")
     await agent.inbound(fe, "open my trolley")
     await settle(agent)
-    assert signins.last_page(fe) == "https://www.shop.example/trolley?visit=1"
+    assert signins.last_page(fe) == "https://www.shop.example/trolley/visit-1/"
     await pool.close(fe.id)  # idle: a blank page is never saved as the last page
-    assert signins.last_page(fe) == "https://www.shop.example/trolley?visit=1"
+    assert signins.last_page(fe) == "https://www.shop.example/trolley/visit-1/"
 
     n = len(llm.requests)
     llm.call("browser_snapshot")
@@ -412,7 +412,7 @@ async def test_a_new_windows_blank_page_is_said_and_the_last_page_given(setup, l
     await settle(agent)
     results = [m for m in llm.requests[n + 1]["messages"] if m.get("role") == "tool"]
     assert "new browser window" in results[-1]["content"]
-    assert "https://www.shop.example/trolley?visit=1" in results[-1]["content"]
+    assert "https://www.shop.example/trolley/visit-1/" in results[-1]["content"]
     retry = llm.requests[n + 2]["messages"][-1]["content"]
     assert retry.startswith("[aha check]") and "blank page of a new browser window" in retry
     assert chat.texts()[-1] == "Your trolley has the rice in it."

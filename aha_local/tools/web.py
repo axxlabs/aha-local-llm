@@ -11,6 +11,7 @@ import trafilatura
 
 from .. import __version__
 from ..approvals import Field
+from ..policy import addresses
 from ..policy.urls import check_url, resolves_publicly
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
@@ -38,6 +39,28 @@ async def after_mail(ctx: ToolContext, title: str, label: str, value: str) -> tu
     if not decision.approved:
         return value, declined(decision)
     return decision.values[0].strip(), None
+
+
+async def carrying_data(ctx: ToolContext, url: str) -> tuple[str, ToolResult | None]:
+    """SPEC §5.2: an address the model wrote with key=value pairs in it leaves only after the person approves it."""
+    if ctx.task.read_mail or not addresses.carries_data(url, ctx.task.seen_urls):
+        return url, None  # after reading mail, after_mail already asked about every address
+    from .browser import declined
+
+    site, _ = check_url(url)
+    decision = await ctx.approvals.ask(
+        ctx.account,
+        "action",
+        f"Open this address? It sends what's in it to {site}",
+        [Field("Address", url), Field("It sends", addresses.describe(url), "info")],
+    )
+    if not decision.approved:
+        return url, declined(decision)
+    url = decision.values[0].strip()
+    ctx.task.approved_sites.add(check_url(url)[0] or "")
+    if k := addresses.key(url):
+        ctx.task.seen_urls.add(k)
+    return url, None
 
 
 async def after_signed_in(ctx: ToolContext, url: str) -> tuple[str, ToolResult | None]:
@@ -128,6 +151,9 @@ async def fetch_url(args: dict, ctx: ToolContext) -> ToolResult:
     url = str(args.get("url", "")).strip()
     if check_url(url)[1] is None:
         url, refused = await after_mail(ctx, "Open this page?", "Address", url)
+        if refused:
+            return refused
+        url, refused = await carrying_data(ctx, url)
         if refused:
             return refused
         url, refused = await after_signed_in(ctx, url)

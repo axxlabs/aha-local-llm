@@ -33,6 +33,7 @@ from mcp.client.streamable_http import streamablehttp_client
 
 from ..approvals import Field
 from ..items import Image
+from ..policy import addresses
 from ..policy.browser import decide, form_for, offered, runs_trusted
 from ..policy.urls import check_url, site_of
 from . import human, signins, trusted
@@ -624,7 +625,11 @@ def make_handler(name: str):
             verdict = decide(name, args, ctx.config.allow_all_sites, ctx.task.approved_sites)
         if verdict.outcome == "block":
             return ToolResult(f"Blocked by aha's safety policy: {verdict.reason}.", error=True)
-        if verdict.outcome == "auto":
+        # SPEC §5.2 "Addresses that carry data": an address the model wrote with key=value pairs in it is a card.
+        opens = name == "browser_navigate" or (name == "browser_tabs" and args.get("action") == "new")
+        url = str(args.get("url", "")) if opens else ""
+        carries = bool(url) and addresses.carries_data(url, ctx.task.seen_urls)
+        if verdict.outcome == "auto" and not carries:
             if name == "browser_click" and human.is_ref(args.get("target")):
                 await run_code(session, human.move_code(args["target"]))  # the mouse gets there first (§3.4)
             result = await call_with_snapshot(session, name, args, ctx)
@@ -649,6 +654,8 @@ def make_handler(name: str):
         except Exception:
             log.warning("couldn't take a screenshot for the approval")
         form = form_for(name, labelled(name, args, ctx), site)
+        if carries:
+            form = data_form(form, url)
         decision = await ctx.approvals.ask(ctx.account, "action", form.title, form.fields, shot)
         if not decision.approved:
             return declined(decision)
@@ -658,6 +665,8 @@ def make_handler(name: str):
             if why:
                 return ToolResult(f"Blocked by aha's safety policy: {why}.", error=True)
             ctx.task.approved_sites.add(new_site)
+            if k := addresses.key(str(final.get("url", ""))):
+                ctx.task.seen_urls.add(k)  # approved as it is: not asked again in this task
         result = await run_approved(session, name, final, ctx)
         notes = [APPROVED_NOTE]
         if final != args:
@@ -668,6 +677,14 @@ def make_handler(name: str):
         return result
 
     return handler
+
+
+def data_form(form, url: str):
+    """The card for an address the model wrote with data in it: what the site would receive (SPEC §5.2)."""
+    site, _ = check_url(url)
+    form.title = f"Open this address? It sends what's in it to {site}"
+    form.fields.append(Field("It sends", addresses.describe(url), "info"))
+    return form
 
 
 def describe(form, decision) -> str:

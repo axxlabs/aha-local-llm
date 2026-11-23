@@ -18,6 +18,7 @@ from .approvals import Approvals
 from .config import Config
 from .items import Image
 from .llm import LLM, ModelUnavailable
+from .policy import addresses
 from .tools import memory, schedule, signins
 from .tools.registry import Registry, TaskState, ToolContext
 
@@ -377,6 +378,7 @@ class Agent:
         # The browser is reached only through this account's own context (SPEC §3.4).
         browser = self.browser.for_account(account.id) if self.browser else None
         ctx = ToolContext(account, self.approvals, self.config, TaskState(), browser, send)
+        addresses.remember(ctx.task.seen_urls, text)  # a link the person sent is theirs, not the model's
         tools = self.registry.specs()
         last = ""
         retried: set[str] = set()  # the checks that already sent a draft back (SPEC §3.5.1): once each
@@ -394,6 +396,7 @@ class Agent:
             for extra in self.inbox.pop(account.address, []):
                 task.append({"role": "user", "content": NEW_MESSAGE.format(text=extra)})
                 sources.append(extra)
+                addresses.remember(ctx.task.seen_urls, extra)
                 text = f"{text}\n\n{extra}"
                 take_photos(task[-1])
             msgs = context.build(
@@ -450,6 +453,7 @@ class Agent:
             )
             for call in reply.tool_calls:
                 result = await self.registry.call(call.name, call.arguments, ctx)
+                addresses.remember(ctx.task.seen_urls, result.text)  # links the task was shown (SPEC §5.2)
                 if result.kind == "expired":
                     raise ApprovalExpired
                 if ctx.task.secrets:  # what the person typed on a sign-in card never shows again (SPEC §3.4)
