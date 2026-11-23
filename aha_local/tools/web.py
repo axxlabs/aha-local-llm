@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 import httpx
 import trafilatura
 
-from .. import __version__
+from .. import RELEASE
 from ..approvals import Field
 from ..policy.browser import open_action, open_form
 from ..policy.gate import Action
@@ -23,7 +23,7 @@ MAX_PAGE_CHARS = 12_000
 MAX_REDIRECTS = 5
 # Say what we are (SPEC §3.4): a client that claims to be Chrome without Chrome's TLS handshake is what bot
 # protection looks for, and gets refused where an honest one is let in.
-USER_AGENT = f"Aha/{__version__} (+https://github.com/axxlabs/aha-local-llm)"
+USER_AGENT = f"Aha/{RELEASE} (+https://github.com/axxlabs/aha-local-llm)"
 HEADERS = {
     "User-Agent": USER_AGENT,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",

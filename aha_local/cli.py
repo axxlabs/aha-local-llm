@@ -254,8 +254,12 @@ def cmd_install(a) -> None:
     if not shutil.which("podman"):
         die("Podman is needed: sudo dnf install podman")
     print("Building the agent image…")
+    build = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"], cwd=REPO, capture_output=True, text=True, check=False
+    ).stdout.strip()
+    stamp = ["--build-arg", f"AHA_BUILD={build or 'unknown'}"]
     subprocess.run(
-        ["podman", "build", "-q", "-t", AGENT_IMAGE, "-f", str(DEPLOY / "Containerfile"), str(REPO)], check=True
+        ["podman", "build", "-q", "-t", AGENT_IMAGE, *stamp, "-f", str(DEPLOY / "Containerfile"), str(REPO)], check=True
     )
     ensure_data_key()  # an install from before encryption at rest gets its key here (SPEC §3.8.1 Upgrade)
     QUADLET_DIR.mkdir(parents=True, exist_ok=True)
