@@ -7,6 +7,9 @@ NOTHING_TO_STOP = "Nothing is running."
 FORGOT_LAST = "Done: I've dropped our last exchange from what I keep in mind."
 MODEL_DOWN = "My language model isn't running right now, so I can't answer. Try again in a minute."
 FAILED = "Something went wrong while working on that, sorry. I've noted the error on the computer."
+RESTARTING = (
+    "Aha! is restarting on your computer, so anything I was working on has stopped. Give it a minute, then ask again."
+)
 TOO_LONG = "That took too long, so I stopped. Try a smaller step, or tell me where to start."
 TOO_MANY_STEPS = "I couldn't finish that within my step limit. Here's where I got to:"
 APPROVAL_EXPIRED = "I stopped waiting for your approval, so I didn't do it."

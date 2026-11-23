@@ -1,16 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
-"""The agent process (runs in the aha-agent container): tools, agent, tunnel and the admin socket (SPEC §3.9)."""
+"""The agent process (runs in the aha-agent container): tools, agent, tunnel and the admin socket (SPEC §3.3)."""
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import time
 
-from . import __version__
+from . import __version__, messages
 from .accounts import Accounts
 from .agent import Agent
 from .certs import public_b64
@@ -25,6 +26,7 @@ from .tools.registry import Registry
 from .tunnel import Tunnel
 
 log = logging.getLogger("aha")
+ANNOUNCE_SECONDS = 4  # telling everyone aha is restarting, before it stops
 PRUNE_EVERY = 3600
 
 
@@ -109,6 +111,14 @@ class Service:
             warming.cancel()
             await self.scheduler.stop()
             await self.browser.stop()
+
+    async def announce_restart(self) -> None:
+        """Tell everyone the agent is stopping, so a task cut short isn't a mystery (SPEC §3.3)."""
+        for account in self.accounts.all():
+            try:
+                await self.agent.send(account, messages.RESTARTING)
+            except Exception:
+                log.warning("couldn't tell an account that aha is restarting")
 
     # ---- admin socket: one JSON request per connection, one JSON reply
 
@@ -252,8 +262,21 @@ async def _run_until_stopped(service: Service) -> None:
 
     task = asyncio.current_task()
     loop = asyncio.get_running_loop()
+    stopping: list[asyncio.Task] = []
+
+    async def stop() -> None:
+        # While the tunnel is still up: everyone hears why a task stopped. A few seconds at most, well inside
+        # the 10 s before podman kills the container.
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(service.announce_restart(), ANNOUNCE_SECONDS)
+        task.cancel()
+
+    def on_signal() -> None:
+        if not stopping:
+            stopping.append(asyncio.ensure_future(stop()))
+
     for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, task.cancel)
+        loop.add_signal_handler(sig, on_signal)
     try:
         await service.run()
     except asyncio.CancelledError:
