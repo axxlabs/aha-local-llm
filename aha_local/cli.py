@@ -588,6 +588,8 @@ def cmd_doctor(a) -> None:
 MODEL_FILES = {
     "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf": "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
     "Qwen3.6-35B-A3B-mmproj-F16.gguf": "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/mmproj-F16.gguf",
+    "Qwen3.5-9B-UD-Q6_K_XL.gguf": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-UD-Q6_K_XL.gguf",
+    "Qwen3.5-9B-mmproj-F16.gguf": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-F16.gguf",
 }
 
 

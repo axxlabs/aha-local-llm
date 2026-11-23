@@ -200,6 +200,16 @@ class Agent:
         """What "typing…" shows (SPEC §3.3): a task is running and isn't waiting for the person's approval."""
         return self.is_running(account) and self.approvals.pending_for(account.address) is None
 
+    async def warm(self) -> None:
+        """Load the chosen model and read the fixed start of every request (the system prompt and the tool
+        definitions) once, so the first message after a start or a model change doesn't wait for it (§3.2)."""
+        msgs = [{"role": "system", "content": context.system_prompt()}, {"role": "user", "content": "."}]
+        try:
+            await self.llm.chat(msgs, self.registry.specs(), max_tokens=1)
+            log.info("model %s ready", self.llm.model)
+        except Exception as e:
+            log.warning("warming the model failed: %s", e)
+
     def start_scheduled(self, account: Account, entry: dict, late: bool = False) -> None:
         """A scheduled task is due (SPEC §3.4): run it as this account, like a message from them."""
         account.transcript({"kind": "scheduled", "text": entry["text"]})

@@ -31,6 +31,9 @@ class FakeAgent:
     def owes_reply(self, account):
         return self.working
 
+    async def warm(self):
+        self.warmed = getattr(self, "warmed", 0) + 1
+
     async def inbound(self, account, text, image=None):
         self.said.append(text)
         self.photos.append(image)
@@ -319,6 +322,49 @@ async def test_settings_show_and_forget_what_the_browser_remembers(tmp_path):
     await phone.send({"t": "browser_clear"})
     assert phone.inbox() == [{"t": "browser", "sites": []}]
     assert not (acct.dir / signins.FILE).exists()
+
+
+class FakeModelServer:
+    """The model server's /models listing, which names the presets of models.ini."""
+
+    url = "http://llm/v1"
+
+    def __init__(self, ids) -> None:
+        self.ids, self.model, self.client = ids, "qwen3.6-35b", self
+
+    async def get(self, url, timeout=None):
+        import httpx
+
+        return httpx.Response(200, json={"data": [{"id": i} for i in self.ids]})
+
+
+async def test_settings_choose_the_households_model(tmp_path):
+    """Settings → Model (SPEC §3.2): offered when the model server lists it, kept, and loaded at once."""
+    from aha_local.models import ModelChoice
+
+    rig = Rig(tmp_path)
+    llm = FakeModelServer(["qwen3.6-35b", "qwen3.5-9b"])
+    rig.channel.models = ModelChoice(rig.accounts.vault, tmp_path / "data", llm, "qwen3.6-35b")
+    _, phone = await rig.pair()
+    await phone.send({"t": "hello", "name": "P"})
+    phone.inbox()
+    await phone.send({"t": "model_request"})
+    listing = phone.inbox()[0]
+    assert listing["current"] == "qwen3.6-35b"
+    assert [(m["id"], m["ready"]) for m in listing["choices"]] == [("qwen3.6-35b", True), ("qwen3.5-9b", True)]
+    await phone.send({"t": "model_set", "model": "qwen3.5-9b"})
+    await asyncio.sleep(0)
+    assert phone.inbox()[0]["current"] == "qwen3.5-9b"
+    assert llm.model == "qwen3.5-9b" and rig.agent.warmed == 1
+    again = ModelChoice(rig.accounts.vault, tmp_path / "data", FakeModelServer([]), "qwen3.6-35b")
+    assert again.current == "qwen3.5-9b"  # kept across restarts
+    await phone.send({"t": "model_set", "model": "gpt-9"})  # not one of ours
+    assert phone.inbox() == [{"t": "error", "code": "bad_model"}]
+    llm.ids = ["qwen3.6-35b"]  # its files aren't there: the model server doesn't list it
+    await phone.send({"t": "model_set", "model": "qwen3.6-35b"})
+    await phone.send({"t": "model_set", "model": "qwen3.5-9b"})
+    out = phone.inbox()
+    assert out[0]["current"] == "qwen3.6-35b" and out[1] == {"t": "error", "code": "bad_model"}
 
 
 async def test_settings_trust_sites_and_forget_memories(tmp_path):

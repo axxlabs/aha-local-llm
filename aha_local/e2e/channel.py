@@ -133,7 +133,7 @@ class Channel:
         household: str,
         history_days: int = 30,
         push_preview: bool = False,
-        model: str = "",
+        models=None,
     ) -> None:
         self.accounts = accounts
         self.identity = load_or_create_identity(accounts.vault, keys_dir / "e2e.json")
@@ -150,7 +150,7 @@ class Channel:
         self._tasks: set[asyncio.Task] = set()
         self.gateway_pin = ""
         self.gateway_features: frozenset[str] = frozenset()  # from the gateway's hello (SPEC §6.5)
-        self.model = model
+        self.models = models  # the household's model choice (models.ModelChoice), for Settings
         self.drafts: dict[str, reports.Draft] = {}  # by account id: the report the person is looking at (§7.7)
         self._report_waiters: dict[str, asyncio.Future] = {}
 
@@ -344,6 +344,21 @@ class Channel:
             account.clear_history()
             log.info("history cleared for an account")
             await self.history_changed(account)
+        elif t in ("model_request", "model_set"):
+            # Settings → Model (SPEC §3.2): one choice for the household; the new model loads at once.
+            if self.models is None:
+                await reply({"t": "error", "code": "unknown_type"})
+                return
+            if t == "model_set":
+                model = clean_text(msg.get("model"), 64) or ""
+                if not await self.models.set(model):
+                    await reply({"t": "error", "code": "bad_model"})
+                    return
+                account.audit({"model_set": model})
+                if self.agent is not None:
+                    self._spawn(self.agent.warm())
+            listing = await self.models.listing()
+            await (self.to_devices(account, listing) if t == "model_set" else reply(listing))
         elif t == "memories_request":
             items = [{"id": m.get("id"), "text": m.get("text")} for m in account.load_memory()]
             await reply({"t": "memories", "items": items})
@@ -381,7 +396,7 @@ class Channel:
         elif t == "report_preview":
             note = clean_text(msg.get("note"), reports.MAX_NOTE) or ""
             app = clean_text(msg.get("app"), 20) or ""
-            versions = reports.versions(app, __version__, self.model)
+            versions = reports.versions(app, __version__, self.models.current if self.models else "")
             draft = reports.build(
                 account.read_transcript(),
                 reports.parse_count(msg.get("count")),

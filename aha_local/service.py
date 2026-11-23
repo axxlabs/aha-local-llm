@@ -20,6 +20,7 @@ from .config import Config
 from .e2e import crypto
 from .e2e.channel import Channel
 from .llm import LLM
+from .models import ModelChoice
 from .rest import RestError, Vault, load_or_create_instance_key
 from .tools import browser, conversation, mail, memory, schedule, signins, web
 from .tools.registry import Registry
@@ -43,6 +44,7 @@ class Service:
         self.browser.on_open = self._browser_opened
         self.browser.on_close = self._browser_closing
         self.llm = LLM(config.llm_url, config.llm_model)
+        self.models = ModelChoice(self.vault, data, self.llm, config.llm_model)
         self.channel = Channel(
             self.accounts,
             data / "keys",
@@ -52,7 +54,7 @@ class Service:
             config.household_name,
             config.history_sync_days,
             config.push_preview,
-            config.llm_model,
+            self.models,
         )
         self.tunnel = Tunnel(
             config.gateway_url, config.gateway_pin, self.key, self.accounts, config.household_name, self.channel
@@ -95,6 +97,7 @@ class Service:
         self.browser.start()
         self.scheduler.start()
         pruning = asyncio.create_task(self._prune_history())
+        warming = asyncio.create_task(self.agent.warm())
         log.info("aha %s: %d tools (%d browser)", __version__, len(self.registry.names()), count)
         sock = self.config.data_dir / "agent.sock"
         sock.unlink(missing_ok=True)
@@ -105,6 +108,7 @@ class Service:
                 await self.tunnel.run()
         finally:
             pruning.cancel()
+            warming.cancel()
             await self.scheduler.stop()
             await self.browser.stop()
 
