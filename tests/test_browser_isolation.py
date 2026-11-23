@@ -155,6 +155,22 @@ async def test_a_context_in_use_is_not_closed_for_idleness(fake_browser):
     assert not pool.is_open("fe")
 
 
+async def test_a_message_from_the_person_restarts_the_idle_time(fake_browser):
+    """The window closes idle_minutes after the person's last message or browser use (24 hours by default)."""
+    pool = BrowserPool("x", idle_seconds=3600, session=fake_browser.Session)
+    s = pool.session("fe")
+    await asyncio.wait_for(s.ready.wait(), 1)
+    s.last_used -= 3000
+    pool.touch("fe")  # they wrote
+    s.last_used -= 3000  # 50 minutes later, not 100
+    await pool.reap()
+    assert pool.is_open("fe")
+    s.last_used -= 700
+    await pool.reap()
+    assert not pool.is_open("fe")
+    pool.touch("nobody")  # no window: nothing to do
+
+
 async def test_deleting_an_account_discards_its_browser_context(pool, fake_browser, accounts):
     from types import SimpleNamespace
 

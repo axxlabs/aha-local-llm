@@ -213,6 +213,11 @@ class BrowserPool:
     def is_open(self, account_id: str) -> bool:
         return account_id in self._sessions
 
+    def touch(self, account_id: str) -> None:
+        """The person wrote: their open window counts as used from now (it closes idle_minutes after this)."""
+        if s := self._sessions.get(account_id):
+            s.last_used = time.monotonic()
+
     def open_session(self, account_id: str) -> BrowserSession | None:
         """The account's context if it's open and its state was restored (so saving it is safe)."""
         s = self._sessions.get(account_id)

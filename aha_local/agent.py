@@ -120,6 +120,8 @@ class Agent:
         """A message the person typed, maybe with a photo (already shown on their devices by the channel)."""
         text = text.strip()
         account.transcript({"kind": "user", "text": text, "image": bool(image)})
+        if self.browser is not None:
+            self.browser.touch(account.id)  # the window stays open idle_minutes after their last message
         if image is not None:
             # A photo is never a command: it goes to the running task, or starts one (SPEC §6.5).
             self.photos[account.address].append(image)
