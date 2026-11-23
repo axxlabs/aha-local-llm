@@ -34,6 +34,9 @@ HIDE = {  # not offered: rarely useful, and every definition costs prompt tokens
     "browser_mouse_drag_xy",
     "browser_mouse_down",
     "browser_mouse_up",
+    # Closing the browser drops the context with everything it remembers: the next call opens a blank one, and
+    # saving that after the task would sign the person out everywhere. The harness closes it when idle.
+    "browser_close",
 }
 AUTO = {
     "browser_click",
@@ -45,7 +48,6 @@ AUTO = {
     "browser_take_screenshot",
     "browser_find",
     "browser_wait_for",
-    "browser_close",
 }
 SAFE_KEYS = {
     "Enter",

@@ -89,6 +89,7 @@ def test_trusted_sites_skip_the_card_only_for_typing_and_never_after_mail():
 
 def test_hidden_tools_are_not_offered():
     assert not offered("browser_evaluate") and not offered("browser_resize")
+    assert not offered("browser_close")  # it drops everything the browser remembers (the Waitrose sign-out)
     assert offered("browser_click") and offered("browser_type")
 
 

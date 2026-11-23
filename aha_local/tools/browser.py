@@ -58,6 +58,15 @@ CHALLENGE = re.compile(
     r"checking if the site connection is secure|confirm you are (?:a )?human",
     re.I,
 )
+# A cookie banner (SPEC §3.4 "Cookie banners"): a short button that turns the optional cookies down, near the
+# word "cookie" in the page's own snapshot. The harness clicks it before the model or a card sees the page.
+REJECT_BUTTON = re.compile(r'^\s*- button "([^"]{1,40})"[^\n]*\[ref=((?:f\d+)?e\d+)\]', re.M)
+REJECT_NAME = re.compile(
+    r"^(?:reject|decline|refuse|deny|(?:use |allow |accept )?(?:only )?(?:strictly )?(?:necessary|essential)\b|"
+    r"only (?:allow|accept|use) (?:strictly )?(?:necessary|essential)\b|continue without accepting)",
+    re.I,
+)
+COOKIE_NEAR = 40  # lines around the button where the banner says "cookie"
 CANT_TELL = (
     "From here you can't tell why: tell the person you couldn't load the page and give the link; "
     "don't guess at a cause (region, IP, outage) the page didn't state."
@@ -358,8 +367,55 @@ async def call_with_snapshot(session, name: str, args: dict, ctx: ToolContext) -
             result.text = SNAPSHOT_LINK.sub(
                 "### Snapshot\n" + snap.text.split("### Snapshot", 1)[-1].strip(), result.text
             )
+    await close_cookie_banner(session, ctx, result)
     annotate(ctx, result)
     return result
+
+
+def cookie_banner(snapshot: str) -> tuple[str, str] | None:
+    """The reference and name of a cookie banner's "reject" button in a snapshot, if the page shows one."""
+    lines = snapshot.splitlines()
+    for i, line in enumerate(lines):
+        m = REJECT_BUTTON.match(line)
+        if not m or not REJECT_NAME.match(m.group(1).strip()):
+            continue
+        if any("cookie" in near.lower() for near in lines[max(0, i - COOKIE_NEAR) : i + COOKIE_NEAR]):
+            return m.group(2), m.group(1).strip()
+    return None
+
+
+async def close_cookie_banner(session, ctx: ToolContext, result: ToolResult) -> None:
+    """Close a cookie banner in code, turning the optional cookies down (SPEC §3.4 "Cookie banners").
+
+    Left to the model, a banner could stay over the page, and a sign-in card's typing then lands on it. Tried once
+    per page and button; the page the model gets is the one after."""
+    m = YAML_BLOCK.search(result.text)
+    found = cookie_banner(m.group(1)) if m else None
+    if found is None:
+        return
+    ref, label = found
+    url = (u.group(1) if (u := PAGE_URL.search(result.text)) else "") or ctx.task.page_url
+    if (url, ref) in ctx.task.banners_tried:
+        return
+    ctx.task.banners_tried.add((url, ref))
+    try:
+        await run_code(session, human.move_code(ref))
+        click = await session.call("browser_click", {"element": f'"{label}" on the cookie banner', "target": ref})
+        snap = to_result(await session.call("browser_snapshot", {}))
+    except Exception:
+        log.warning("couldn't close a cookie banner")
+        return
+    if click.isError or snap.error or "### Page" not in snap.text:
+        log.info("closing a cookie banner didn't work")
+        return
+    log.info("closed a cookie banner")
+    head = result.text.split("### Page", 1)[0]
+    result.text = (
+        f'[Aha!: a cookie banner was over this page; it was closed with "{label}". This is the page now.]\n\n'
+        + head
+        + "### Page"
+        + snap.text.split("### Page", 1)[1]
+    )
 
 
 REF_IN_LINE = re.compile(r"\[ref=((?:f\d+)?e\d+)\]")

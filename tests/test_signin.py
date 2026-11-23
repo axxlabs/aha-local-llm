@@ -59,6 +59,7 @@ class FakeContext:
         self.moves: list[str] = []  # elements the mouse moved to
         self.taps: list[list[tuple[int, int]]] = []
         self.order: list[str] = []  # fields typed or filled, in order
+        self.banner = False  # a cookie banner over the page
         self.closed = False
 
     def run_code(self, code: str) -> mt.CallToolResult:
@@ -95,6 +96,17 @@ class FakeContext:
         return text_result('### Result\n"ok"' + echo)
 
     def snapshot(self) -> str:
+        page = self.page()
+        if not self.banner:
+            return page
+        return page[: -len("```")] + (
+            '- dialog "Our Cookies" [ref=e67]:\n  - heading "Our Cookies" [level=2] [ref=e71]\n'
+            "  - text: Our website uses cookies to analyse traffic.\n"
+            '  - link "cookies policy" [ref=e76]\n  - button "Allow all" [active] [ref=e78]\n'
+            '  - button "Reject all" [ref=e80]\n  - button "Manage cookies" [ref=e82]\n```'
+        )
+
+    def page(self) -> str:
         if self.url == "about:blank":  # a new window
             return "### Page\n- Page URL: about:blank\n### Snapshot\n```yaml\n\n```"
         if "login" in self.url or "signin" in self.url:
@@ -128,6 +140,7 @@ class FakeContext:
         self.calls.append(name)
         if name == "browser_navigate":
             self.url = args["url"]
+            self.banner = "cookies=ask" in self.url
             if "visit=" in self.url:  # a site that remembers the visitor
                 self.cookies.append({"name": "visitor", "value": "v1", "domain": ".shop.example", "path": "/"})
                 self.origins.append(
@@ -152,6 +165,8 @@ class FakeContext:
                 self.fields[f["target"]] = f["value"]
                 self.order.append(f"filled {f['target']}")
             return text_result(self.snapshot())
+        if name == "browser_click" and args.get("target") == "e80":
+            self.banner = False
         if name in ("browser_wait_for", "browser_click"):
             return text_result(self.snapshot() if name == "browser_click" else "waited")
         if name == "browser_run_code_unsafe":
@@ -427,3 +442,24 @@ def test_what_counts_as_refusing_to_sign_in():
         "The site can't be opened right now.",
     ):
         assert not checks.refuses_sign_in(fine, set(), True), fine
+
+
+async def test_a_cookie_banner_is_closed_with_reject_before_the_sign_in_card(setup, llm, chat, accounts):
+    """SPEC §3.4 "Cookie banners": left over the page, the card's typing landed on the banner."""
+    agent, _, fake = setup
+    fe = person(accounts)
+    card = await start_sign_in(agent, llm, chat, fe, url="https://www.waitrose.com/login?cookies=ask")
+    page = fake.contexts[-1]
+    assert not page.banner and "e80" in page.moves  # "Reject all", the mouse there first; never "Allow all"
+    seen = json.dumps(llm.requests[1]["messages"])
+    assert "cookie banner was over this page" in seen and "Reject all" in seen and "Our Cookies" not in seen
+    assert card.card["kind"] == "signin"
+
+
+def test_what_counts_as_a_cookie_banner():
+    banner = '- dialog "Cookies":\n  - text: We use cookies.\n  - button "Accept all" [ref=e1]\n'
+    for name in ("Reject all", "Decline", "Necessary only", "Use necessary cookies only", "Only allow essential"):
+        assert browser.cookie_banner(banner + f'  - button "{name}" [ref=e2] [cursor=pointer]') == ("e2", name)
+    for name in ("Accept all", "Manage cookies"):
+        assert browser.cookie_banner(banner + f'  - button "{name}" [ref=e2]') is None
+    assert browser.cookie_banner('- button "Decline" [ref=e2]') is None  # no cookies around: not a banner

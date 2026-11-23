@@ -49,6 +49,7 @@ class TaskState:
     sign_in_offered: bool = False  # a sign-in card was shown in this task (whatever the answer)
     challenge_page: str = ""  # the site, when the latest page shows an "are you human?" check
     human_check_offered: bool = False  # a check card was shown in this task
+    banners_tried: set[tuple[str, str]] = field(default_factory=set)  # cookie banners closed: (page, button)
 
 
 @dataclass
