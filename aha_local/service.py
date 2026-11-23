@@ -10,8 +10,6 @@ import logging
 import os
 import time
 
-import httpx
-
 from . import __version__
 from .accounts import Accounts
 from .agent import Agent
@@ -188,8 +186,7 @@ class Service:
         if cmd == "mail_status":
             out = []
             for a in self.accounts.all():
-                conn = a.vault.read_json(a.dir / "mail.json")
-                out.append({"name": a.label, "email": conn["email"] if conn else ""})
+                out.append({"name": a.label, "email": mail.address(a)})
             return {"ok": True, "accounts": out}
         acct = self.accounts.find(str(req.get("account", "")))
         needs_account = ("devices", "revoke", "memory_list", "memory_import", "export", "rename", "delete")
@@ -238,31 +235,14 @@ class Service:
             mail.forget_token(acct.id)
             return {"ok": True}
         if cmd == "mail_disconnect":
-            return {"ok": True, "revoked": await self._mail_disconnect(acct)}
+            return {"ok": True, "revoked": await mail.disconnect(acct)}
         if cmd == "delete":
             for dev in list(acct.devices):
                 await self.channel.revoke(acct, dev)
-            await self._mail_disconnect(acct)
+            await mail.disconnect(acct)
             await self.browser.close(acct.id, save=False)
             return {"ok": self.accounts.delete(acct.id) is not None}
         return {"ok": False, "error": f"unknown command {cmd!r}"}
-
-    async def _mail_disconnect(self, acct) -> bool:
-        """Revoke the account's Gmail token at Google (best effort) and delete it here. True if Google confirmed."""
-        path = acct.dir / "mail.json"
-        conn = self.vault.read_json(path)
-        mail.forget_token(acct.id)
-        if not conn:
-            return False
-        revoked = False
-        try:
-            async with httpx.AsyncClient(transport=mail.TRANSPORT, timeout=15) as http:
-                r = await http.post(mail.REVOKE_URL, data={"token": conn["refresh_token"]})
-                revoked = r.status_code == 200
-        except httpx.HTTPError:
-            log.warning("couldn't reach Google to revoke a mail token; deleted it here")
-        path.unlink(missing_ok=True)
-        return revoked
 
 
 async def _run_until_stopped(service: Service) -> None:

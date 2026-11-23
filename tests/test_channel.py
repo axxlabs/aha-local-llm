@@ -443,3 +443,31 @@ def test_a_reply_never_outgrows_a_message():
     big = [{"seq": i, "t": "msg", "text": "x" * 400_000} for i in range(1, 6)]
     assert [it["seq"] for it in fit(big, budget=1_000_000)] == [4, 5]  # text alone too big: oldest dropped
     assert fit(items[:2]) == items[:2]  # small replies are untouched
+
+
+async def test_settings_show_and_disconnect_the_persons_email(tmp_path, monkeypatch):
+    """Settings → Connections (SPEC §7.4): the address only, never the token; Disconnect revokes it."""
+    from aha_local.tools import mail
+
+    revoked = []
+
+    async def disconnect(account):
+        revoked.append(account.name)
+        (account.dir / "mail.json").unlink()
+        return True
+
+    monkeypatch.setattr(mail, "disconnect", disconnect)
+    rig = Rig(tmp_path)
+    _, phone = await rig.pair()
+    await phone.send({"t": "hello", "name": "P"})
+    phone.inbox()
+    acct = rig.accounts.find("Ana")
+    await phone.send({"t": "connections_request"})
+    assert phone.inbox() == [{"t": "connections", "email": ""}]
+    acct.vault.write_json(
+        acct.dir / "mail.json", {"provider": "gmail", "email": "ana@example.com", "refresh_token": "rt"}
+    )
+    await phone.send({"t": "connections_request"})
+    assert phone.inbox() == [{"t": "connections", "email": "ana@example.com"}]
+    await phone.send({"t": "email_disconnect"})
+    assert phone.inbox() == [{"t": "connections", "email": ""}] and revoked == ["Ana"]

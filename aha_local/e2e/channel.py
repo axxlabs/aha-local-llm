@@ -33,7 +33,7 @@ from ..accounts import Account, Accounts, Device
 from ..certs import needs_renewal
 from ..items import Image
 from ..protocol import E2E, Cert, CertIssued, CertRequest, DeviceStatus, Pair, Push, Report, ReportResult, Revoke, b64
-from ..tools import signins, trusted
+from ..tools import mail, signins, trusted
 from . import crypto, webpush
 
 log = logging.getLogger("aha.channel")
@@ -417,6 +417,12 @@ class Channel:
                 elif t == "browser_clear":
                     await self.agent.clear_browser(account)
             await reply({"t": "browser", "sites": browser_list(account)})
+        elif t in ("connections_request", "email_disconnect"):
+            # Settings → Connections (SPEC §7.4): what this person connected Aha! to. The address only, never a token.
+            if t == "email_disconnect" and mail.address(account):
+                await mail.disconnect(account)
+                account.audit({"email_disconnected_in_settings": True})
+            await reply({"t": "connections", "email": mail.address(account)})
         elif t == "memory_forget":
             # Settings → What Aha! remembers: the person's own action, so no card (SPEC §5.4).
             memory_id = clean_text(msg.get("id"), 64)

@@ -10,6 +10,7 @@ the computer is an approval card (SPEC §5.5). Sending and drafts are always car
 from __future__ import annotations
 
 import base64
+import logging
 import re
 import time
 from email.message import EmailMessage
@@ -30,6 +31,7 @@ SCOPES = ("https://www.googleapis.com/auth/gmail.readonly", "https://www.googlea
 MAX_RESULTS = 10
 MAX_READ = 12_000
 MAX_BODY = 10_000
+log = logging.getLogger("aha.mail")
 TRANSPORT: httpx.AsyncBaseTransport | None = None  # tests put a fake Gmail here
 
 NOT_CONNECTED = (
@@ -87,6 +89,30 @@ async def access_token(ctx: ToolContext) -> str:
 
 def forget_token(account_id: str) -> None:
     _tokens.pop(account_id, None)
+
+
+def address(account) -> str:
+    """The connected mailbox's address, or "" (Settings → Connections, `aha mail status`). Never the token."""
+    conn = account.vault.read_json(account.dir / "mail.json")
+    return str(conn.get("email", "")) if isinstance(conn, dict) else ""
+
+
+async def disconnect(account) -> bool:
+    """Revoke the account's Gmail token at Google (best effort) and delete it here. True if Google confirmed."""
+    path = account.dir / "mail.json"
+    conn = account.vault.read_json(path)
+    forget_token(account.id)
+    if not conn:
+        return False
+    revoked = False
+    try:
+        async with _http() as http:
+            r = await http.post(REVOKE_URL, data={"token": conn["refresh_token"]})
+            revoked = r.status_code == 200
+    except httpx.HTTPError:
+        log.warning("couldn't reach Google to revoke a mail token; deleted it here")
+    path.unlink(missing_ok=True)
+    return revoked
 
 
 async def gmail(ctx: ToolContext, method: str, path: str, **kw) -> dict:

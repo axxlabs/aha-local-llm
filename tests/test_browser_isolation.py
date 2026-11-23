@@ -167,7 +167,6 @@ async def test_deleting_an_account_discards_its_browser_context(pool, fake_brows
         browser=pool,
         channel=SimpleNamespace(revoke=None),
         vault=accounts.vault,
-        _mail_disconnect=lambda acct: asyncio.sleep(0),
     )
     assert (await Service._handle(service, {"cmd": "delete", "account": fe.name}))["ok"]
     assert not pool.is_open(fe.id) and not fake_browser.open()

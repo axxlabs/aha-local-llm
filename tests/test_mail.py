@@ -16,7 +16,6 @@ import pytest
 
 from aha_local.approvals import Decision
 from aha_local.config import Config
-from aha_local.service import Service
 from aha_local.tools import mail, web
 from aha_local.tools.registry import TaskState, ToolContext
 
@@ -255,9 +254,9 @@ async def test_tokens_are_only_in_the_encrypted_mail_file_and_disconnect_revokes
     fe, _ = two
     blob = b"".join(p.read_bytes() for p in fe.vault.root.rglob("*") if p.is_file())
     assert b"rt-fe" not in blob and b"rt-hb" not in blob
-    service = SimpleNamespace(vault=fe.vault)
-    assert await Service._mail_disconnect(service, fe) is True
-    assert google.revoked == ["rt-fe"] and not (fe.dir / "mail.json").exists()
+    assert mail.address(fe) == "fe@example.com"
+    assert await mail.disconnect(fe) is True
+    assert google.revoked == ["rt-fe"] and not (fe.dir / "mail.json").exists() and mail.address(fe) == ""
 
 
 def test_the_documents_feature_is_gone(registry, tmp_path):
