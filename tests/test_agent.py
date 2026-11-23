@@ -110,6 +110,19 @@ def test_older_pages_are_shortened_within_a_long_task():
     assert kept
 
 
+def test_a_long_tasks_start_stays_the_same_from_step_to_step():
+    """Seen on evri.com: stubbing just enough of the oldest pages changed the middle each step, so the model
+    server read ~75k tokens again every time (50 s a step). Past the budget, all but the newest two are stubs."""
+    task = [{"role": "user", "content": "go"}]
+    for i in range(8):
+        task.append({"role": "tool", "tool_call_id": f"c{i}", "content": f"page {i} " + "x" * 30000, "_kind": "page"})
+    before = context.shorten_task(task, budget=40000)
+    task.append({"role": "tool", "tool_call_id": "c8", "content": "page 8 " + "x" * 30000, "_kind": "page"})
+    after = context.shorten_task(task, budget=40000)
+    assert after[: len(before) - 2] == before[: len(before) - 2]  # only the end changed: the rest stays cached
+    assert [m["content"][:6] for m in after[-2:]] == ["page 7", "page 8"]
+
+
 async def test_summary_folding_happens_between_tasks(agent, llm, chat, accounts):
     acct = person(accounts)
     conv = {

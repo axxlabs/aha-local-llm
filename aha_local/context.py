@@ -94,7 +94,12 @@ def build(
 
 
 def shorten_task(task: list[dict], budget: float) -> list[dict]:
-    """Within a long task, replace older page snapshots and images by one-line stubs (SPEC §4.3)."""
+    """Within a long task, replace older page snapshots and images by one-line stubs (SPEC §4.3).
+
+    Past the budget, every page but the newest KEEP_PAGES becomes a stub, not just enough of the oldest to fit:
+    then each new step only changes the end of the task and the model server keeps the rest cached. Stubbing the
+    oldest until it fitted changed the middle on every step, and each step read ~75k tokens again (seen: 50 s a
+    step on evri.com)."""
     out = [dict(m) for m in task]
     if estimate(out) <= budget:
         return [strip(m) for m in out]
@@ -106,8 +111,6 @@ def shorten_task(task: list[dict], budget: float) -> list[dict]:
         else:
             first = (m.get("content") or "").splitlines()[:3]
             out[i] = {**m, "content": "[earlier page result, superseded] " + " ".join(first)[:200], "_kind": "stub"}
-        if estimate(out) <= budget:
-            break
     return [strip(m) for m in out]
 
 
