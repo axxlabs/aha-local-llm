@@ -678,7 +678,8 @@ def main(argv: list[str] | None = None) -> None:
   1. https://console.cloud.google.com: create a project, enable the Gmail API and the Google Calendar API.
   2. Google Auth Platform: Branding (app name "Aha!"), Audience "External", then Publish app
      ("In production"; it stays unverified, which is fine for your household: Google shows a warning).
-  3. Data access: add the scopes gmail.readonly, gmail.compose and calendar.events.
+  3. Data access: add the scopes gmail.readonly, gmail.compose, calendar.events and
+     calendar.calendarlist.readonly.
   4. Clients: create an OAuth client of type "Desktop app" and download its JSON.
   5. aha mail setup --client <that file>
 Then for each person: aha mail connect <person>""",

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from dataclasses import dataclass
+from urllib.parse import quote
 
 import httpx
 
@@ -19,7 +21,8 @@ from . import guard, mail
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 from .schedule import parse_local, tz_of
 
-CALENDAR = "https://www.googleapis.com/calendar/v3/calendars/primary"
+API = "https://www.googleapis.com/calendar/v3"
+OWN = {"", "primary", "main", "my calendar", "my own", "mine", "default", "your calendar", "personal"}
 MAX_EVENTS = 25
 MAX_TEXT = 4_000
 EMAIL = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")
@@ -37,7 +40,7 @@ class NoCalendar(Exception):
 async def api(ctx: ToolContext, method: str, path: str, **kw) -> dict:
     token = await mail.access_token(ctx)
     async with mail._http() as http:
-        r = await http.request(method, CALENDAR + path, headers={"Authorization": f"Bearer {token}"}, **kw)
+        r = await http.request(method, API + path, headers={"Authorization": f"Bearer {token}"}, **kw)
     if r.status_code == 401:
         mail.forget_token(ctx.account.id)
     if r.status_code == 403 and "insufficient" in r.text.lower():
@@ -56,6 +59,63 @@ async def call(ctx: ToolContext, method: str, path: str, **kw) -> dict | ToolRes
         return ToolResult(NO_CALENDAR, error=True)
     except httpx.HTTPStatusError as e:
         return ToolResult(f"Google Calendar answered HTTP {e.response.status_code}.", error=True)
+
+
+# ---- which calendar: the name the person used, looked up in their own list, never an id from the model
+
+
+@dataclass(frozen=True)
+class Cal:
+    id: str
+    name: str
+    writable: bool = True
+
+    @property
+    def events(self) -> str:
+        return f"/calendars/{quote(self.id, safe='')}/events"
+
+    @property
+    def label(self) -> str:
+        return "your calendar" if self.id == "primary" else f"the “{self.name}” calendar"
+
+
+async def which(ctx: ToolContext, name) -> Cal | ToolResult:
+    """The calendar the person named ("Family"), or their own when none was named."""
+    name = " ".join(str(name or "").split())
+    if name.lower() in OWN:
+        return Cal("primary", "your calendar")
+    found = await call(ctx, "GET", "/users/me/calendarList", params={"maxResults": 250})
+    if isinstance(found, ToolResult):
+        return found
+    cals = [
+        Cal(
+            c["id"], c.get("summaryOverride") or c.get("summary") or c["id"], c.get("accessRole") in ("owner", "writer")
+        )
+        for c in found.get("items", [])
+        if isinstance(c, dict) and c.get("id")
+    ]
+    wanted = name.lower().removesuffix(" calendar").strip()
+    for match in (
+        [c for c in cals if c.name.lower() == wanted],
+        [c for c in cals if wanted in c.name.lower()],
+    ):
+        if len(match) == 1:
+            return match[0]
+    names = ", ".join(f"“{c.name}”" for c in cals) or "none"
+    return ToolResult(
+        f"There's no single calendar called “{name}”. The user's calendars: {names}. Use one of these names, or ask "
+        "the user which one.",
+        error=True,
+    )
+
+
+def read_only(cal: Cal) -> ToolResult:
+    return ToolResult(
+        f"{cal.label.capitalize()} is read-only for the user: they can see it but not change it.", error=True
+    )
+
+
+CALENDAR_ARG = string("Optional: the calendar's name as the user said it, e.g. 'Family'; their own if not given")
 
 
 # ---- times
@@ -126,14 +186,18 @@ async def calendar_list(args: dict, ctx: ToolContext) -> ToolResult:
     query |= {"orderBy": "startTime", "maxResults": MAX_EVENTS}
     if text := " ".join(str(args.get("query", "") or "").split()):
         query["q"] = text
-    found = await call(ctx, "GET", "/events", params=query)
+    cal = await which(ctx, args.get("calendar"))
+    if isinstance(cal, ToolResult):
+        return cal
+    found = await call(ctx, "GET", cal.events, params=query)
     if isinstance(found, ToolResult):
         return found
     ctx.task.read_calendar = True  # the task now holds private data (SPEC §5.2)
     events = found.get("items", [])
+    where = "" if cal.id == "primary" else f" in {cal.label}"
     if not events:
-        return ToolResult(f"No events from {shown(start)} to {shown(end)}.")
-    return ToolResult("\n".join(describe(e, tz) for e in events))
+        return ToolResult(f"No events{where} from {shown(start)} to {shown(end)}.")
+    return ToolResult((f"Events{where}:\n" if where else "") + "\n".join(describe(e, tz) for e in events))
 
 
 # ---- changing (a send: always a card, SPEC §5.2)
@@ -175,6 +239,11 @@ async def calendar_add(args: dict, ctx: ToolContext) -> ToolResult:
     if start is None:
         return ToolResult("Give start as 'YYYY-MM-DD HH:MM' (local time), or 'YYYY-MM-DD' for a whole day.", error=True)
     end = when_of(args.get("end"), tz) if args.get("end") else None
+    cal = await which(ctx, args.get("calendar"))
+    if isinstance(cal, ToolResult):
+        return cal
+    if not cal.writable:
+        return read_only(cal)
     fields = event_fields(
         " ".join(str(args.get("title", "")).split()),
         shown(start),
@@ -183,33 +252,43 @@ async def calendar_add(args: dict, ctx: ToolContext) -> ToolResult:
         str(args.get("notes", "") or "").strip()[:MAX_TEXT],
         ", ".join(guests_of(str(args.get("guests", "") or "")) or []),
     )
-    title = "Add this to your calendar and invite the guests?" if fields[5].value else "Add this to your calendar?"
-    decision, refused = await guard.ask(ctx, "calendar", title, fields)
+    fields.append(Field("Calendar", cal.name, "info"))
+    invite = " and invite the guests" if fields[5].value else ""
+    decision, refused = await guard.ask(ctx, "calendar", f"Add this to {cal.label}{invite}?", fields)
     if refused:
         return refused
     body = event_body(decision.values, tz)
     if isinstance(body, str):
         return ToolResult(f"Not added: {body}. Ask the user.", error=True)
     sends = "all" if body["attendees"] else "none"
-    made = await call(ctx, "POST", "/events", params={"sendUpdates": sends}, json=body)
+    made = await call(ctx, "POST", cal.events, params={"sendUpdates": sends}, json=body)
     if isinstance(made, ToolResult):
         return made
     return ToolResult(
-        "Added to the calendar: " + describe(made, tz) + ("; invitations sent." if sends == "all" else ".")
+        f"Added to {cal.label}: " + describe(made, tz) + ("; invitations sent." if sends == "all" else ".")
     )
 
 
-async def _event(ctx: ToolContext, event_id: str) -> dict | ToolResult:
+async def _event(ctx: ToolContext, args: dict) -> tuple[Cal, dict] | ToolResult:
+    """The event and its calendar, read from Google: the card shows what's really there."""
+    event_id = str(args.get("id", ""))
     if not re.fullmatch(r"[A-Za-z0-9_\-]{1,1024}", event_id):
         return ToolResult("Give the event's id from calendar_list.", error=True)
-    return await call(ctx, "GET", f"/events/{event_id}")
+    cal = await which(ctx, args.get("calendar"))
+    if isinstance(cal, ToolResult):
+        return cal
+    if not cal.writable:
+        return read_only(cal)
+    event = await call(ctx, "GET", f"{cal.events}/{event_id}")
+    return event if isinstance(event, ToolResult) else (cal, event)
 
 
 async def calendar_update(args: dict, ctx: ToolContext) -> ToolResult:
     tz = tz_of(ctx)
-    event = await _event(ctx, str(args.get("id", "")))
-    if isinstance(event, ToolResult):
-        return event
+    found = await _event(ctx, args)
+    if isinstance(found, ToolResult):
+        return found
+    cal, event = found
     ctx.task.read_calendar = True
 
     def new(key: str, current: str) -> str:
@@ -229,6 +308,7 @@ async def calendar_update(args: dict, ctx: ToolContext) -> ToolResult:
         str(args.get("notes") or event.get("description", "") or "").strip()[:MAX_TEXT],
         new("guests", current_guests),
     )
+    fields.append(Field("Calendar", cal.name, "info"))
     decision, refused = await guard.ask(ctx, "calendar", f"Change “{event.get('summary', 'this event')}”?", fields)
     if refused:
         return refused
@@ -236,7 +316,7 @@ async def calendar_update(args: dict, ctx: ToolContext) -> ToolResult:
     if isinstance(body, str):
         return ToolResult(f"Not changed: {body}. Ask the user.", error=True)
     sends = "all" if body["attendees"] or current_guests else "none"
-    done = await call(ctx, "PATCH", f"/events/{event['id']}", params={"sendUpdates": sends}, json=body)
+    done = await call(ctx, "PATCH", f"{cal.events}/{event['id']}", params={"sendUpdates": sends}, json=body)
     if isinstance(done, ToolResult):
         return done
     return ToolResult("Changed: " + describe(done, tz) + ("; guests were told." if sends == "all" else "."))
@@ -244,21 +324,22 @@ async def calendar_update(args: dict, ctx: ToolContext) -> ToolResult:
 
 async def calendar_delete(args: dict, ctx: ToolContext) -> ToolResult:
     tz = tz_of(ctx)
-    event = await _event(ctx, str(args.get("id", "")))
-    if isinstance(event, ToolResult):
-        return event
+    found = await _event(ctx, args)
+    if isinstance(found, ToolResult):
+        return found
+    cal, event = found
     ctx.task.read_calendar = True
     guests = [a.get("email", "") for a in event.get("attendees", []) if not a.get("self")]
-    fields = [Field("Event", describe(event, tz).split("] ", 1)[-1], "info")]
+    fields = [Field("Event", describe(event, tz).split("] ", 1)[-1], "info"), Field("Calendar", cal.name, "info")]
     if guests:
         fields.append(Field("Guests told", ", ".join(guests), "info"))
-    _, refused = await guard.ask(ctx, "calendar_delete", "Delete this event from your calendar?", fields)
+    _, refused = await guard.ask(ctx, "calendar_delete", f"Delete this event from {cal.label}?", fields)
     if refused:
         return refused
-    done = await call(ctx, "DELETE", f"/events/{event['id']}", params={"sendUpdates": "all" if guests else "none"})
+    done = await call(ctx, "DELETE", f"{cal.events}/{event['id']}", params={"sendUpdates": "all" if guests else "none"})
     if isinstance(done, ToolResult):
         return done
-    return ToolResult(f"Deleted “{event.get('summary', '')}” from the calendar.")
+    return ToolResult(f"Deleted “{event.get('summary', '')}” from {cal.label}.")
 
 
 WHEN = "Local time 'YYYY-MM-DD HH:MM', or 'YYYY-MM-DD' for a whole day"
@@ -268,7 +349,8 @@ def register(reg: Registry) -> None:
     reg.add(
         Tool(
             "calendar_list",
-            "The user's own Google Calendar: events from start to end (one day if no end), optionally matching "
+            "The user's Google Calendar (their own, or another of theirs by name): events from start to end (one "
+            "day if no end), optionally matching "
             "words. Returns ids, titles, times, places and guests. Use it for 'am I free…?', 'what's on…?', and "
             "before booking anything at a time.",
             params(
@@ -276,6 +358,7 @@ def register(reg: Registry) -> None:
                 start=string(WHEN),
                 end=string("Optional, the same format; a date means through the end of that day"),
                 query=string("Optional words to match, e.g. 'dentist'"),
+                calendar=CALENDAR_ARG,
             ),
             calendar_list,
         )
@@ -292,6 +375,7 @@ def register(reg: Registry) -> None:
                 location=string("Optional place or address"),
                 notes=string("Optional details, e.g. the booking reference"),
                 guests=string("Optional guests' email addresses, comma-separated"),
+                calendar=CALENDAR_ARG,
             ),
             calendar_add,
         )
@@ -309,6 +393,7 @@ def register(reg: Registry) -> None:
                 location=string("Optional new place"),
                 notes=string("Optional new details"),
                 guests=string("Optional: the full new guest list, comma-separated"),
+                calendar=string("The calendar the event is on, if not the user's own (as in calendar_list)"),
             ),
             calendar_update,
         )
@@ -317,7 +402,11 @@ def register(reg: Registry) -> None:
         Tool(
             "calendar_delete",
             "Delete an event from the user's calendar by its id from calendar_list.",
-            params(["id"], id=string("The event's id")),
+            params(
+                ["id"],
+                id=string("The event's id"),
+                calendar=string("The calendar the event is on, if not the user's own (as in calendar_list)"),
+            ),
             calendar_delete,
         )
     )

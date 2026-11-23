@@ -32,6 +32,7 @@ SCOPES = (
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/calendar.events",  # tools/calendar.py
+    "https://www.googleapis.com/auth/calendar.calendarlist.readonly",  # which calendars, by name
 )
 MAX_RESULTS = 10
 MAX_READ = 12_000

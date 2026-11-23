@@ -79,7 +79,8 @@ Setting it up takes about 15 minutes, once per household, on the computer:
      **Publish app** so it reads "In production" (in "Testing", Google ends every sign-in after 7 days; it stays
      "unverified", which is fine for a household of up to 100 people);
    - **Data access**: add the scopes `https://www.googleapis.com/auth/gmail.readonly`,
-     `https://www.googleapis.com/auth/gmail.compose` and `https://www.googleapis.com/auth/calendar.events`;
+     `https://www.googleapis.com/auth/gmail.compose`, `https://www.googleapis.com/auth/calendar.events` and
+     `https://www.googleapis.com/auth/calendar.calendarlist.readonly`;
    - **Clients**: create a client of type **Desktop app** and download its JSON file.
 2. `aha mail setup --client ~/Downloads/client_secret_….json` (it's stored encrypted; delete the download).
 3. For each person: `aha mail connect <person>`. They open the link it prints and sign in with Google; past

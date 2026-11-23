@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -27,6 +28,13 @@ EVENTS = {
     },
     "at-hb": {"ev9": {"id": "ev9", "summary": "Haibo's private thing", "start": {"date": "2026-11-26"}}},
 }
+FAMILY = "fam123@group.calendar.google.com"
+FAMILY_EVENTS = {"ev5": {"id": "ev5", "summary": "School play", "start": {"date": "2026-11-27"}}}
+CALENDARS = [
+    {"id": "fe@example.com", "summary": "fe@example.com", "accessRole": "owner", "primary": True},
+    {"id": FAMILY, "summary": "Family", "accessRole": "writer"},
+    {"id": "en.uk#holiday@group.v.calendar.google.com", "summary": "Holidays in the UK", "accessRole": "reader"},
+]
 
 
 class FakeCalendar:
@@ -45,8 +53,17 @@ class FakeCalendar:
             return httpx.Response(401)
         if not self.scoped:  # a token from before the calendar was asked for
             return httpx.Response(403, json={"error": {"message": "Request had insufficient authentication scopes."}})
-        path = request.url.path.removeprefix("/calendar/v3/calendars/primary")
         params = dict(request.url.params)
+        if request.url.path == "/calendar/v3/users/me/calendarList":
+            return httpx.Response(200, json={"items": CALENDARS})
+        raw = request.url.raw_path.decode().split("?")[0].removeprefix("/calendar/v3/calendars/")
+        cal_id, _, path = raw.partition("/")
+        path = "/" + path
+        if cal_id == quote(FAMILY, safe=""):
+            box = FAMILY_EVENTS
+        elif cal_id != "primary":
+            return httpx.Response(404)
+        self.calendar = cal_id
         if path == "/events" and request.method == "GET":
             q = params.get("q", "").lower()
             return httpx.Response(200, json={"items": [e for e in box.values() if q in json.dumps(e).lower()]})
@@ -98,7 +115,7 @@ async def test_adding_is_always_a_card_and_what_was_approved_is_what_is_saved(ca
     assert (method, path, params["sendUpdates"]) == ("POST", "/events", "none")
     assert body["summary"] == "Dinner at Flat Iron" and body["start"]["dateTime"].startswith("2026-11-27T20:00")
     assert body["end"]["dateTime"].startswith("2026-11-27T21:00")  # an hour, when no end was given
-    assert "Added to the calendar" in result.text and "approv" not in result.text and "card" not in result.text
+    assert "Added to your calendar" in result.text and "approv" not in result.text and "card" not in result.text
 
 
 async def test_guests_get_invitations_only_through_the_card(cal, two, config):  # noqa: F811
@@ -151,3 +168,28 @@ def test_calendar_changes_are_sends():
     """SPEC §5.2 rule 2: always a card, trusted sites or not."""
     assert decide(Action("send"), Facts(trusted={"google.com"})).outcome == "card"
     assert "https://www.googleapis.com/auth/calendar.events" in mail.SCOPES
+
+
+async def test_the_calendar_is_chosen_by_the_name_the_person_used(cal, two, config):  # noqa: F811
+    fe, _ = two
+    ctx = ctx_for(fe, config)
+    family = await calendar.calendar_list({"start": "2026-11-27", "calendar": "family calendar"}, ctx)
+    assert "School play" in family.text and "Family" in family.text and "Dentist" not in family.text
+    approvals = FakeApprovals(Decision(True, values=["Bake sale", "2026-11-29", "", "", "", "", "Family"]))
+    added = await calendar.calendar_add(
+        {"title": "Bake sale", "start": "2026-11-29", "calendar": "Family"}, ctx_for(fe, config, approvals)
+    )
+    assert approvals.asked[0].title == "Add this to the “Family” calendar?"
+    assert ("Calendar", "Family", "info") in approvals.asked[0].fields
+    assert cal.calendar == quote(FAMILY, safe="") and "Added to the “Family” calendar" in added.text
+    unknown = await calendar.calendar_list({"start": "2026-11-27", "calendar": "Work"}, ctx)
+    assert unknown.error and "“Family”" in unknown.text and "“Holidays in the UK”" in unknown.text
+    holidays = FakeApprovals()
+    ro = await calendar.calendar_add(
+        {"title": "x", "start": "2026-11-29", "calendar": "holidays"}, ctx_for(fe, config, holidays)
+    )
+    assert ro.error and "read-only" in ro.text and not holidays.asked  # never a card for what can't be done
+    moved = await calendar.calendar_delete(
+        {"id": "ev5", "calendar": "Family"}, ctx_for(fe, config, FakeApprovals(Decision(True, values=["", ""])))
+    )
+    assert "Deleted “School play” from the “Family” calendar" in moved.text
