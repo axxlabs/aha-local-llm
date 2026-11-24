@@ -43,6 +43,7 @@ class TaskState:
     # The task holds private data (SPEC §5.2): set by the registry after any tool declared `private` ran, and by
     # the browser when a page of a signed-in site shows. Tools never set it themselves.
     private: bool = False
+    ran: set[str] = field(default_factory=set)  # tools that ran without error in this task (set by the registry)
     secrets: list[str] = field(default_factory=list)  # values the person typed on a sign-in card: never shown again
     signed_in_sites: set[str] | None = None  # the sites the person signed in on (read once per task)
     sign_in_page: str = ""  # the site, when the latest page is a sign-in form (SPEC §3.4 "Signing in")
@@ -122,6 +123,8 @@ class Registry:
         except Exception as e:  # a failing tool must not end the task; the model can adjust
             log.exception("tool %s failed", name)
             return ToolResult(f"{name} failed: {type(e).__name__}: {str(e)[:300]}", error=True)
-        if tool.private and not result.error:  # it read the person's private data (SPEC §5.2): declared, not set
-            ctx.task.private = True
+        if not result.error:
+            ctx.task.ran.add(name)
+            if tool.private:  # it read the person's private data (SPEC §5.2): declared, not set
+                ctx.task.private = True
         return result

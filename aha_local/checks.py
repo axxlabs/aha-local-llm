@@ -15,6 +15,8 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from .tools.registry import TaskState
+
 HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*#*$", re.M)
 
 
@@ -94,23 +96,29 @@ def retry(instruction: str) -> str:
 
 @dataclass(frozen=True)
 class Draft:
+    """A draft answer and what the checks look at: the task's own state, read directly (never copied field by
+    field, so a new check needs nothing here)."""
+
     asked: str  # what the person said in this task
     answer: str
-    called: set[str]  # tools that ran without error in this task
-    can_sign_in: bool
-    sign_in_page: str = ""  # the site, when the last page the model saw is a sign-in form
-    login_tried: bool = False  # browser_login ran in this task
-    challenge_page: str = ""  # the site, when the last page the model saw shows an "are you human?" check
-    human_check_offered: bool = False  # browser_human_check ran in this task
-    blank_page: bool = False  # the last page the model saw is a new window's blank page (SPEC §3.4)
+    task: TaskState
+    can_sign_in: bool = False  # the browser is there, so browser_login is
+
+    @property
+    def called(self) -> set[str]:
+        """Tools that ran without error in this task (kept by the registry)."""
+        return self.task.ran
 
 
 @dataclass(frozen=True)
 class Check:
     name: str
     failed: Callable[[Draft], bool]
-    retry: str
+    retry: str | Callable[[Draft], str]  # what the model is told; a function when it depends on the draft
     log: str
+
+    def retry_for(self, d: Draft) -> str:
+        return self.retry(d) if callable(self.retry) else self.retry
 
 
 # Affirmative only: "I've forgotten", "Done, I deleted", "I'll no longer remember". "I haven't saved" and
@@ -191,7 +199,7 @@ SITE_RETRY = retry(
 
 def on_blank_page(d: Draft) -> bool:
     """The task ends on a new window's blank page: the model gave up instead of opening the site again."""
-    return d.blank_page
+    return d.task.blank_page
 
 
 BLANK_RETRY = retry(
@@ -296,12 +304,12 @@ CHECK_RETRY = retry(
 
 def ignores_sign_in_page(d: Draft) -> bool:
     """The task ends on a sign-in page and browser_login didn't run: the model didn't notice, or gave up."""
-    return d.can_sign_in and bool(d.sign_in_page) and not d.login_tried
+    return d.can_sign_in and bool(d.task.sign_in_page) and not d.task.login_tried
 
 
 def ignores_challenge(d: Draft) -> bool:
     """The task ends on a page with an "are you human?" check and browser_human_check didn't run."""
-    return d.can_sign_in and bool(d.challenge_page) and not d.human_check_offered
+    return d.can_sign_in and bool(d.task.challenge_page) and not d.task.human_check_offered
 
 
 CHALLENGE_RETRY = retry(
@@ -427,7 +435,7 @@ CLAIM_CHECKS = (
     Check(
         "sign_in_page",
         ignores_sign_in_page,
-        "",  # depends on the site: sign_in_page_retry
+        lambda d: sign_in_page_retry(d.task.sign_in_page),
         "draft answer left the person on a sign-in page without browser_login; asking the model to call it",
     ),
     Check(

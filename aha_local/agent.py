@@ -102,9 +102,12 @@ class _Counted:
     async def card(self, account: Account, card: dict) -> None:
         self.agent.session(account).sent += 1
         await self.agent.out.card(account, card)
+        await self.agent._typing_frame(account, False)  # waiting for the person now, not working (SPEC §3.3)
 
     async def state(self, account: Account, approval_id: str, state: str) -> None:
         await self.agent.out.state(account, approval_id, state)
+        if self.agent.is_running(account):  # answered: working again, said now rather than at the next tick
+            await self.agent._typing_frame(account, True, self.agent.queued(account))
 
     async def text(self, account: Account, text: str) -> None:
         self.agent.session(account).sent += 1
@@ -325,10 +328,10 @@ class Agent:
             text = "\n\n".join(pending)
 
     async def _typing(self, account: Account) -> None:
-        """While a reply is owed: "typing…", refreshed, except while the person owes us an approval answer."""
+        """While the task runs: whether Aha! is working, said every few seconds. The computer is the only source
+        for the app (SPEC §3.3): working, unless a card waits for the person."""
         while True:
-            if self.approvals.pending_for(account.address) is None:
-                await self._typing_frame(account, True, self.queued(account))
+            await self._typing_frame(account, self.owes_reply(account), self.queued(account))
             await asyncio.sleep(self.typing_every)
 
     async def _stop_typing(self, account: Account, typing: asyncio.Task) -> None:
@@ -481,7 +484,6 @@ class Agent:
         last = ""
         retried: set[str] = set()  # the checks that already sent a draft back (SPEC §3.5.1): once each
         can_sign_in = "browser_login" in self.registry.names()
-        called: set[str] = set()  # tools that ran without error in this task
         # Where numbers in the answer may come from: what the person said or saved, earlier answers, and pages
         # opened in this task. Search snippets don't count (SPEC §3.5).
         conv = account.load_context()
@@ -506,24 +508,14 @@ class Agent:
             log.info("model call: %d prompt tokens, %d cached", reply.prompt_tokens, reply.cached_tokens)
             account.transcript(model_record(self.llm.model, reply, ctx.task.secrets))
             if not reply.tool_calls:
-                draft = checks.Draft(
-                    text,
-                    reply.content or "",
-                    called,
-                    can_sign_in,
-                    ctx.task.sign_in_page,
-                    ctx.task.login_tried,
-                    ctx.task.challenge_page,
-                    ctx.task.human_check_offered,
-                    ctx.task.blank_page,
-                )
+                draft = checks.Draft(text, reply.content or "", ctx.task, can_sign_in)
                 failed = next((c for c in checks.CLAIM_CHECKS if c.name not in retried and c.failed(draft)), None)
                 if failed:
                     retried.add(failed.name)
                     log.info(failed.log)
                     account.transcript({"kind": "check", "name": failed.name})
                     task.append({"role": "assistant", "content": draft.answer})
-                    retry = failed.retry or checks.sign_in_page_retry(draft.sign_in_page)
+                    retry = failed.retry_for(draft)
                     task.append({"role": "user", "content": retry})
                     continue
                 if has_photo:
@@ -567,8 +559,6 @@ class Agent:
                         "error": result.error,
                     }
                 )
-                if not result.error:
-                    called.add(call.name)
                 if call.name not in UNSOURCED_TOOLS and not result.error:
                     sources.append(result.text)
                 task.append(

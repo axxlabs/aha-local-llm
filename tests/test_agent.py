@@ -226,18 +226,19 @@ async def test_cancel_words_stop_the_task(agent, llm, chat, registry):
 
 
 async def test_typing_while_a_reply_is_owed_but_not_while_an_approval_waits(agent, llm, chat):
+    """The computer is the only source of "working" (SPEC §3.3): it says so, and says when it isn't."""
     agent.typing_every = 0.02
     llm.call("memory_add", text="Wife is vegetarian")
     llm.answer("Noted.")
     await say(agent, "my wife is vegetarian")
     ask = await chat.next()
-    await asyncio.sleep(0.05)  # waiting on the person: no new typing frames
     during = len(chat.typed)
-    await asyncio.sleep(0.1)
-    assert len(chat.typed) == during
+    await asyncio.sleep(0.1)  # waiting on the person: the computer keeps saying it isn't working
+    assert chat.typed[during - 1] is False and set(chat.typed[during:]) <= {False}
     await say(agent, "ok", button=ask.buttons[0].id)
     await settle(agent)
     assert chat.typed[0] is True and chat.typed[-1] is False
+    assert True in chat.typed[during:]  # answered: working again, said straight away
     assert chat.texts() == [ask.text, "Noted."]  # no "On it…", no "Busy…"
 
 

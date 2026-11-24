@@ -13,6 +13,7 @@ import pytest
 
 from aha_local import approvals, checks
 from aha_local.tools import human, signins
+from aha_local.tools.registry import TaskState
 
 from .conftest import person, settle
 from .test_signin import PASSWORD, setup, start_sign_in  # noqa: F401
@@ -424,15 +425,17 @@ async def test_a_new_windows_blank_page_is_said_and_the_last_page_given(setup, l
 def test_a_site_action_claimed_without_a_browser_action_is_caught():
     """Seen: "add it back" → "Done, added back to your trolley" with no tool call at all."""
     claim = "Done — the bathroom tissue has been added back to your trolley."
-    draft = checks.Draft("err. add it back", claim, set(), True)
+    draft = checks.Draft("err. add it back", claim, TaskState(), True)
     failed = next(c for c in checks.CLAIM_CHECKS if c.failed(draft))
     assert failed.name == "site"
     # Looking isn't doing.
-    looked = checks.Draft("add it back", claim, {"browser_navigate", "browser_snapshot"}, True)
+    looked = checks.Draft("add it back", claim, TaskState(ran={"browser_navigate", "browser_snapshot"}), True)
     assert next(c for c in checks.CLAIM_CHECKS if c.failed(looked)).name == "site"
     # Done with a click: fine, and "remove" with "I've removed" isn't taken for a memory then.
-    clicked = checks.Draft("remove the toilet paper", "I've removed it from your trolley.", {"browser_click"}, True)
+    clicked = checks.Draft(
+        "remove the toilet paper", "I've removed it from your trolley.", TaskState(ran={"browser_click"}), True
+    )
     assert not any(c.failed(clicked) for c in checks.CLAIM_CHECKS)
     # Reading the trolley back isn't a claim of an action.
-    read = checks.Draft("read my trolley to me", "Your delivery slot is booked for Tuesday.", set(), True)
+    read = checks.Draft("read my trolley to me", "Your delivery slot is booked for Tuesday.", TaskState(), True)
     assert not any(c.failed(read) for c in checks.CLAIM_CHECKS)
