@@ -37,6 +37,20 @@ MAILBOXES = {
             "text": "Table for 2, Friday 27 November, 19:30. Ref FB-1234.",
         }
     },
+    "at-fe2": {
+        "m3fe0002": {
+            "threadId": "t3fe",
+            "snippet": "Your parcel from Evri is on its way",
+            "headers": {
+                "From": "Evri <noreply@evri.example>",
+                "To": "fe.work@example.com",
+                "Subject": "Parcel on its way",
+                "Date": "Sat 21 Nov 2026 08:00:00 +0000",
+                "Message-ID": "<p1@evri.example>",
+            },
+            "text": "Parcel EV-77 arrives Monday.",
+        }
+    },
     "at-hb": {
         "m2hb0001": {
             "threadId": "t2hb",
@@ -51,6 +65,7 @@ MAILBOXES = {
 class FakeGoogle:
     def __init__(self) -> None:
         self.sent: list[tuple[str, dict]] = []
+        self.sent_from: list[str] = []  # the access token each send used: which mailbox
         self.revoked: list[str] = []
         self.requests: list[httpx.Request] = []
 
@@ -59,7 +74,7 @@ class FakeGoogle:
         url = request.url
         if str(url).startswith(mail.TOKEN_URL):
             form = parse_qs(request.content.decode())
-            token = {"rt-fe": "at-fe", "rt-hb": "at-hb"}.get(form["refresh_token"][0])
+            token = {"rt-fe": "at-fe", "rt-fe2": "at-fe2", "rt-hb": "at-hb"}.get(form["refresh_token"][0])
             if not token:
                 return httpx.Response(400, json={"error": "invalid_grant"})
             return httpx.Response(200, json={"access_token": token, "expires_in": 3600})
@@ -97,6 +112,7 @@ class FakeGoogle:
             )
         if path in ("/messages/send", "/drafts") and request.method == "POST":
             self.sent.append((path, json.loads(request.content)))
+            self.sent_from.append(request.headers.get("authorization", "").removeprefix("Bearer "))
             return httpx.Response(200, json={"id": "sent1"})
         return httpx.Response(404)
 
@@ -269,3 +285,42 @@ def test_the_documents_feature_is_gone(registry, tmp_path):
     toml.write_text('[gateway]\nurl = "unix:/x"\npin = "p"\n[household]\nname = "Home"\ndocuments = "~/Docs"\n')
     config = Config.load(toml)
     assert not hasattr(config, "documents") and not hasattr(config, "documents_mount")
+
+
+async def test_several_accounts_are_all_searched_and_each_email_answers_from_its_own(google, two, config):
+    """SPEC §3.4 "Connections": a second Gmail account for the same person."""
+    fe, _ = two
+    mail.add_connection(fe, "gmail", "fe.work@example.com", "rt-fe2")
+    assert mail.addresses(fe) == ["fe@example.com", "fe.work@example.com"]
+    ctx = ctx_for(fe, config)
+    found = await mail.email_search({"query": ""}, ctx)
+    assert "Booking confirmed" in found.text and "Parcel on its way" in found.text  # both mailboxes
+    assert "[fe.work@example.com/m3fe0002]" in found.text and "Mailbox: fe.work@example.com" in found.text
+    only = await mail.email_search({"query": "", "mailbox": "work"}, ctx)
+    assert "Parcel on its way" in only.text and "Booking confirmed" not in only.text
+    read = await mail.email_read({"id": "fe.work@example.com/m3fe0002"}, ctx)
+    assert "EV-77" in read.text
+    assert (await mail.email_read({"id": "m3fe0002"}, ctx)).error  # a bare id is the first mailbox's: not there
+
+    approvals = FakeApprovals(
+        Decision(True, values=["fe.work@example.com", "noreply@evri.example", "", "Re: Parcel on its way", "Thanks"])
+    )
+    await mail.email_send(
+        {"to": "noreply@evri.example", "body": "Thanks", "reply_to": "fe.work@example.com/m3fe0002"},
+        ctx_for(fe, config, approvals),
+    )
+    assert approvals.asked[0].fields[0] == ("From", "fe.work@example.com", "text")  # the mailbox it arrived in
+    assert google.sent_from == ["at-fe2"] and google.sent[0][1]["threadId"] == "t3fe"
+
+    moved = FakeApprovals(Decision(True, values=["fe@example.com", "sam@example.com", "", "Hi", "Hello"]))
+    await mail.email_send({"to": "sam@example.com", "body": "Hello", "from": "work"}, ctx_for(fe, config, moved))
+    assert moved.asked[0].fields[0] == ("From", "fe.work@example.com", "text")
+    assert google.sent_from[-1] == "at-fe"  # the person changed From on the card: sent from that one
+    bad = FakeApprovals(Decision(True, values=["spy@example.com", "sam@example.com", "", "Hi", "Hello"]))
+    refused = await mail.email_send({"to": "sam@example.com", "body": "Hello"}, ctx_for(fe, config, bad))
+    assert refused.error and len(google.sent) == 2  # never from an address that isn't theirs
+
+    mail.add_connection(fe, "gmail", "fe.work@example.com", "rt-fe2")  # connecting again replaces, never doubles
+    assert mail.addresses(fe) == ["fe@example.com", "fe.work@example.com"]
+    assert await mail.disconnect(fe, "fe.work@example.com")
+    assert google.revoked == ["rt-fe2"] and mail.addresses(fe) == ["fe@example.com"]

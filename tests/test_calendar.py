@@ -26,6 +26,7 @@ EVENTS = {
             "location": "High St",
         }
     },
+    "at-fe2": {"ev7": {"id": "ev7", "summary": "Team offsite", "start": {"date": "2026-11-26"}}},
     "at-hb": {"ev9": {"id": "ev9", "summary": "Haibo's private thing", "start": {"date": "2026-11-26"}}},
 }
 FAMILY = "fam123@group.calendar.google.com"
@@ -37,6 +38,9 @@ CALENDARS = [
 ]
 
 
+WORK = {"id": "fe.work@example.com", "summary": "fe.work@example.com", "accessRole": "owner", "primary": True}
+
+
 class FakeCalendar:
     def __init__(self, scoped: bool = True) -> None:
         self.scoped = scoped
@@ -46,7 +50,9 @@ class FakeCalendar:
         if str(request.url).startswith(mail.TOKEN_URL):
             from urllib.parse import parse_qs
 
-            token = {"rt-fe": "at-fe", "rt-hb": "at-hb"}[parse_qs(request.content.decode())["refresh_token"][0]]
+            token = {"rt-fe": "at-fe", "rt-fe2": "at-fe2", "rt-hb": "at-hb"}[
+                parse_qs(request.content.decode())["refresh_token"][0]
+            ]
             return httpx.Response(200, json={"access_token": token, "expires_in": 3600})
         box = EVENTS.get(request.headers.get("authorization", "").removeprefix("Bearer "))
         if box is None:
@@ -54,7 +60,10 @@ class FakeCalendar:
         if not self.scoped:  # a token from before the calendar was asked for
             return httpx.Response(403, json={"error": {"message": "Request had insufficient authentication scopes."}})
         params = dict(request.url.params)
+        self.token = request.headers.get("authorization", "").removeprefix("Bearer ")
         if request.url.path == "/calendar/v3/users/me/calendarList":
+            if self.token == "at-fe2":
+                return httpx.Response(200, json={"items": [WORK]})
             return httpx.Response(200, json={"items": CALENDARS})
         raw = request.url.raw_path.decode().split("?")[0].removeprefix("/calendar/v3/calendars/")
         cal_id, _, path = raw.partition("/")
@@ -193,3 +202,21 @@ async def test_the_calendar_is_chosen_by_the_name_the_person_used(cal, two, conf
         {"id": "ev5", "calendar": "Family"}, ctx_for(fe, config, FakeApprovals(Decision(True, values=["", ""])))
     )
     assert "Deleted “School play” from the “Family” calendar" in moved.text
+
+
+async def test_with_two_accounts_both_calendars_show_and_each_is_chosen_by_its_address(cal, two, config):  # noqa: F811
+    fe, _ = two
+    mail.add_connection(fe, "gmail", "fe.work@example.com", "rt-fe2")
+    ctx = ctx_for(fe, config)
+    both = await calendar.calendar_list({"start": "2026-11-26"}, ctx)
+    assert "Dentist" in both.text and "Team offsite" in both.text
+    assert "your calendar (fe.work@example.com)" in both.text and "your calendar (fe@example.com)" in both.text
+    approvals = FakeApprovals(Decision(True, values=["Offsite dinner", "2026-11-26 19:00", "", "", "", "", "x"]))
+    await calendar.calendar_add(
+        {"title": "Offsite dinner", "start": "2026-11-26 19:00", "calendar": "fe.work@example.com"},
+        ctx_for(fe, config, approvals),
+    )
+    assert approvals.asked[0].title == "Add this to your calendar (fe.work@example.com)?"
+    assert cal.token == "at-fe2" and cal.writes[-1][:2] == ("POST", "/events")
+    family = await calendar.calendar_list({"start": "2026-11-27", "calendar": "Family"}, ctx)  # found in the first
+    assert "School play" in family.text and cal.token == "at-fe"

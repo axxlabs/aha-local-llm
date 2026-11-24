@@ -466,12 +466,12 @@ def cmd_mail(a) -> None:
         return
     if a.action == "status":
         for row in admin({"cmd": "mail_status"})["accounts"]:
-            print(f"{row['name']:<20} {row['email'] or '(not connected)'}")
+            print(f"{row['name']:<20} {', '.join(row.get('emails') or []) or '(not connected)'}")
         return
     if not a.account:
         die(f"Whose mail? aha mail {a.action} <person>")
     if a.action == "disconnect":
-        reply = admin({"cmd": "mail_disconnect", "account": a.account})
+        reply = admin({"cmd": "mail_disconnect", "account": a.account, "email": a.email or ""})
         print(
             "Disconnected."
             + (
@@ -499,7 +499,11 @@ def cmd_mail(a) -> None:
     )
     profile.raise_for_status()
     email = profile.json()["emailAddress"]
-    admin({"cmd": "mail_connect", "account": a.account, "email": email, "refresh_token": tokens["refresh_token"]})
+    done = admin(
+        {"cmd": "mail_connect", "account": a.account, "email": email, "refresh_token": tokens["refresh_token"]}
+    )
+    if len(done.get("emails") or []) > 1:
+        print(f"{a.account} now has {len(done['emails'])} accounts connected: {', '.join(done['emails'])}.")
     print(
         f"Connected {email} for {a.account}: their mail and calendar. Aha! can now read them, and sends, drafts "
         "or changes events only after they approve each one."
@@ -691,7 +695,11 @@ Then for each person: aha mail connect <person>""",
     s.add_argument("action", choices=["setup", "connect", "disconnect", "status"])
     s.add_argument("account", nargs="?", help="the person (for connect and disconnect)")
     s.add_argument("--client", help="for setup: the OAuth client JSON downloaded from Google Cloud")
-    s.add_argument("--email", help="for connect: suggest this Google account on the sign-in page")
+    s.add_argument(
+        "--email",
+        help="for connect: suggest this Google account on the sign-in page; for disconnect: only this address "
+        "(without it, every connected account of the person)",
+    )
     s.set_defaults(fn=cmd_mail)
     s = sub.add_parser("recovery-key", help="show the recovery code for your data key")
     s.add_argument("--show", action="store_true", help="really print it")

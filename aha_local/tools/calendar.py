@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import quote
 
 import httpx
@@ -37,22 +37,25 @@ class NoCalendar(Exception):
     pass
 
 
-async def api(ctx: ToolContext, method: str, path: str, **kw) -> dict:
-    token = await mail.access_token(ctx)
+async def api(ctx: ToolContext, method: str, path: str, conn: dict | None = None, **kw) -> dict:
+    conn = conn or mail.pick(ctx.account)
+    if conn is None:
+        raise mail.NotConnected
+    token = await mail.access_token(ctx, conn)
     async with mail._http() as http:
         r = await http.request(method, API + path, headers={"Authorization": f"Bearer {token}"}, **kw)
     if r.status_code == 401:
-        mail.forget_token(ctx.account.id)
+        mail.forget_token(ctx.account.id, conn["email"])
     if r.status_code == 403 and "insufficient" in r.text.lower():
         raise NoCalendar
     r.raise_for_status()
     return r.json() if r.content else {}
 
 
-async def call(ctx: ToolContext, method: str, path: str, **kw) -> dict | ToolResult:
+async def call(ctx: ToolContext, method: str, path: str, conn: dict | None = None, **kw) -> dict | ToolResult:
     """The API call, or the result that explains why it couldn't be made."""
     try:
-        return await api(ctx, method, path, **kw)
+        return await api(ctx, method, path, conn, **kw)
     except mail.NotConnected:
         return ToolResult(mail.NOT_CONNECTED, error=True)
     except NoCalendar:
@@ -69,6 +72,8 @@ class Cal:
     id: str
     name: str
     writable: bool = True
+    conn: dict | None = field(default=None, compare=False)  # the connected account it's in (SPEC §3.4)
+    several: bool = False  # the person has several connected accounts: say which one
 
     @property
     def events(self) -> str:
@@ -76,24 +81,42 @@ class Cal:
 
     @property
     def label(self) -> str:
-        return "your calendar" if self.id == "primary" else f"the “{self.name}” calendar"
+        if self.id == "primary":
+            return f"your calendar ({self.conn['email']})" if self.several and self.conn else "your calendar"
+        return f"the “{self.name}” calendar"
+
+
+def own(ctx: ToolContext, conn: dict | None = None) -> Cal:
+    """The primary calendar of a connected account (the first one by default)."""
+    conn = conn or mail.pick(ctx.account)
+    several = len(mail.connections(ctx.account)) > 1
+    return Cal("primary", conn["email"] if conn else "your calendar", True, conn, several)
 
 
 async def which(ctx: ToolContext, name) -> Cal | ToolResult:
     """The calendar the person named ("Family"), or their own when none was named."""
     name = " ".join(str(name or "").split())
     if name.lower() in OWN:
-        return Cal("primary", "your calendar")
-    found = await call(ctx, "GET", "/users/me/calendarList", params={"maxResults": 250})
-    if isinstance(found, ToolResult):
-        return found
-    cals = [
-        Cal(
-            c["id"], c.get("summaryOverride") or c.get("summary") or c["id"], c.get("accessRole") in ("owner", "writer")
-        )
-        for c in found.get("items", [])
-        if isinstance(c, dict) and c.get("id")
-    ]
+        return own(ctx)
+    conns = mail.connections(ctx.account)
+    if not conns:
+        return ToolResult(mail.NOT_CONNECTED, error=True)
+    several = len(conns) > 1
+    cals: list[Cal] = []
+    for conn in conns:  # the calendars of every connected account (SPEC §3.4 "Connections")
+        found = await call(ctx, "GET", "/users/me/calendarList", conn, params={"maxResults": 250})
+        if isinstance(found, ToolResult):
+            if not several:
+                return found
+            continue
+        for c in found.get("items", []):
+            if not (isinstance(c, dict) and c.get("id")):
+                continue
+            if c.get("primary"):
+                cals.append(own(ctx, conn))
+                continue
+            title = c.get("summaryOverride") or c.get("summary") or c["id"]
+            cals.append(Cal(c["id"], title, c.get("accessRole") in ("owner", "writer"), conn, several))
     wanted = name.lower().removesuffix(" calendar").strip()
     for match in (
         [c for c in cals if c.name.lower() == wanted],
@@ -115,7 +138,10 @@ def read_only(cal: Cal) -> ToolResult:
     )
 
 
-CALENDAR_ARG = string("Optional: the calendar's name as the user said it, e.g. 'Family'; their own if not given")
+CALENDAR_ARG = string(
+    "Optional: the calendar's name as the user said it, e.g. 'Family', or one of their addresses for that account's "
+    "own calendar; their own (first account) if not given"
+)
 
 
 # ---- times
@@ -186,18 +212,26 @@ async def calendar_list(args: dict, ctx: ToolContext) -> ToolResult:
     query |= {"orderBy": "startTime", "maxResults": MAX_EVENTS}
     if text := " ".join(str(args.get("query", "") or "").split()):
         query["q"] = text
-    cal = await which(ctx, args.get("calendar"))
-    if isinstance(cal, ToolResult):
-        return cal
-    found = await call(ctx, "GET", cal.events, params=query)
-    if isinstance(found, ToolResult):
-        return found
+    if not args.get("calendar") and len(mail.connections(ctx.account)) > 1:
+        cals: list[Cal] | ToolResult = [own(ctx, c) for c in mail.connections(ctx.account)]  # each account's own
+    else:
+        cal = await which(ctx, args.get("calendar"))
+        cals = cal if isinstance(cal, ToolResult) else [cal]
+    if isinstance(cals, ToolResult):
+        return cals
+    out = []
+    for cal in cals:
+        found = await call(ctx, "GET", cal.events, cal.conn, params=query)
+        if isinstance(found, ToolResult):
+            return found
+        events = found.get("items", [])
+        where = "" if cal.id == "primary" and not cal.several else f" in {cal.label}"
+        if not events:
+            out.append(f"No events{where} from {shown(start)} to {shown(end)}.")
+        else:
+            out.append((f"Events{where}:\n" if where else "") + "\n".join(describe(e, tz) for e in events))
     ctx.task.read_calendar = True  # the task now holds private data (SPEC §5.2)
-    events = found.get("items", [])
-    where = "" if cal.id == "primary" else f" in {cal.label}"
-    if not events:
-        return ToolResult(f"No events{where} from {shown(start)} to {shown(end)}.")
-    return ToolResult((f"Events{where}:\n" if where else "") + "\n".join(describe(e, tz) for e in events))
+    return ToolResult("\n\n".join(out))
 
 
 # ---- changing (a send: always a card, SPEC §5.2)
@@ -261,7 +295,7 @@ async def calendar_add(args: dict, ctx: ToolContext) -> ToolResult:
     if isinstance(body, str):
         return ToolResult(f"Not added: {body}. Ask the user.", error=True)
     sends = "all" if body["attendees"] else "none"
-    made = await call(ctx, "POST", cal.events, params={"sendUpdates": sends}, json=body)
+    made = await call(ctx, "POST", cal.events, cal.conn, params={"sendUpdates": sends}, json=body)
     if isinstance(made, ToolResult):
         return made
     return ToolResult(
@@ -279,7 +313,7 @@ async def _event(ctx: ToolContext, args: dict) -> tuple[Cal, dict] | ToolResult:
         return cal
     if not cal.writable:
         return read_only(cal)
-    event = await call(ctx, "GET", f"{cal.events}/{event_id}")
+    event = await call(ctx, "GET", f"{cal.events}/{event_id}", cal.conn)
     return event if isinstance(event, ToolResult) else (cal, event)
 
 
@@ -316,7 +350,7 @@ async def calendar_update(args: dict, ctx: ToolContext) -> ToolResult:
     if isinstance(body, str):
         return ToolResult(f"Not changed: {body}. Ask the user.", error=True)
     sends = "all" if body["attendees"] or current_guests else "none"
-    done = await call(ctx, "PATCH", f"{cal.events}/{event['id']}", params={"sendUpdates": sends}, json=body)
+    done = await call(ctx, "PATCH", f"{cal.events}/{event['id']}", cal.conn, params={"sendUpdates": sends}, json=body)
     if isinstance(done, ToolResult):
         return done
     return ToolResult("Changed: " + describe(done, tz) + ("; guests were told." if sends == "all" else "."))
@@ -336,7 +370,9 @@ async def calendar_delete(args: dict, ctx: ToolContext) -> ToolResult:
     _, refused = await guard.ask(ctx, "calendar_delete", f"Delete this event from {cal.label}?", fields)
     if refused:
         return refused
-    done = await call(ctx, "DELETE", f"{cal.events}/{event['id']}", params={"sendUpdates": "all" if guests else "none"})
+    done = await call(
+        ctx, "DELETE", f"{cal.events}/{event['id']}", cal.conn, params={"sendUpdates": "all" if guests else "none"}
+    )
     if isinstance(done, ToolResult):
         return done
     return ToolResult(f"Deleted “{event.get('summary', '')}” from {cal.label}.")

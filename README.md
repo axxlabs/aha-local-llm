@@ -86,8 +86,9 @@ Setting it up takes about 15 minutes, once per household, on the computer:
 3. For each person: `aha mail connect <person>`. They open the link it prints and sign in with Google; past
    "Google hasn't verified this app" (Advanced → Go to Aha!), they tick every permission (mail and calendar). Someone connected before the calendar existed runs
    `aha mail connect <person>` again to add it. On a phone, the last
-   page won't load: copy its address into the terminal. `aha mail status` shows who's connected;
-   `aha mail disconnect <person>` revokes it.
+   page won't load: copy its address into the terminal. Run it again with another Google account to add a second one for the same person: Aha! searches
+   all of them, and the email card shows which address it sends from. `aha mail status` shows who's connected;
+   `aha mail disconnect <person> [--email <address>]` revokes one (or all).
 
 If Aha! later says email isn't connected for someone who had connected (after a password change, removing
 the app in their Google account, or six months unused), run `aha mail connect <person>` again.

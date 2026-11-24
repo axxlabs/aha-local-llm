@@ -196,7 +196,7 @@ class Service:
         if cmd == "mail_status":
             out = []
             for a in self.accounts.all():
-                out.append({"name": a.label, "email": mail.address(a)})
+                out.append({"name": a.label, "email": mail.address(a), "emails": mail.addresses(a)})
             return {"ok": True, "accounts": out}
         acct = self.accounts.find(str(req.get("account", "")))
         needs_account = ("devices", "revoke", "memory_list", "memory_import", "export", "rename", "delete")
@@ -241,11 +241,13 @@ class Service:
             email, token = str(req.get("email", "")), str(req.get("refresh_token", ""))
             if "@" not in email or not token:
                 return {"ok": False, "error": "missing the address or the token"}
-            self.vault.write_json(acct.dir / "mail.json", {"provider": "gmail", "email": email, "refresh_token": token})
-            mail.forget_token(acct.id)
-            return {"ok": True}
+            mail.add_connection(acct, "gmail", email, token)  # another account, or new permissions for this one
+            return {"ok": True, "emails": mail.addresses(acct)}
         if cmd == "mail_disconnect":
-            return {"ok": True, "revoked": await mail.disconnect(acct)}
+            email = str(req.get("email", "") or "")
+            if email and email.lower() not in (e.lower() for e in mail.addresses(acct)):
+                return {"ok": False, "error": f"{email} isn't connected for {acct.label} (see `aha mail status`)"}
+            return {"ok": True, "revoked": await mail.disconnect(acct, email)}
         if cmd == "delete":
             for dev in list(acct.devices):
                 await self.channel.revoke(acct, dev)

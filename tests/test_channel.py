@@ -459,28 +459,32 @@ def test_a_reply_never_outgrows_a_message():
 
 
 async def test_settings_show_and_disconnect_the_persons_email(tmp_path, monkeypatch):
-    """Settings → Connections (SPEC §7.4): the address only, never the token; Disconnect revokes it."""
+    """Settings → Connections (SPEC §7.4): the addresses only, never a token; Disconnect revokes one."""
     from aha_local.tools import mail
 
     revoked = []
 
-    async def disconnect(account):
-        revoked.append(account.name)
-        (account.dir / "mail.json").unlink()
+    async def revoke(account, email=""):
+        revoked.append(email)
+        mail._save(account, [c for c in mail.connections(account) if c["email"] != email])
         return True
 
-    monkeypatch.setattr(mail, "disconnect", disconnect)
+    monkeypatch.setattr(mail, "disconnect", revoke)
     rig = Rig(tmp_path)
     _, phone = await rig.pair()
     await phone.send({"t": "hello", "name": "P"})
     phone.inbox()
     acct = rig.accounts.find("Ana")
     await phone.send({"t": "connections_request"})
-    assert phone.inbox() == [{"t": "connections", "email": ""}]
-    acct.vault.write_json(
+    assert phone.inbox() == [{"t": "connections", "email": "", "emails": []}]
+    acct.vault.write_json(  # one connection, as stored before there could be several
         acct.dir / "mail.json", {"provider": "gmail", "email": "ana@example.com", "refresh_token": "rt"}
     )
+    mail.add_connection(acct, "gmail", "ana.work@example.com", "rt2")
     await phone.send({"t": "connections_request"})
-    assert phone.inbox() == [{"t": "connections", "email": "ana@example.com"}]
-    await phone.send({"t": "email_disconnect"})
-    assert phone.inbox() == [{"t": "connections", "email": ""}] and revoked == ["Ana"]
+    both = ["ana@example.com", "ana.work@example.com"]
+    assert phone.inbox() == [{"t": "connections", "email": "ana@example.com", "emails": both}]
+    assert b"rt2" not in (acct.dir / "mail.json").read_bytes()
+    await phone.send({"t": "email_disconnect", "email": "ana.work@example.com"})
+    assert phone.inbox() == [{"t": "connections", "email": "ana@example.com", "emails": ["ana@example.com"]}]
+    assert revoked == ["ana.work@example.com"]

@@ -429,10 +429,11 @@ class Channel:
             await reply({"t": "browser", "sites": browser_list(account)})
         elif t in ("connections_request", "email_disconnect"):
             # Settings → Connections (SPEC §7.4): what this person connected Aha! to. The address only, never a token.
+            email = clean_text(msg.get("email"), 320) or ""
             if t == "email_disconnect" and mail.address(account):
-                await mail.disconnect(account)
-                account.audit({"email_disconnected_in_settings": True})
-            await reply({"t": "connections", "email": mail.address(account)})
+                await mail.disconnect(account, email)  # one address; every one when none is given (older apps)
+                account.audit({"email_disconnected_in_settings": email or "all"})
+            await reply({"t": "connections", "email": mail.address(account), "emails": mail.addresses(account)})
         elif t == "memory_forget":
             # Settings → What Aha! remembers: the person's own action, so no card (SPEC §5.4).
             memory_id = clean_text(msg.get("id"), 64)
