@@ -72,16 +72,18 @@ SAFE_KEYS = {
 # are the person's own messages, so a page of one makes the task hold private data.
 MESSAGE_SITES = {"whatsapp.com"}
 MESSAGE_BOX = re.compile(r"\btype a message\b|^message\b|\bmensagem\b|\bescreva\b", re.I)
+SEARCH_BOX = re.compile(r"\bsearch\b|\bpesquis|\bbusca|\bbuscar\b|\bsuche\b|\brecherch", re.I)
 
 
 def sends_message(name: str, site: str, labels: list[str]) -> bool:
-    """Typing on a messaging site that goes into its message box (or a typed key, which goes to wherever the focus
-    is): that sends a message."""
+    """Typing on a messaging site sends a message, unless it's clearly into the search box: decided from the page's
+    own labels, on the safe side (a renamed or translated message box is still a send). A typed key goes wherever
+    the focus is: a send too."""
     if site not in MESSAGE_SITES:
         return False
     if name == "browser_press_key":
         return True
-    return any(MESSAGE_BOX.search(label) and "search" not in label.lower() for label in labels)
+    return not labels or not all(label and SEARCH_BOX.search(label) for label in labels)
 
 
 def offered(name: str) -> bool:

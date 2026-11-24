@@ -236,3 +236,15 @@ async def test_private_data_is_declared_on_the_tool_and_set_by_the_registry():
         "reads_private",
         "reads_private_but_fails",
     }
+
+
+def test_on_a_messaging_site_typing_is_a_send_unless_clearly_the_search_box():
+    """SPEC §5.2: on the safe side, so a renamed or translated message box is still a card."""
+    from aha_local.policy.browser import sends_message
+
+    for labels in (["Type a message"], ["Digite uma mensagem"], ["Composer"], [""], []):
+        assert sends_message("browser_type", "whatsapp.com", labels), labels
+    for labels in (["Search input textbox"], ["Pesquisar ou começar uma nova conversa"]):
+        assert not sends_message("browser_type", "whatsapp.com", labels), labels
+    assert sends_message("browser_press_key", "whatsapp.com", [])  # a key goes wherever the focus is
+    assert not sends_message("browser_type", "waitrose.com", ["Type a message"])  # not a messaging site
