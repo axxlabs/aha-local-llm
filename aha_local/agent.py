@@ -584,7 +584,7 @@ class Agent:
                     task.append({"role": "assistant", "content": reply.content or ""})
                     task.append({"role": "user", "content": checks.retry_prompt(missing)})
                     continue
-                return (*finish(reply.content or "", sources), text)
+                return (*finish(reply.content or "", sources, bool(retried), today), text)
             last = reply.content or last
             task.append(
                 {
@@ -633,7 +633,7 @@ class Agent:
                             ],
                         }
                     )
-        return (*finish(f"{messages.TOO_MANY_STEPS}\n{last}".strip(), sources), text)
+        return (*finish(f"{messages.TOO_MANY_STEPS}\n{last}".strip(), sources, bool(retried), today), text)
 
     async def _fold(self, account: Account, conv: dict, prompt: list[dict] | None = None, answer: str = "") -> None:
         """Between tasks only: fold the oldest turns into the summary (SPEC §4.4). Asked at the end of the task's
@@ -664,12 +664,18 @@ class Agent:
 UNSOURCED_TOOLS = {"web_search"}  # snippets are leads, not sources
 
 
-def finish(answer: str, sources: list[str]) -> tuple[str, bool]:
-    """App formatting, and a visible warning for numbers no opened page supports.
+def finish(answer: str, sources: list[str], retried: bool = False, today: dt.date | None = None) -> tuple[str, bool]:
+    """App formatting, fixes in code (talk about a draft after a check, a wrong weekday), and a visible warning for
+    numbers no opened page supports.
 
     Returns the answer and whether it passed: only answers that passed count as sources later.
     """
     answer = checks.chat_format(answer)
+    if retried:
+        answer = checks.drop_draft_talk(answer)
+    answer, wrong = checks.fix_weekdays(answer, today or dt.date.today())
+    if wrong:
+        log.info("fixed %d weekday(s) in the answer", wrong)
     missing = checks.unverified(answer, sources)
     if missing:
         log.info("answer had %d unconfirmed number(s)", len(missing))

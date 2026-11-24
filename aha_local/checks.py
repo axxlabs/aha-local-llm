@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -466,3 +467,75 @@ def retry_prompt(values: list[str]) -> str:
 def warning(values: list[str]) -> str:
     shown = ", ".join(values[:5]) + ("…" if len(values) > 5 else "")
     return f"{WARNING_MARK}: {shown}. Please check before relying on it._"
+
+
+# ---- fixed in code, after the checks (SPEC §3.5.1)
+
+_WD = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+_WD_RE = r"(Mon(?:day)?|Tue(?:s|sday)?|Wed(?:nesday)?|Thu(?:r|rs|rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)"
+_MON = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+_MON_RE = (
+    r"(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t|tember)?"
+    r"|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+)
+DAY_FIRST = re.compile(rf"\b{_WD_RE}\.?,?\s+(\d{{1,2}})(?:st|nd|rd|th)?\s+{_MON_RE}\b(?:\s+(\d{{4}}))?", re.I)
+MONTH_FIRST = re.compile(rf"\b{_WD_RE}\.?,?\s+{_MON_RE}\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?\b(?:,?\s+(\d{{4}}))?", re.I)
+
+
+def _nearest(today: dt.date, month: int, day: int, year: int | None) -> dt.date | None:
+    """The date meant: in the year given, else the one nearest today (a week list spans a new year)."""
+    years = [year] if year else [today.year - 1, today.year, today.year + 1]
+    options = []
+    for y in years:
+        try:
+            options.append(dt.date(y, month, day))
+        except ValueError:
+            continue
+    return min(options, key=lambda d: abs((d - today).days)) if options else None
+
+
+def _as(word: str, wd: int) -> str:
+    """The right weekday, written like the wrong one was (Sat → Sun, Saturday → Sunday, SAT → SUN)."""
+    name = _WD[wd] if len(word.rstrip(".")) > 4 else _WD[wd][:3]  # "Tues"/"Thurs" are short forms too
+    if word.isupper():
+        return name.upper()
+    return name.capitalize() if word[0].isupper() else name
+
+
+def _wd_of(word: str) -> int:
+    return next(i for i, w in enumerate(_WD) if w.startswith(word.lower().rstrip(".")[:3]))
+
+
+def fix_weekdays(answer: str, today: dt.date) -> tuple[str, int]:
+    """A weekday next to a date that's another day is corrected (seen: "Sat 29 Nov" for Sunday 29 November): the
+    date comes from the data, the weekday is the model's own. Returns the answer and how many were fixed."""
+    fixed = 0
+
+    def repair(m: re.Match, day: str, month: str, year: str | None) -> str:
+        nonlocal fixed
+        word = m.group(1)
+        d = _nearest(today, _MON.index(month[:3].lower()) + 1, int(day), int(year) if year else None)
+        if d is None or d.weekday() == _wd_of(word):
+            return m.group(0)
+        fixed += 1
+        return _as(word, d.weekday()) + m.group(0)[len(word) :]
+
+    answer = DAY_FIRST.sub(lambda m: repair(m, m.group(2), m.group(3), m.group(4)), answer)
+    answer = MONTH_FIRST.sub(lambda m: repair(m, m.group(3), m.group(2), m.group(4)), answer)
+    return answer, fixed
+
+
+# After a draft went back (a check), the model sometimes talks about it anyway, though told not to: "The earlier
+# times… were guesses — I removed them". Such lines are dropped: the person never saw the draft.
+ABOUT_DRAFT = re.compile(
+    r"\b(?:(?:the|my)\s+(?:earlier|previous|first|last)\s+(?:answer|draft|reply|response|version|times|numbers)"
+    r"|earlier\s+(?:times|numbers|figures)|(?:were|was)\s+(?:guess(?:es|ed)?|unconfirmed)"
+    r"|i\s+(?:removed|dropped)\s+(?:them|those|these|the\s+\w+)\s+from\s+the\s+answer"
+    r"|aha check)\b",
+    re.I,
+)
+
+
+def drop_draft_talk(answer: str) -> str:
+    lines = [line for line in answer.splitlines() if not ABOUT_DRAFT.search(line)]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
