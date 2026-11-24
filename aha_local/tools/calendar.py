@@ -93,17 +93,14 @@ def own(ctx: ToolContext, conn: dict | None = None) -> Cal:
     return Cal("primary", conn["email"] if conn else "your calendar", True, conn, several)
 
 
-async def which(ctx: ToolContext, name) -> Cal | ToolResult:
-    """The calendar the person named ("Family"), or their own when none was named."""
-    name = " ".join(str(name or "").split())
-    if name.lower() in OWN:
-        return own(ctx)
+async def calendars(ctx: ToolContext) -> list[Cal] | ToolResult:
+    """Every calendar of every connected account (SPEC §3.4 "Connections"); the own ones named by their address."""
     conns = mail.connections(ctx.account)
     if not conns:
         return ToolResult(mail.NOT_CONNECTED, error=True)
     several = len(conns) > 1
     cals: list[Cal] = []
-    for conn in conns:  # the calendars of every connected account (SPEC §3.4 "Connections")
+    for conn in conns:
         found = await call(ctx, "GET", "/users/me/calendarList", conn, params={"maxResults": 250})
         if isinstance(found, ToolResult):
             if not several:
@@ -117,6 +114,17 @@ async def which(ctx: ToolContext, name) -> Cal | ToolResult:
                 continue
             title = c.get("summaryOverride") or c.get("summary") or c["id"]
             cals.append(Cal(c["id"], title, c.get("accessRole") in ("owner", "writer"), conn, several))
+    return cals
+
+
+async def which(ctx: ToolContext, name) -> Cal | ToolResult:
+    """The calendar the person named ("Family"), or their own when none was named."""
+    name = " ".join(str(name or "").split())
+    if name.lower() in OWN:
+        return own(ctx)
+    cals = await calendars(ctx)
+    if isinstance(cals, ToolResult):
+        return cals
     wanted = name.lower().removesuffix(" calendar").strip()
     for match in (
         [c for c in cals if c.name.lower() == wanted],
@@ -177,8 +185,25 @@ def shown(value: dt.datetime | dt.date) -> str:
     return value.strftime("%Y-%m-%d %H:%M") if isinstance(value, dt.datetime) else value.isoformat()
 
 
+def weekday(text: str) -> str:
+    """'2026-11-29 18:00' → 'Sun 2026-11-29 18:00': the day said, so a wrong date shows (seen: "Saturday 29
+    November" for a Sunday)."""
+    try:
+        return f"{dt.date.fromisoformat(text[:10]).strftime('%a')} {text}"
+    except ValueError:
+        return text
+
+
+def day_field(start: str) -> Field:
+    """Which day it is, on the card, in words: the person sees at once if it's the wrong one."""
+    try:
+        return Field("Day", dt.date.fromisoformat(start.strip()[:10]).strftime("%A %d %B %Y"), "info")
+    except ValueError:
+        return Field("Day", "?", "info")
+
+
 def describe(event: dict, tz) -> str:
-    start, end = from_api(event.get("start", {}), tz), from_api(event.get("end", {}), tz)
+    start, end = weekday(from_api(event.get("start", {}), tz)), from_api(event.get("end", {}), tz)
     parts = [f"[{event.get('id', '')}] {event.get('summary', '(no title)')}: {start} to {end}"]
     if event.get("location"):
         parts.append(f"at {event['location']}")
@@ -285,7 +310,7 @@ async def calendar_add(args: dict, ctx: ToolContext) -> ToolResult:
         str(args.get("notes", "") or "").strip()[:MAX_TEXT],
         ", ".join(guests_of(str(args.get("guests", "") or "")) or []),
     )
-    fields.append(Field("Calendar", cal.name, "info"))
+    fields += [Field("Calendar", cal.name, "info"), day_field(fields[1].value)]
     invite = " and invite the guests" if fields[5].value else ""
     decision, refused = await guard.ask(ctx, "calendar", f"Add this to {cal.label}{invite}?", fields)
     if refused:
@@ -303,17 +328,35 @@ async def calendar_add(args: dict, ctx: ToolContext) -> ToolResult:
 
 
 async def _event(ctx: ToolContext, args: dict) -> tuple[Cal, dict] | ToolResult:
-    """The event and its calendar, read from Google: the card shows what's really there."""
+    """The event and its calendar, read from Google: the card shows what's really there. Looked for in the calendar
+    named; when it isn't there, in every calendar of theirs (seen: an event in "Family" moved with no calendar
+    named got "not found", and the model added a copy instead)."""
     event_id = str(args.get("id", ""))
     if not re.fullmatch(r"[A-Za-z0-9_\-]{1,1024}", event_id):
         return ToolResult("Give the event's id from calendar_list.", error=True)
     cal = await which(ctx, args.get("calendar"))
     if isinstance(cal, ToolResult):
         return cal
+    event = await call(ctx, "GET", f"{cal.events}/{event_id}", cal.conn)
+    if isinstance(event, ToolResult) and "HTTP 404" in event.text:
+        everywhere = await calendars(ctx)
+        for other in everywhere if isinstance(everywhere, list) else []:
+            if other.id == cal.id and other.conn == cal.conn:
+                continue
+            found = await call(ctx, "GET", f"{other.events}/{event_id}", other.conn)
+            if not isinstance(found, ToolResult) and found.get("status") != "cancelled":
+                cal, event = other, found
+                break
+    if isinstance(event, ToolResult):
+        if "HTTP 404" in event.text:
+            return ToolResult(
+                "No event has that id in any of the user's calendars. Find it with calendar_list; don't add a new one.",
+                error=True,
+            )
+        return event
     if not cal.writable:
         return read_only(cal)
-    event = await call(ctx, "GET", f"{cal.events}/{event_id}", cal.conn)
-    return event if isinstance(event, ToolResult) else (cal, event)
+    return cal, event
 
 
 async def calendar_update(args: dict, ctx: ToolContext) -> ToolResult:
@@ -340,7 +383,7 @@ async def calendar_update(args: dict, ctx: ToolContext) -> ToolResult:
         str(args.get("notes") or event.get("description", "") or "").strip()[:MAX_TEXT],
         new("guests", current_guests),
     )
-    fields.append(Field("Calendar", cal.name, "info"))
+    fields += [Field("Calendar", cal.name, "info"), day_field(fields[1].value)]
     decision, refused = await guard.ask(ctx, "calendar", f"Change “{event.get('summary', 'this event')}”?", fields)
     if refused:
         return refused

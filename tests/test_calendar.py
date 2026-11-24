@@ -224,3 +224,31 @@ async def test_with_two_accounts_both_calendars_show_and_each_is_chosen_by_its_a
     assert cal.token == "at-fe2" and cal.writes[-1][:2] == ("POST", "/events")
     family = await call("calendar_list", {"start": "2026-11-27", "calendar": "Family"}, ctx)  # found in the first
     assert "School play" in family.text and cal.token == "at-fe"
+
+
+async def test_an_event_in_another_calendar_is_found_and_moved_not_copied(cal, two, config):  # noqa: F811
+    """Seen: "move it to this Saturday" called calendar_update with no calendar; the event was in "Family", so it got
+    "not found" and the model added a copy. Now it's looked for in every calendar of theirs."""
+    fe, _ = two
+    change = FakeApprovals(Decision(True, values=["School play", "2026-11-28", "", "", "", "", "Family", "x"]))
+    await calendar.calendar_update({"id": "ev5", "start": "2026-11-28"}, ctx_for(fe, config, change))  # no calendar
+    card = change.asked[0]
+    assert card.title == "Change “School play”?" and ("Calendar", "Family", "info") in card.fields
+    assert ("Day", "Saturday 28 November 2026", "info") in card.fields  # the day in words, on the card
+    assert cal.writes[-1][:2] == ("PATCH", "/events/ev5") and cal.calendar == quote(FAMILY, safe="")
+    missing = await calendar.calendar_update({"id": "nosuchevent"}, ctx_for(fe, config))
+    assert missing.error and "don't add a new one" in missing.text
+    listed = await call("calendar_list", {"start": "2026-11-27", "calendar": "Family"}, ctx_for(fe, config))
+    assert "School play: Fri 2026-11-27" in listed.text  # the weekday, said
+
+
+def test_the_context_lists_the_coming_days_with_their_weekdays():
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    from aha_local import context
+
+    now = dt.datetime(2026, 11, 24, 15, 0, tzinfo=ZoneInfo("Europe/London"))  # a Tuesday
+    days = context.days_ahead(now)
+    assert days.startswith("Wed 2026-11-25, Thu 2026-11-26, Fri 2026-11-27, Sat 2026-11-28, Sun 2026-11-29")
+    assert days.count(",") == 13
