@@ -72,8 +72,16 @@ def signature(name: str) -> str:
     return f"Written by Aha!\n- {name}'s Private AI Assistant"
 
 
-def signed(text: str, name: str) -> str:
-    """A message to someone else, ending with the signature on its own lines (never twice). On a messaging site
-    the new lines are typed as Shift+Enter, so they don't send the message early."""
+def chat_signature(name: str) -> str:
+    """WhatsApp's: one line, in its italics."""
+    return f"(_Written by Aha!, {name}'s Private AI Assistant_)"
+
+
+def signed(text: str, name: str, chat: bool = False) -> str:
+    """A message to someone else, ending with the signature (never twice): an email's on its own lines after a
+    blank line, a chat message's on the next line. On a messaging site a new line is typed as Shift+Enter, so it
+    doesn't send the message early."""
     text = text.strip()
-    return text if "written by aha" in text.lower() else f"{text}\n\n{signature(name)}".strip()
+    if "written by aha" in text.lower():
+        return text
+    return f"{text}\n{chat_signature(name)}".strip() if chat else f"{text}\n\n{signature(name)}".strip()

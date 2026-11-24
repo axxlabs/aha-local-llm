@@ -679,7 +679,7 @@ def make_handler(name: str):
                 form.title = f"Send this message on {action.site}?"
                 for f in form.fields:  # signed on the card, in code (SPEC §3.4): the person sees it, can change it
                     if f.label == "Text" or MESSAGE_BOX.search(f.label):
-                        f.value = messages.signed(f.value, ctx.account.label)
+                        f.value = messages.signed(f.value, ctx.account.label, chat=True)
         decision, refused = await guard.ask(ctx, "action", form.title, form.fields, shot)
         if refused:
             return refused
