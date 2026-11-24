@@ -51,10 +51,17 @@ def stopped(decision: Decision, then: str = "") -> ToolResult:
 
 
 async def ask(
-    ctx: ToolContext, kind: str, title: str, fields: list[Field], image: Image | None = None, then: str = ""
+    ctx: ToolContext,
+    kind: str,
+    title: str,
+    fields: list[Field],
+    image: Image | None = None,
+    then: str = "",
+    why: str = "",
 ) -> tuple[Decision, ToolResult | None]:
-    """Show a card. (decision, None) when approved; (decision, the result to return) when not."""
-    decision = await ctx.approvals.ask(ctx.account, kind, title, fields, image)
+    """Show a card. (decision, None) when approved; (decision, the result to return) when not. `why`: the gate's
+    reason, for the card's (i) (policy.gate.explain); without it, the kind's own (approvals.KIND_WHY)."""
+    decision = await ctx.approvals.ask(ctx.account, kind, title, fields, image, why=why)
     return decision, (None if decision.approved else stopped(decision, then))
 
 

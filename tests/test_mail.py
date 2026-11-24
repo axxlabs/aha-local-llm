@@ -122,8 +122,10 @@ class FakeApprovals:
         self.answers = list(answers)
         self.asked: list[SimpleNamespace] = []
 
-    async def ask(self, account, kind, title, fields, image=None) -> Decision:
-        self.asked.append(SimpleNamespace(kind=kind, title=title, fields=[(f.label, f.value, f.kind) for f in fields]))
+    async def ask(self, account, kind, title, fields, image=None, why="") -> Decision:
+        self.asked.append(
+            SimpleNamespace(kind=kind, title=title, fields=[(f.label, f.value, f.kind) for f in fields], why=why)
+        )
         return self.answers.pop(0) if self.answers else Decision(False, reason="declined")
 
 

@@ -48,6 +48,7 @@ from ..policy.browser import (
     open_form,
     sends_message,
 )
+from ..policy.gate import explain
 from ..policy.urls import check_url, site_of
 from . import guard, human, logins, signins
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
@@ -676,7 +677,7 @@ def make_handler(name: str):
             except Exception:
                 log.warning("couldn't take a screenshot for the approval")
         if action.kind in ("open", "search"):
-            form = open_form(action.url, data=verdict.why == "data")
+            form = open_form(action.url, data=verdict.why.startswith("data"))
         else:
             form = form_for(name, labelled(name, args, ctx), action.site)
             if action.kind == "send":
@@ -684,7 +685,8 @@ def make_handler(name: str):
                 for f in form.fields:  # signed on the card, in code (SPEC §3.4): the person sees it, can change it
                     if f.label == "Text" or MESSAGE_BOX.search(f.label):
                         f.value = messages.signed(f.value, ctx.account.label, chat=True)
-        decision, refused = await guard.ask(ctx, "action", form.title, form.fields, shot)
+        why = explain(verdict.why, action.site)
+        decision, refused = await guard.ask(ctx, "action", form.title, form.fields, shot, why=why)
         if refused:
             return refused
         final = form.apply(name, args, decision.values)

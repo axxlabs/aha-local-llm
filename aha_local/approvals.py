@@ -56,6 +56,7 @@ class Pending:
     image: Image | None
     future: asyncio.Future
     editing: bool = False
+    why: str = ""  # why this card is shown (the (i)); "" → the kind's own reason (KIND_WHY)
 
 
 class Out(Protocol):
@@ -65,6 +66,27 @@ class Out(Protocol):
     async def state(self, account: Account, approval_id: str, state: str) -> None: ...
     async def text(self, account: Account, text: str) -> None: ...
 
+
+# Why each kind of card is shown, when the caller doesn't say more (the (i) on the card, SPEC §7.4). Cards of the
+# browser and of opening addresses come from the gate's rule instead (policy.gate.WHY).
+KIND_WHY = {
+    "email": "Every email asks first, always: nothing is sent in your name without your OK. It's signed as written "
+    "by Aha!, and you can change any of it before it goes.",
+    "draft": "A draft is saved into your mailbox, so it's shown to you first. It isn't sent.",
+    "calendar": "Adding or changing a calendar event always asks first: invitations can go out to the people in "
+    "it, and your calendar is yours. You can change it before it's saved.",
+    "calendar_delete": "Deleting a calendar event always asks first: it can't be undone, and the people invited "
+    "may be told.",
+    "schedule": "A scheduled task runs later on its own, without you there, so it always asks first.",
+    "memory": "Aha! keeps something in its memory for future chats only with your OK, so you always see what it "
+    "remembers.",
+    "forget": "Forgetting a fact can't be undone, so it asks first.",
+    "signin": "A site wants you to sign in. What you type here goes straight into the site's sign-in form: the "
+    "model never sees it, and it isn't kept in the chat. Tick save and Aha! signs you in on this site by itself "
+    "next time.",
+    "check": "The site wants to check that a person is there (a puzzle or a tap). Only you can answer it: Aha! "
+    "taps where you tap.",
+}
 
 OPEN_INPUTS = ("signin", "check")  # cards whose inputs are open from the start: the person types or taps
 
@@ -95,6 +117,8 @@ def card(p: Pending) -> dict:
     }
     if p.image is not None:
         out["image"] = p.image.to_dict()
+    if why := p.why or KIND_WHY.get(p.kind, ""):
+        out["why"] = why
     return out
 
 
@@ -153,11 +177,18 @@ class Approvals:
         return self._pending.get(address)
 
     async def ask(
-        self, account: Account, kind: str, title: str, fields: list[Field], image: Image | None = None
+        self,
+        account: Account,
+        kind: str,
+        title: str,
+        fields: list[Field],
+        image: Image | None = None,
+        why: str = "",
     ) -> Decision:
         p = Pending(
             secrets.token_hex(4), account, kind, title, fields, image, asyncio.get_running_loop().create_future()
         )
+        p.why = why
         self._pending[account.address] = p
         account.audit(
             {"approval": p.id, "kind": kind, "title": title, "asked": masked(fields, [f.value for f in fields])}

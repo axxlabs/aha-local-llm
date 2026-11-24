@@ -12,7 +12,7 @@ import trafilatura
 from .. import RELEASE
 from ..approvals import Field
 from ..policy.browser import open_action, open_form
-from ..policy.gate import Action
+from ..policy.gate import Action, explain
 from ..policy.urls import check_url, resolves_publicly
 from . import guard
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
@@ -38,8 +38,9 @@ async def gated_open(ctx: ToolContext, url: str) -> tuple[str, ToolResult | None
     if verdict.outcome == "block":
         return url, ToolResult(f"Blocked: {verdict.why}.", error=True)
     if verdict.outcome == "card":
-        form = open_form(url, data=verdict.why == "data")
-        decision, refused = await guard.ask(ctx, "action", form.title, form.fields)
+        form = open_form(url, data=verdict.why.startswith("data"))
+        why = explain(verdict.why, action.site)
+        decision, refused = await guard.ask(ctx, "action", form.title, form.fields, why=why)
         if refused:
             return url, refused
         url = decision.values[0].strip()
@@ -53,8 +54,11 @@ async def web_search(args: dict, ctx: ToolContext) -> ToolResult:
     query = str(args.get("query", "")).strip()
     if not query:
         return ToolResult("Give a search query.", error=True)
-    if guard.check(ctx, Action("search"), "web_search").outcome == "card":  # SPEC §5.2 rule 6
-        decision, refused = await guard.ask(ctx, "action", "Search the web for this?", [Field("Search", query)])
+    verdict = guard.check(ctx, Action("search"), "web_search")
+    if verdict.outcome == "card":  # SPEC §5.2 rule 6
+        decision, refused = await guard.ask(
+            ctx, "action", "Search the web for this?", [Field("Search", query)], why=explain(verdict.why)
+        )
         if refused:
             return refused
         query = decision.values[0].strip()
