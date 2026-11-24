@@ -9,6 +9,7 @@ agent through its Unix socket in the data folder. `aha run` is the agent itself 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -16,6 +17,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -247,7 +249,42 @@ def render_browser_config(config: Config) -> str:
     return text
 
 
+IDLE_POLL = 15  # seconds between looks at the agent while waiting to install
+
+
+def idle_now(quiet_seconds: int) -> bool:
+    """Nobody's task is running, no card waits for anyone, and nothing happened for `quiet_seconds`."""
+    st = admin({"cmd": "status"})
+    # An agent from before these fields: only whether a task runs is known.
+    return not st["running"] and not st.get("cards", 0) and st.get("idle", quiet_seconds) >= quiet_seconds
+
+
 def cmd_install(a) -> None:
+    if not getattr(a, "when_idle", None):
+        install()
+        return
+    # One waiter at a time: it builds when it installs, so it always installs the latest code (seen: two waiters
+    # queued minutes apart, the older one restarting the agent again later for nothing).
+    lock = open(HOME_DATA / "install.lock", "w")  # noqa: SIM115 (held until the process ends)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("Another `aha install --when-idle` is already waiting; it will install the latest code.")
+        return
+    quiet = int(a.when_idle * 60)
+    print(f"Waiting until nobody has used Aha! for {a.when_idle:g} minutes and no card waits…", flush=True)
+    while True:
+        while not idle_now(quiet):
+            time.sleep(IDLE_POLL)
+        install()
+        if idle_now(quiet):  # still nobody: restart now
+            break
+        print("Someone started using Aha! while it was building; waiting again.", flush=True)
+    subprocess.run(["systemctl", "--user", "restart", "aha-agent.service"], check=True)
+    print("Restarted the agent with the new build.")
+
+
+def install() -> None:
     config = Config.load(HOME_CONFIG)
     model = config.models_dir / "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
     if not model.exists():
@@ -641,7 +678,17 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--app", default="https://app.aha.axxlabs.ai", help="where pairing links open the Aha! app")
     s.add_argument("--force", action="store_true")
     s.set_defaults(fn=cmd_init)
-    sub.add_parser("install", help="build the agent and install the systemd units").set_defaults(fn=cmd_install)
+    inst = sub.add_parser("install", help="build the agent and install the systemd units")
+    inst.add_argument(
+        "--when-idle",
+        type=float,
+        nargs="?",
+        const=3,
+        metavar="MINUTES",
+        help="wait until nobody has used Aha! for this long (default 3) and no card waits, then build, install "
+        "and restart the agent; one waiter at a time",
+    )
+    inst.set_defaults(fn=cmd_install)
     sub.add_parser("uninstall", help="remove the systemd units (keeps your data)").set_defaults(fn=cmd_uninstall)
     for action in ("start", "stop", "restart"):
         sub.add_parser(action, help=f"{action} aha").set_defaults(fn=lambda a, x=action: systemctl(x))

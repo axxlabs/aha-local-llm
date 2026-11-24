@@ -100,6 +100,7 @@ class _Counted:
         self.agent = agent
 
     async def card(self, account: Account, card: dict) -> None:
+        self.agent.last_activity = time.monotonic()
         self.agent.session(account).sent += 1
         await self.agent.out.card(account, card)
         await self.agent._typing_frame(account, False)  # waiting for the person now, not working (SPEC §3.3)
@@ -130,6 +131,7 @@ class Agent:
         self.browser = browser
         self.approvals = Approvals(_Counted(self), config.approval_expiry)
         self.sessions: dict[str, Session] = defaultdict(Session)  # each person's live state, by address
+        self.last_activity = time.monotonic()  # a message in or out, a card: `aha install --when-idle` waits on it
         self.typing_every = TYPING_EVERY
 
     def session(self, account: Account) -> Session:
@@ -143,6 +145,7 @@ class Agent:
     # ---- outbound
 
     async def send(self, account: Account, text: str, image: Image | None = None, open: str = "") -> None:
+        self.last_activity = time.monotonic()
         self.session(account).sent += 1
         account.transcript({"kind": "out", "text": text, "image": bool(image)})
         await self.out.message(account, text[:20_000], image, open)
@@ -152,6 +155,7 @@ class Agent:
     async def inbound(self, account: Account, text: str, image: Image | None = None) -> None:
         """A message the person typed, maybe with a photo (already shown on their devices by the channel)."""
         text = text.strip()
+        self.last_activity = time.monotonic()
         account.transcript({"kind": "user", "text": text, "image": bool(image)})
         if self.browser is not None:
             self.browser.touch(account.id)  # the window stays open idle_minutes after their last message

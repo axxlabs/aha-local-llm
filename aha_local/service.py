@@ -147,6 +147,9 @@ class Service:
                 "online": len(self.channel.online),
                 "tools": len(self.registry.names()),
                 "running": len(self.agent.running),
+                # For `aha install --when-idle`: cards waiting for someone, and how long nothing has happened.
+                "cards": sum(1 for a in self.accounts.all() if self.agent.approvals.pending_for(a.address)),
+                "idle": int(time.monotonic() - self.agent.last_activity),
                 "uptime": int(time.time() - self.started),
             }
         if cmd == "pair":
