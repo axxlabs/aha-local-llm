@@ -219,7 +219,9 @@ async def test_a_declined_email_sends_nothing(google, two, config):
 async def test_header_injection_in_edited_values_is_refused(google, two, config):
     fe, _ = two
     bad = Decision(True, values=["sam@example.com\nBcc: spy@example.com", "", "Hi", "x"])
-    result = await mail.email_send({"to": "sam@example.com", "body": "x"}, ctx_for(fe, config, FakeApprovals(bad)))
+    result = await mail.email_send(
+        {"to": "sam@example.com", "subject": "Hi", "body": "x"}, ctx_for(fe, config, FakeApprovals(bad))
+    )
     assert result.error and not google.sent
 
 
