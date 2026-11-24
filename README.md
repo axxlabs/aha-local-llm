@@ -43,7 +43,6 @@ The packages:
 | | Fedora | Debian / Ubuntu |
 |---|---|---|
 | Containers | `sudo dnf install podman` | `sudo apt install podman` |
-| Encrypted browser profiles | `sudo dnf install gocryptfs fuse3` | `sudo apt install gocryptfs fuse3` |
 | TPM sealing (systemd-creds) | `sudo dnf install tpm2-tss` | `sudo apt install libtss2-esys-3.0.2-0t64 libtss2-rc0t64 libtss2-mu-4.0.1-0t64` |
 | Download and build tools | `sudo dnf install git curl` | `sudo apt install git curl` |
 | uv (runs aha) | `curl -LsSf https://astral.sh/uv/install.sh \| sh` | the same |
@@ -120,9 +119,9 @@ still recommended; `aha doctor` warns without it. `aha recovery-key --show` show
 `aha restore` (code on stdin) seals it to a new computer.
 
 Each person's browser profile is a real browser profile (so every site keeps what it stores, WhatsApp Web's keys
-included), in a gocryptfs folder inside the data folder (`browser-profiles.enc`). Its password is derived from the
-data key and sealed the same way (`profiles-key.cred`); the `aha-profiles` service mounts it, at a runtime path
-only while aha runs. The recovery code covers it too.
+included), in a gocryptfs folder inside the data folder (`browser-profiles.enc`) that the browser container mounts
+itself: the decrypted files never exist on the host. Its password is derived from the data key and sealed the same
+way (`profiles-key.cred`), so the recovery code covers it too.
 
 ## Development
 

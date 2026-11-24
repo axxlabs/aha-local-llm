@@ -216,9 +216,10 @@ def test_each_person_has_a_browser_and_profile_of_their_own():
     assert 'id === "probe" ? ["--isolated"]' in supervisor
     assert "/^(?:[a-f0-9]{8,64}|probe)$/" in supervisor  # an id is never a path
     unit = (deploy / "quadlet" / "aha-browser.container").read_text()
-    assert "Requires=aha-profiles.service" in unit and "Volume=@PROFILES@:/profiles" in unit
-    profiles = (deploy / "quadlet" / "aha-profiles.service").read_text()
-    assert "gocryptfs" in profiles and "LoadCredentialEncrypted=profiles-key:" in profiles
+    assert "Volume=@PROFILES_ENC@:/profiles.enc" in unit and "LoadCredentialEncrypted=profiles-key:" in unit
+    start = (deploy / "browser" / "start.sh").read_text()
+    # mounted inside the container: the decrypted profiles never exist on the host
+    assert "gocryptfs -q -noprealloc -passfile" in start and "/profiles.enc /profiles" in start
 
 
 async def test_by_default_a_window_stays_open(fake_browser):

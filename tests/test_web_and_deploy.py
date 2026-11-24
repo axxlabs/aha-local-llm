@@ -137,10 +137,14 @@ def test_the_browser_looks_like_a_persons(tmp_path, monkeypatch):
 
     root = Path(__file__).resolve().parents[1]
     unit = (root / "deploy/quadlet/aha-browser.container").read_text()
-    assert "Image=mcr.microsoft.com/playwright/mcp@sha256:" in unit
+    assert "Image=@BROWSER_IMAGE@" in unit
+    base = (root / "deploy/browser/Containerfile").read_text()
+    assert "FROM mcr.microsoft.com/playwright/mcp@sha256:" in base and "gocryptfs" in base
     entry = json.loads(re.search(r"^Entrypoint=(.+)$", unit, re.M).group(1))
-    assert entry[:4] == ["/usr/bin/tini", "-s", "--", "xvfb-run"] and "--headless" not in entry
-    assert entry[-2:] == ["node", "/etc/aha-browser/supervisor.mjs"]  # one browser per person (SPEC §3.4)
+    assert entry == ["/usr/bin/tini", "-s", "--", "/etc/aha-browser/start.sh"]
+    start = (root / "deploy/browser/start.sh").read_text()
+    assert 'exec xvfb-run -a -s "-screen 0 1920x1080x24 -nolisten tcp" node /etc/aha-browser/supervisor.mjs' in start
+    assert "--headless" not in start  # headed, in a virtual display; one browser per person (SPEC §3.4)
     supervisor = (root / "deploy/browser/supervisor.mjs").read_text()
     for flag in ("--headless", "--user-agent", "--viewport-size", "--shared-browser-context"):
         assert flag not in supervisor, flag
@@ -220,9 +224,9 @@ def test_every_image_is_pinned_by_digest():
 
     deploy = Path(__file__).resolve().parents[1] / "deploy"
     refs = []
-    for f in [*(deploy / "quadlet").glob("*.container"), deploy / "Containerfile"]:
+    for f in [*(deploy / "quadlet").glob("*.container"), deploy / "Containerfile", deploy / "browser/Containerfile"]:
         refs += re.findall(r"^(?:Image=|FROM |COPY --from=)(\S+)", f.read_text(), re.M)
-    refs = [r for r in refs if r != "@AGENT_IMAGE@"]
+    refs = [r for r in refs if r not in ("@AGENT_IMAGE@", "@BROWSER_IMAGE@")]  # built locally from pinned bases
     assert len(refs) >= 5
     for r in refs:
         assert re.search(r"@sha256:[0-9a-f]{64}$", r), r

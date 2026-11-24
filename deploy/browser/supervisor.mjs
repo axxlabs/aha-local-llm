@@ -84,7 +84,7 @@ async function stop(id) {
   browsers.delete(id);
   if (known.child.exitCode !== null) return;
   const exited = new Promise((r) => known.child.once("exit", r));
-  known.child.kill("SIGTERM"); // the browser closes, writing its profile
+  known.child.kill("SIGINT"); // Playwright MCP closes the browser cleanly: its profile written out (cookies too)
   const late = setTimeout(() => known.child.kill("SIGKILL"), 10_000);
   await exited;
   clearTimeout(late);

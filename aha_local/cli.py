@@ -34,12 +34,11 @@ UNITS = [
     "aha-browser.container",
     "aha-agent.container",
 ]
-SERVICES = ["aha-agent", "aha-browser", "aha-search", "aha-llm", "aha-profiles"]
-PLAIN_UNITS = ["aha-profiles.service"]  # installed as ordinary systemd user units, not by Quadlet
-SYSTEMD_USER_DIR = Path.home() / ".config" / "systemd" / "user"  # plain units (not containers): aha-profiles
+SERVICES = ["aha-agent", "aha-browser", "aha-search", "aha-llm"]
+BROWSER_IMAGE = "localhost/aha-browser:latest"
 PROFILES_KEY_CRED = HOME_CONFIG.parent / "profiles-key.cred"
 PROFILES_ENC = HOME_DATA / "browser-profiles.enc"  # each person's browser profile, encrypted (SPEC §3.4)
-PROFILES = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "aha" / "profiles"
+OLD_PROFILES_UNIT = Path.home() / ".config" / "systemd" / "user" / "aha-profiles.service"  # mounted on the host
 AGENT_IMAGE = "localhost/aha-agent:latest"
 DATA_KEY_CRED = HOME_CONFIG.parent / "data-key.cred"
 BROWSER_CONFIG = HOME_CONFIG.parent / "browser.json"  # the browser's Playwright MCP configuration (SPEC §3.7)
@@ -159,29 +158,16 @@ def profiles_password(data_key: bytes) -> str:
 
 
 def ensure_profiles(data_key: bytes | None = None, force: bool = False) -> None:
-    """The encrypted folder for each person's browser profile (SPEC §3.4 "Browser profiles"): gocryptfs, its
-    password derived from the data key and sealed to this computer like it."""
-    if not shutil.which("gocryptfs"):
-        die("gocryptfs keeps each person's browser profile encrypted: install it first (sudo dnf install gocryptfs).")
-    if PROFILES_KEY_CRED.exists() and (PROFILES_ENC / "gocryptfs.conf").exists() and not force:
+    """The key of the encrypted folder for each person's browser profile (SPEC §3.4 "Browser profiles"): derived
+    from the data key and sealed to this computer like it. The browser container makes and mounts the folder
+    itself (gocryptfs), so the decrypted files never exist on the host."""
+    if PROFILES_KEY_CRED.exists() and not force:
         return
     key = data_key or unseal_data_key(DATA_KEY_CRED)
     if key is None:
         die(f"Can't unseal {DATA_KEY_CRED} on this computer, so the browser profiles' key can't be made.")
-    password = profiles_password(key)
-    seal_data_key(password.encode(), PROFILES_KEY_CRED, name="profiles-key")
-    if not (PROFILES_ENC / "gocryptfs.conf").exists():
-        PROFILES_ENC.mkdir(mode=0o700, parents=True, exist_ok=True)
-        runtime = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
-        tmp = runtime / "aha-profiles-pass"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        try:
-            os.write(fd, password.encode())
-            os.close(fd)
-            subprocess.run(["gocryptfs", "-init", "-q", "-passfile", str(tmp), str(PROFILES_ENC)], check=True)
-        finally:
-            tmp.unlink(missing_ok=True)
-        print(f"Made the encrypted folder for browser profiles: {PROFILES_ENC}")
+    seal_data_key(profiles_password(key).encode(), PROFILES_KEY_CRED, name="profiles-key")
+    PROFILES_ENC.mkdir(mode=0o700, parents=True, exist_ok=True)
 
 
 def cmd_recovery_key(a) -> None:
@@ -210,7 +196,7 @@ def cmd_restore(a) -> None:
     except ValueError as e:
         die(str(e))
     with_key = seal_data_key(key, DATA_KEY_CRED)
-    if (PROFILES_ENC / "gocryptfs.conf").exists():  # the profiles' key comes from the data key: seal it here too
+    if PROFILES_KEY_CRED.exists() or PROFILES_ENC.exists():  # the profiles' key comes from the data key: here too
         ensure_profiles(key, force=True)
     print(f"Sealed the recovery key to this computer ({with_key}). Start aha with `aha restart`.")
 
@@ -275,14 +261,14 @@ def render_units(config: Config) -> dict[str, str]:
         "@AGENT_IMAGE@": AGENT_IMAGE,
         "@DATA_KEY_CRED@": str(DATA_KEY_CRED),
         "@BROWSER_CONFIG@": str(BROWSER_CONFIG),
-        "@PROFILES@": str(PROFILES),
+        "@BROWSER_IMAGE@": BROWSER_IMAGE,
         "@PROFILES_ENC@": str(PROFILES_ENC),
         "@PROFILES_KEY_CRED@": str(PROFILES_KEY_CRED),
         "@TIMEZONE@": config.timezone,
         "@LANG@": config.language.replace("-", "_") + ".UTF-8",
     }
     out = {}
-    for unit in [*UNITS, *PLAIN_UNITS]:
+    for unit in UNITS:
         text = (DEPLOY / "quadlet" / unit).read_text()
         for k, v in values.items():
             text = text.replace(k, v)
@@ -350,10 +336,17 @@ def install() -> None:
     )
     ensure_data_key()  # an install from before encryption at rest gets its key here (SPEC §3.8.1 Upgrade)
     QUADLET_DIR.mkdir(parents=True, exist_ok=True)
+    print("Building the browser image…")
+    subprocess.run(
+        ["podman", "build", "-q", "-t", BROWSER_IMAGE, "-f", str(DEPLOY / "browser" / "Containerfile"), str(DEPLOY)],
+        check=True,
+    )
     ensure_profiles()  # each person's browser profile, encrypted (SPEC §3.4 "Browser profiles")
-    SYSTEMD_USER_DIR.mkdir(parents=True, exist_ok=True)
+    if OLD_PROFILES_UNIT.exists():  # the host mount of an earlier version: the browser mounts them itself now
+        subprocess.run(["systemctl", "--user", "stop", "aha-profiles.service"], check=False)
+        OLD_PROFILES_UNIT.unlink()
     for name, text in render_units(config).items():
-        (SYSTEMD_USER_DIR if name in PLAIN_UNITS else QUADLET_DIR).joinpath(name).write_text(text)
+        (QUADLET_DIR / name).write_text(text)
     BROWSER_CONFIG.write_text(render_browser_config(config))
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     print(f"Installed {len(UNITS)} units in {QUADLET_DIR}. Start with `aha start`.")
@@ -364,8 +357,6 @@ def cmd_uninstall(a) -> None:
     subprocess.run(["systemctl", "--user", "stop", *[f"{s}.service" for s in SERVICES]], check=False)
     for unit in UNITS:
         (QUADLET_DIR / unit).unlink(missing_ok=True)
-    for unit in PLAIN_UNITS:
-        (SYSTEMD_USER_DIR / unit).unlink(missing_ok=True)
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
     print(f"Removed the units. Your data stays in {HOME_DATA}.")
 
@@ -640,11 +631,6 @@ def cmd_doctor(a) -> None:
         raise SystemExit(1)
     config = Config.load(HOME_CONFIG)
     check("podman", bool(shutil.which("podman")), "sudo dnf install podman  (Debian/Ubuntu: sudo apt install podman)")
-    check(
-        "gocryptfs and FUSE 3 (encrypted browser profiles)",
-        bool(shutil.which("gocryptfs") and shutil.which("fusermount3")),
-        "sudo dnf install gocryptfs fuse3  (Debian/Ubuntu: sudo apt install gocryptfs fuse3)",
-    )
     version = subprocess.run(["systemctl", "--version"], capture_output=True, text=True).stdout.split()
     systemd = int(version[1]) if len(version) > 1 and version[1].isdigit() else 0
     check(f"systemd 256 or later (systemd-creds --user), found {systemd}", systemd >= 256, "a newer distribution")

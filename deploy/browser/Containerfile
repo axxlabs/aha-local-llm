@@ -1,0 +1,6 @@
+# aha-browser: Playwright MCP's own image, pinned by digest (SPEC §9.2), with gocryptfs so the container mounts the
+# people's encrypted browser profiles itself (SPEC §3.4 "Browser profiles"): the decrypted files exist only in
+# this container's own mount namespace, never on the host.
+FROM mcr.microsoft.com/playwright/mcp@sha256:a5e6a24e8caf6493a0edd144dd15df5535b8255c3cea5b53a51a22a3abd2c2f0
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends gocryptfs fuse3 && rm -rf /var/lib/apt/lists/*
