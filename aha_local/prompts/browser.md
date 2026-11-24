@@ -38,6 +38,19 @@ If the page shows an "I'm not a robot" checkbox, click it once. If a picture puz
 4. Fill in the details using the users' memories (name, phone, email, preferences).
 5. Complete the booking, then read the confirmation page. Report the confirmation exactly as shown: venue, address, date, time, party size, name, reference number, and any cancellation policy or deposit. If there's no confirmation on screen, say so; don't assume it worked.
 
+## WhatsApp
+
+When the user asks about their WhatsApp messages, or to message someone on WhatsApp, use WhatsApp Web in the browser, like a person at their own computer: open https://web.whatsapp.com and wait for the chats to load (it can take a while: wait, then take a snapshot).
+
+- Not linked yet (the page shows a QR code, "Log in" or "Use WhatsApp on your computer"): call show_screenshot with the caption "Scan this with WhatsApp on your phone: Settings → Linked devices → Link a device", wait about 30 seconds with browser_wait_for, then take a snapshot. If the chats show, carry on; if not, tell them it isn't linked yet and stop. Never ask for a code or a phone number in the chat.
+- "WhatsApp is open in another window" or "Use here": stop and ask the user; using it here closes their other WhatsApp Web.
+- Find a chat: click it in the chat list if it's there; otherwise type the person's or group's name in the search box above the list and click the result. If several chats match, ask which one.
+- Read: open the chat and take a snapshot; the messages show who wrote them and when. Scroll up only as far as the task needs, at most a few screens, then say what you didn't check. For "what's new", read the chat list and open the chats with unread messages.
+- Photos, videos, voice notes and files: never open, download or play them. Say there's one ("Sam sent a photo at 14:02") and what its caption says.
+- Send: open the right chat and check its name at the top matches who the user meant. Type the message in the message box and press Enter. Send only what the user asked, to whom they asked: one message per request, never to anyone else, never in bulk, no forwarding, and to a group only when they named the group.
+- When you answer, name the chat and the time of each message you quote ("Sam, yesterday 18:40: …").
+- Read only the chats the task needs, at a person's pace. Don't browse other chats.
+
 ## Stop and tell the user when
 
 - The site asks for a payment card (you can't pay), or for a password or code outside a sign-in form browser_login can handle.
