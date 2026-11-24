@@ -26,8 +26,9 @@ log = logging.getLogger("aha.signins")
 FILE = "browser.json"
 OLD_FILE = "sign-ins.json"  # before the browser kept everything: only the sites kept with "Keep me signed in"
 VERSION = 1
-MAX_STATE = 8 * 1024 * 1024  # bytes of JSON; larger is saved without IndexedDB, then as cookies only
+MAX_STATE = 32 * 1024 * 1024  # bytes of JSON; past it, the largest IndexedDB databases are left out first
 TIMEOUT = 30  # seconds for reading or writing the state in the browser
+TIMEOUT_FULL = 120  # reading it with IndexedDB, after a task: a big site's (WhatsApp Web's) takes a while
 GET_STATE = "async (page) => JSON.stringify(await page.context().storageState({ indexedDB: true }))"
 GET_STATE_LIGHT = "async (page) => JSON.stringify(await page.context().storageState())"
 GET_URL = "async (page) => page.url()"
@@ -184,8 +185,8 @@ def _fresh(items: list[dict], now: float) -> list[dict]:
     return [c for c in items if not (isinstance(c.get("expires"), (int, float)) and 0 < c["expires"] < now)]
 
 
-async def _read(session, code: str) -> dict:
-    value = _result(await session.call("browser_run_code_unsafe", {"code": code}, timeout=TIMEOUT))
+async def _read(session, code: str, timeout: float = TIMEOUT) -> dict:
+    value = _result(await session.call("browser_run_code_unsafe", {"code": code}, timeout=timeout))
     state = json.loads(value) if isinstance(value, str) else value
     if not isinstance(state, dict):
         raise RuntimeError("the browser returned no storage state")
@@ -199,17 +200,55 @@ def _size(state: dict) -> int:
     return len(json.dumps(state, ensure_ascii=False).encode())
 
 
-async def read_state(session) -> dict:
-    """The context's storage state, at most MAX_STATE: without IndexedDB if larger, then cookies only."""
-    state = await _read(session, GET_STATE)
-    if _size(state) <= MAX_STATE:
-        return state
-    log.info("browser state too large with IndexedDB; saving without it")
+def trim(state: dict, limit: int | None = None) -> dict:
+    """Leave out the largest IndexedDB databases, one at a time, until the state fits. A site's big caches go
+    first (WhatsApp Web's messages, which it fetches again from the phone); the small databases that keep it
+    signed in or linked stay (seen: the whole IndexedDB dropped for being too large, and WhatsApp Web unlinked)."""
+    limit = MAX_STATE if limit is None else limit
+    size = _size(state)
+    dbs = sorted(
+        ((_size(db), o, db) for o in state["origins"] for db in (o.get("indexedDB") or []) if isinstance(db, dict)),
+        key=lambda x: -x[0],
+    )
+    for db_size, origin, db in dbs:
+        if size <= limit:
+            break
+        origin["indexedDB"] = [d for d in origin["indexedDB"] if d is not db]
+        size -= db_size
+        log.info("browser state too large: left out a %d MB IndexedDB database", db_size // 1_000_000)
+    if size > limit:  # still too large without any IndexedDB: cookies and page storage only, then cookies only
+        for o in state["origins"]:
+            o.pop("indexedDB", None)
+        if _size(state) > limit:
+            log.info("browser state still too large; saving cookies only")
+            return {"cookies": state["cookies"], "origins": []}
+    return state
+
+
+def keep_indexeddb(state: dict, previous: dict) -> dict:
+    """The state read without IndexedDB, with each origin's IndexedDB from the last good save, so a read that
+    failed never loses what was saved (a site stays signed in or linked)."""
+    before = {o.get("origin"): o.get("indexedDB") for o in previous.get("origins", []) if o.get("indexedDB")}
+    seen = set()
+    for o in state["origins"]:
+        seen.add(o.get("origin"))
+        if o.get("origin") in before:
+            o["indexedDB"] = before[o["origin"]]
+    state["origins"] += [
+        {"origin": origin, "localStorage": [], "indexedDB": dbs} for origin, dbs in before.items() if origin not in seen
+    ]
+    return state
+
+
+async def read_state(session, previous: dict | None = None) -> dict:
+    """The context's storage state, at most MAX_STATE (the largest IndexedDB databases left out first). If reading
+    it with IndexedDB fails, the IndexedDB of the last save (`previous`) is kept."""
+    try:
+        return trim(await _read(session, GET_STATE, TIMEOUT_FULL))
+    except Exception as e:
+        log.warning("couldn't read the browser state with IndexedDB (%s); keeping the last saved one", type(e).__name__)
     state = await _read(session, GET_STATE_LIGHT)
-    if _size(state) <= MAX_STATE:
-        return state
-    log.info("browser state still too large; saving cookies only")
-    return {"cookies": state["cookies"], "origins": []}
+    return trim(keep_indexeddb(state, previous or {}))
 
 
 async def restore(account: Account, session) -> int:
@@ -225,7 +264,7 @@ async def restore(account: Account, session) -> int:
 async def capture(account: Account, session) -> None:
     """Save the context's state as the person's browser state (after a task, before the context closes)."""
     data = load(account)
-    data["state"] = await read_state(session)
+    data["state"] = await read_state(session, data.get("state"))
     data["saved"] = int(time.time())
     try:
         url = _result(await session.call("browser_run_code_unsafe", {"code": GET_URL}, timeout=TIMEOUT))

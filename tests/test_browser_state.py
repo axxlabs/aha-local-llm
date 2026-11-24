@@ -73,12 +73,24 @@ async def test_expired_cookies_are_dropped_and_large_states_shrink(setup, accoun
     ctx = fake.contexts[-1]
     assert [c["name"] for c in ctx.cookies] == ["live"]
 
-    ctx.origins = [{"origin": "https://a.example", "localStorage": [], "indexedDB": [{"name": "big" * 50}]}]
-    monkeypatch.setattr(signins, "MAX_STATE", 300)
+    keys = {"name": "keys", "stores": []}  # small: what keeps a site linked (WhatsApp Web's keys)
+    cache = {"name": "cache", "stores": [{"records": ["x" * 400]}]}  # large: a cache the site fetches again
+    ctx.origins = [{"origin": "https://a.example", "localStorage": [], "indexedDB": [keys, cache]}]
+    monkeypatch.setattr(signins, "MAX_STATE", 500)
     await signins.capture(fe, pool.open_session(fe.id))
     state = signins.load(fe)["state"]
-    assert state["origins"] == [] and [c["name"] for c in state["cookies"]] == ["live"]
-    assert any(c == signins.GET_STATE_LIGHT for c in ctx.codes)  # tried without IndexedDB first
+    assert state["origins"][0]["indexedDB"] == [keys]  # the largest database left out, the rest kept
+    assert [c["name"] for c in state["cookies"]] == ["live"]
+
+
+def test_a_failed_full_read_keeps_the_indexeddb_of_the_last_save():
+    """Seen: reading a big state timed out and the save that followed had no IndexedDB: WhatsApp Web unlinked."""
+    previous = {"origins": [{"origin": "https://web.whatsapp.com", "indexedDB": [{"name": "wawc"}]}]}
+    light = {"cookies": [], "origins": [{"origin": "https://web.whatsapp.com", "localStorage": [{"name": "k"}]}]}
+    kept = signins.keep_indexeddb(light, previous)
+    assert kept["origins"] == [
+        {"origin": "https://web.whatsapp.com", "localStorage": [{"name": "k"}], "indexedDB": [{"name": "wawc"}]}
+    ]
 
 
 async def test_old_kept_sign_ins_become_the_first_browser_state(accounts):
