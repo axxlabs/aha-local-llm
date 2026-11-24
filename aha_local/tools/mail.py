@@ -367,6 +367,11 @@ def _compose(kind: str):
         if reply and not subject:
             original = reply.get("subject", "")
             subject = original if original.lower().startswith("re:") else f"Re: {original}".strip()
+        if not subject:  # a new email always has one (seen: emails sent with no subject)
+            return ToolResult(
+                "Give a subject: a short line saying what the email is about, in the language of the email.",
+                error=True,
+            )
         several = len(connections(ctx.account)) > 1
         fields = [Field("From", conn["email"])] if several else []  # which of their addresses (SPEC §3.4)
         fields += [
@@ -417,7 +422,7 @@ email_draft = _compose("draft")
 
 EMAIL_ARGS = dict(
     to=string("Recipients: name <address>, comma-separated"),
-    subject=string("Subject line (for a reply, leave empty to use Re: and the original subject)"),
+    subject=string("Subject line, always for a new email (for a reply, empty uses Re: and the original subject)"),
     body=string("The message text, plain text"),
     cc=string("Optional Cc recipients"),
     reply_to=string("Optional: the id of the email this replies to (from email_search); it goes from that mailbox"),
@@ -455,7 +460,7 @@ def register(reg: Registry) -> None:
         Tool(
             "email_send",
             "Send an email from the user's own address.",
-            params(["to", "body"], **EMAIL_ARGS),
+            params(["to", "subject", "body"], **EMAIL_ARGS),
             email_send,
         )
     )
@@ -463,7 +468,7 @@ def register(reg: Registry) -> None:
         Tool(
             "email_draft",
             "Save an email as a draft in the user's mailbox (not sent).",
-            params(["to", "body"], **EMAIL_ARGS),
+            params(["to", "subject", "body"], **EMAIL_ARGS),
             email_draft,
         )
     )

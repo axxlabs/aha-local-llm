@@ -210,7 +210,9 @@ async def test_sending_is_a_card_with_the_exact_email_and_edits_are_what_is_sent
 
 async def test_a_declined_email_sends_nothing(google, two, config):
     fe, _ = two
-    result = await mail.email_send({"to": "sam@example.com", "body": "x"}, ctx_for(fe, config, FakeApprovals()))
+    result = await mail.email_send(
+        {"to": "sam@example.com", "subject": "Hi", "body": "x"}, ctx_for(fe, config, FakeApprovals())
+    )
     assert result.error and "the user stopped it" in result.text and not google.sent
 
 
@@ -322,14 +324,30 @@ async def test_several_accounts_are_all_searched_and_each_email_answers_from_its
     assert google.sent_from == ["at-fe2"] and google.sent[0][1]["threadId"] == "t3fe"
 
     moved = FakeApprovals(Decision(True, values=["fe@example.com", "sam@example.com", "", "Hi", "Hello"]))
-    await mail.email_send({"to": "sam@example.com", "body": "Hello", "from": "work"}, ctx_for(fe, config, moved))
+    await mail.email_send(
+        {"to": "sam@example.com", "subject": "Hi", "body": "Hello", "from": "work"}, ctx_for(fe, config, moved)
+    )
     assert moved.asked[0].fields[0] == ("From", "fe.work@example.com", "text")
     assert google.sent_from[-1] == "at-fe"  # the person changed From on the card: sent from that one
     bad = FakeApprovals(Decision(True, values=["spy@example.com", "sam@example.com", "", "Hi", "Hello"]))
-    refused = await mail.email_send({"to": "sam@example.com", "body": "Hello"}, ctx_for(fe, config, bad))
+    refused = await mail.email_send(
+        {"to": "sam@example.com", "subject": "Hi", "body": "Hello"}, ctx_for(fe, config, bad)
+    )
     assert refused.error and len(google.sent) == 2  # never from an address that isn't theirs
 
     mail.add_connection(fe, "gmail", "fe.work@example.com", "rt-fe2")  # connecting again replaces, never doubles
     assert mail.addresses(fe) == ["fe@example.com", "fe.work@example.com"]
     assert await mail.disconnect(fe, "fe.work@example.com")
     assert google.revoked == ["rt-fe2"] and mail.addresses(fe) == ["fe@example.com"]
+
+
+async def test_a_new_email_needs_a_subject(google, two, config):
+    """Seen: emails sent with no subject. A reply may leave it empty (Re: and the original's)."""
+    fe, _ = two
+    approvals = FakeApprovals()
+    result = await mail.email_send({"to": "sam@example.com", "body": "Hello"}, ctx_for(fe, config, approvals))
+    assert result.error and "Give a subject" in result.text and not approvals.asked  # before any card
+    spec = next(
+        t for t in (lambda r: (mail.register(r), r)[1])(Registry()).specs() if t["function"]["name"] == "email_send"
+    )
+    assert "subject" in spec["function"]["parameters"]["required"]
