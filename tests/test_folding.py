@@ -98,3 +98,29 @@ async def test_when_the_model_says_new_the_part_starts_at_the_persons_message(ag
     await agent.inbound(fe, "any new emails?")
     await settle(agent)
     assert chat.titles == [(8, "Email search", "new")]
+
+
+def test_saying_so_starts_a_new_subject():
+    for said in (
+        "ok, let's change topics. What happened to Jensen Huang?",
+        "Different subject: is the dentist open Saturday?",
+        "something else: book Flat Iron",
+        "mudando de assunto, quando é o feriado?",
+    ):
+        assert folding.says_new(said), said
+    for same in ("what's on my calendar?", "change the time to 8pm", "another table please"):
+        assert not folding.says_new(same), same
+    assert "“ok, let's change topics.”" in folding.ask("10:24", "ok, let's change topics.")
+
+
+async def test_a_said_change_of_subject_splits_even_when_the_model_says_same(agent, llm, chat, accounts):
+    fe = person(accounts)
+    now = int(dt.datetime.now().timestamp())
+    fe.transcript({"kind": "item", "item": {"seq": 7, "ts": now - 600, "t": "msg"}})
+    fe.seq = 8
+    fe.transcript({"kind": "item", "item": {"seq": 8, "ts": now, "t": "msg"}})
+    llm.answer("He's Nvidia's chief executive.")
+    await agent.inbound(fe, "ok, let's change topics. What happened to Jensen Huang?")
+    await settle(agent)
+    assert chat.titles == [(8, "Test title", "new")]
+    assert "let's change topics" in llm.titles[0][-1]["content"]  # the question quotes the message

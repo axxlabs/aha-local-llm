@@ -392,28 +392,34 @@ class Agent:
         account.transcript({"kind": "answer", "text": answer})
         conv = context.record_turn(account, text, answer, checked)
         if answer and not stopped:
-            await self._title(account, answer, asked_at)
+            await self._title(account, answer, asked_at, text)
         await self._fold(account, conv)
 
-    async def _title(self, account: Account, answer: str, asked_at: int = 0) -> None:
+    async def _title(self, account: Account, answer: str, asked_at: int = 0, asked: str = "") -> None:
         """Name the conversation since the last break, for when the app folds it (SPEC §7.4 "Folding").
 
         Asked at the end of the task's own last request, so the model server's cached prompt still matches and
         it costs only the new words; the question and the title are never part of the conversation."""
         prompt = self.last_prompt.pop(account.address, None)
+        asked = asked.split("\n\n", 1)[0]  # the message that started the task, not later notes
         start = folding.segment_start(account.read_transcript(), ZoneInfo(self.config.timezone))
         if prompt is None or start is None or not hasattr(self.out, "title"):
             return
         tz = ZoneInfo(self.config.timezone)
         since = dt.datetime.fromtimestamp(start[1], tz).strftime("%H:%M")
-        asked = [*prompt, {"role": "assistant", "content": answer}, {"role": "user", "content": folding.ask(since)}]
+        request = [
+            *prompt,
+            {"role": "assistant", "content": answer},
+            {"role": "user", "content": folding.ask(since, asked)},
+        ]
         try:
             reply = await self.llm.chat(
-                asked, self.registry.specs(), max_tokens=60, who=account.address, tool_choice="none", thinking=False
+                request, self.registry.specs(), max_tokens=60, who=account.address, tool_choice="none", thinking=False
             )
         except ModelUnavailable:
             return
         new, title = folding.parse(reply.content or "")
+        new = new or (bool(asked_at) and folding.says_new(asked))
         if new and asked_at > start[0]:  # a new subject: a new part starts at the person's message (SPEC §7.4)
             await self.out.title(account, asked_at, title or "", new=True)
         elif title:

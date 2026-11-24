@@ -17,10 +17,18 @@ BREAK_SECONDS = 2 * 3600  # a break: two hours without a message, or a new day (
 SHOWN = ("msg", "approval")  # what the chat shows; states and titles don't count for breaks
 MAX_TITLE = 60
 ASK = (
-    "[Aha! app, not from the user. Reply with one line only. If the user's latest request is about a subject "
-    "unrelated to what you talked about before it since {since}, reply NEW: and a title for that latest request. "
-    "Otherwise reply SAME: and a title for everything you talked about since {since}. A title is at most 6 words, "
-    "in the language of the conversation, no quotes, no full stop.]"
+    "[Aha! app, not from the user. Reply with one line only. The user's latest message was: “{asked}”. If it "
+    "starts a subject unrelated to what you talked about before it since {since}, reply NEW: and a title for that "
+    "message's request. Otherwise reply SAME: and a title for everything you talked about since {since}. A title "
+    "is at most 6 words, in the language of the conversation, no quotes, no full stop.]"
+)
+# The person says so: a new part whatever the model answers (seen: "ok, let's change topics. What happened to …"
+# came back SAME).
+SAYS_NEW = re.compile(
+    r"\b(?:change|switch|new|different|another|other)\s+(?:the\s+)?(?:topics?|subjects?)\b|"
+    r"\b(?:something|anything)\s+(?:else|different)\b|\bon (?:a|another) note\b|\bunrelated\b|"
+    r"\b(?:mudando|mudar|trocar|trocando)\s+de\s+(?:assunto|tema)\b|\boutro\s+assunto\b",
+    re.I,
 )
 NEW = re.compile(r"^\W*(NEW|SAME)\W*[:\-]\s*", re.I)
 
@@ -50,8 +58,13 @@ def asks(answer: str) -> bool:
     return "?" in tail[-300:]
 
 
-def ask(since: str) -> str:
-    return ASK.format(since=since)
+def ask(since: str, asked: str = "") -> str:
+    return ASK.format(since=since, asked=" ".join(asked.split())[:300])
+
+
+def says_new(asked: str) -> bool:
+    """The person said they're changing the subject."""
+    return bool(SAYS_NEW.search(asked or ""))
 
 
 def parse(text: str) -> tuple[bool, str]:
