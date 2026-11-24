@@ -157,7 +157,28 @@ def apply_fold(account: Account, folded: list[dict], summary: str) -> None:
     account.save_context(conv)
 
 
+FOLD_ASK = (
+    "[Aha! app, not from the user. The conversation is getting long, so its oldest messages will be taken out: the "
+    "{count} messages from “{first}” to “{last}”. Write the running summary that replaces them: the current summary "
+    "(in the <context> block) updated with those messages. Keep: commitments, bookings and their details (dates, "
+    "times, places, reference numbers), open questions, decisions, plans, and anything the person may refer back "
+    "to. Drop small talk and anything already done and irrelevant. Short dated bullet points, newest last, at most "
+    "about 600 words. Reply with the updated summary only.]"
+)
+
+
+def fold_ask(folded: list[dict]) -> str:
+    """The summary asked at the end of the person's own cached prompt (SPEC §4.4): its old turns are already read."""
+
+    def quote(t: dict) -> str:
+        text = " ".join(str(t.get("content", "")).split())
+        return text[:60] + ("…" if len(text) > 60 else "")
+
+    return FOLD_ASK.format(count=len(folded), first=quote(folded[0]), last=quote(folded[-1]))
+
+
 def fold_request(conv: dict, folded: list[dict]) -> list[dict]:
+    """The summary as a prompt of its own: only when there's no cached prompt to ask it at the end of."""
     lines = "\n".join(
         f"[{t.get('ts', '')}] {'Person' if t['role'] == 'user' else 'aha'}: {t['content']}" for t in folded
     )

@@ -459,3 +459,21 @@ async def test_stop_drops_everything_that_was_waiting_for_the_task(agent, llm, c
     await settle(agent)
     last = llm.requests[-1]["messages"]
     assert "image_url" not in str(last)  # the stopped task's photo didn't come along
+
+
+async def test_the_summary_is_asked_at_the_end_of_the_persons_cached_prompt(agent, llm, chat, accounts):
+    """SPEC §4.4: the old turns are already read in the person's slot; a prompt of its own read them all again."""
+    acct = person(accounts)
+    conv = acct.load_context()
+    conv["turns"] = [{"role": "user", "content": "x" * 4000}, {"role": "assistant", "content": "y"}] * 30
+    acct.save_context(conv)
+    llm.answer("Fine.")
+    llm.answer("- summary of the old turns")
+    await say(agent, "hello")
+    await settle(agent)
+    task_request, fold = llm.requests[-2]["messages"], llm.requests[-1]["messages"]
+    assert fold[: len(task_request)] == task_request  # the same start: cached
+    assert fold[len(task_request)] == {"role": "assistant", "content": "Fine."}
+    assert "oldest messages will be taken out" in fold[-1]["content"]
+    assert llm.requests[-1]["tools"] == llm.requests[-2]["tools"]  # same tools, or the cached prompt wouldn't match
+    assert acct.load_context()["summary"] == "- summary of the old turns"

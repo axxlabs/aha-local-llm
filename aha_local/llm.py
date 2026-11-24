@@ -44,18 +44,14 @@ class Slots:
 
     Every request starts with the same system prompt and tools, so the server's own choice (the slot whose cache
     matches best) put everyone in one slot, and each person's request threw out the other's conversation. Here each
-    active person keeps a slot of their own; the last one is for background work (summaries), so that never
-    throws a conversation out either. A new person always gets a slot: when all are taken, the person whose last
-    message is oldest gives theirs up until they write again."""
+    active person keeps a slot of their own, and everything done for them (the title, the summary) is asked at the
+    end of their own cached prompt, in their slot. A new person always gets a slot: when all are taken, the person
+    whose last message is oldest gives theirs up until they write again."""
 
     def __init__(self, count: int, last: dict[str, float]) -> None:
         self.count = count
         self.owner: dict[int, str] = {}  # slot → person
         self.last = last  # person → when they last wrote (kept by the client)
-
-    @property
-    def background(self) -> int | None:
-        return self.count - 1 if self.count >= 2 else None
 
     def of(self, who: str) -> int | None:
         if self.count < 2:  # one slot: nothing to choose
@@ -63,7 +59,7 @@ class Slots:
         for slot, owner in self.owner.items():
             if owner == who:
                 return slot
-        mine = range(self.count - 1)
+        mine = range(self.count)
         free = [s for s in mine if s not in self.owner]
         slot = free[0] if free else min(mine, key=lambda s: self.last.get(self.owner[s], 0.0))
         if slot in self.owner:
@@ -122,7 +118,6 @@ class LLM:
         who: str | None = None,
         tool_choice: str = "auto",
         thinking: bool = True,
-        background: bool = False,
     ) -> Reply:
         body = {"model": self.model, "messages": messages, "max_tokens": max_tokens}
         if tools:
@@ -131,7 +126,7 @@ class LLM:
         if not thinking:  # only the end of the prompt changes, so the cached prefix still matches (SPEC §4.2)
             body["chat_template_kwargs"] = {"enable_thinking": False}
         slots = await self._slots()
-        slot = slots.background if background else (slots.of(who) if who else None)
+        slot = slots.of(who) if who else None
         if slot is not None:
             body["id_slot"] = slot
         if who:

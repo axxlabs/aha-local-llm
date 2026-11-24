@@ -426,16 +426,20 @@ class Agent:
             await self.send(account, answer, open="stopped" if stopped else "asks" if folding.asks(answer) else "")
         account.transcript({"kind": "answer", "text": answer})
         conv = context.record_turn(account, text, answer, checked)
+        # The task's last request, still cached in the person's slot: the title and the summary are asked at its
+        # end, so they cost only their own words (SPEC §3.2 "Cache slots", §4.4, §7.4).
+        prompt, self.session(account).last_prompt = self.session(account).last_prompt, None
         if answer and not stopped:
-            await self._title(account, answer, asked_at, text)
-        await self._fold(account, conv)
+            await self._title(account, answer, prompt, asked_at, text)
+        await self._fold(account, conv, prompt, answer)
 
-    async def _title(self, account: Account, answer: str, asked_at: int = 0, asked: str = "") -> None:
+    async def _title(
+        self, account: Account, answer: str, prompt: list[dict] | None, asked_at: int = 0, asked: str = ""
+    ) -> None:
         """Name the conversation since the last break, for when the app folds it (SPEC §7.4 "Folding").
 
         Asked at the end of the task's own last request, so the model server's cached prompt still matches and
         it costs only the new words; the question and the title are never part of the conversation."""
-        prompt, self.session(account).last_prompt = self.session(account).last_prompt, None
         asked = asked.split("\n\n", 1)[0]  # the message that started the task, not later notes
         start = folding.segment_start(account.recent_items(), ZoneInfo(self.config.timezone))
         if prompt is None or start is None or not hasattr(self.out, "title"):
@@ -588,14 +592,25 @@ class Agent:
                     )
         return (*finish(f"{messages.TOO_MANY_STEPS}\n{last}".strip(), sources), text)
 
-    async def _fold(self, account: Account, conv: dict) -> None:
-        """Between tasks only: fold the oldest turns into the summary (SPEC §4.4)."""
+    async def _fold(self, account: Account, conv: dict, prompt: list[dict] | None = None, answer: str = "") -> None:
+        """Between tasks only: fold the oldest turns into the summary (SPEC §4.4). Asked at the end of the task's
+        own cached prompt, in the person's slot, where those turns are already read; a prompt of its own only when
+        there's none (a quiet scheduled task)."""
         folded = context.turns_to_fold(conv)
         if not folded:
             return
+        if prompt is not None:
+            request = [
+                *prompt,
+                {"role": "assistant", "content": answer},
+                {"role": "user", "content": context.fold_ask(folded)},
+            ]
+            tools, choice = self.registry.specs(), "none"  # the same tools, so the cached prompt still matches
+        else:
+            request, tools, choice = context.fold_request(conv, folded), None, "auto"
         try:
             reply = await self.llm.chat(
-                context.fold_request(conv, folded), max_tokens=1500, who=account.address, background=True
+                request, tools, max_tokens=1500, who=account.address, tool_choice=choice, thinking=False
             )
         except ModelUnavailable:
             return
