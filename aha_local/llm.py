@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from dataclasses import dataclass, field
@@ -80,6 +81,7 @@ class LLM:
         # Who's using the model and who's waiting for it: one request at a time on the GPU (SPEC §3.3).
         self.holder: str | None = None
         self.waiting: dict[str, int] = {}
+        self.turn_owner: str | None = None  # whose task holds the model now (SPEC §3.3)
         self.slots: Slots | None = None  # read from the server on the first call (SPEC §3.2 "Cache slots")
         self.last_wrote: dict[str, float] = {}  # person → when they last wrote: who keeps a slot
 
@@ -106,6 +108,49 @@ class LLM:
         """Another model is loaded: its slots start empty, and may be a different number."""
         self.slots = None
 
+    async def _acquire(self, who: str) -> None:
+        if who:
+            self.waiting[who] = self.waiting.get(who, 0) + 1
+        try:
+            await self.lock.acquire()
+        finally:
+            if who:
+                self.waiting[who] -= 1
+                if not self.waiting[who]:
+                    del self.waiting[who]
+        self.holder = who
+
+    def _release(self) -> None:
+        self.holder = None
+        self.lock.release()
+
+    @contextlib.asynccontextmanager
+    async def turn(self, who: str):
+        """The model is this person's for their whole task, not one step at a time (SPEC §3.3): with the hybrid
+        model only the last-used slot keeps its cache, so tasks taking turns step by step re-read their whole
+        prompt at every step (seen: 0 cached, 7-25 s per step, with two people at once). Another person's task
+        waits until this one ends, or until it waits for a card (`paused`)."""
+        await self._acquire(who)
+        self.turn_owner = who
+        try:
+            yield
+        finally:
+            if self.turn_owner == who:  # not while paused and cancelled before getting it back
+                self.turn_owner = None
+                self._release()
+
+    @contextlib.asynccontextmanager
+    async def paused(self, who: str):
+        """While the task waits for the person (a card), the model is free for others; then it's theirs again."""
+        if self.turn_owner != who:
+            yield
+            return
+        self.turn_owner = None
+        self._release()
+        yield  # stopped meanwhile (CancelledError): it never takes the model back, so it waits for no one
+        await self._acquire(who)
+        self.turn_owner = who
+
     def queued(self, who: str) -> bool:
         """`who` is waiting for the model while someone else's request runs: their turn hasn't come yet."""
         return self.waiting.get(who, 0) > 0 and self.holder is not None and self.holder != who
@@ -129,23 +174,16 @@ class LLM:
         slot = slots.of(who) if who else None
         if slot is not None:
             body["id_slot"] = slot
-        if who:
-            self.waiting[who] = self.waiting.get(who, 0) + 1
-        try:
-            await self.lock.acquire()
-        finally:
-            if who:
-                self.waiting[who] -= 1
-                if not self.waiting[who]:
-                    del self.waiting[who]
-        self.holder = who or ""
+        mine = bool(who) and self.turn_owner == who  # their task holds the model: no waiting between its steps
+        if not mine:
+            await self._acquire(who or "")
         try:
             start = time.monotonic()
             data = await self._post(body)
             ms = int((time.monotonic() - start) * 1000)
         finally:
-            self.holder = None
-            self.lock.release()
+            if not mine:
+                self._release()
         msg = data["choices"][0]["message"]
         calls = [
             ToolCall(c.get("id") or f"call{i}", c["function"]["name"], c["function"].get("arguments") or "{}")

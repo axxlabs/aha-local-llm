@@ -115,6 +115,21 @@ class _Counted:
         await self.agent.out.text(account, text)
 
 
+class _Pausing:
+    """The approvals, for a task: while a card waits for the person, the model is free for others (SPEC §3.3)."""
+
+    def __init__(self, approvals: Approvals, llm, who: str) -> None:
+        self._approvals, self._llm, self._who = approvals, llm, who
+
+    async def ask(self, *args, **kw):
+        paused = self._llm.paused(self._who) if hasattr(self._llm, "paused") else contextlib.nullcontext()
+        async with paused:
+            return await self._approvals.ask(*args, **kw)
+
+    def __getattr__(self, name):
+        return getattr(self._approvals, name)
+
+
 class ApprovalExpired(Exception):
     pass
 
@@ -133,6 +148,10 @@ class Agent:
         self.sessions: dict[str, Session] = defaultdict(Session)  # each person's live state, by address
         self.last_activity = time.monotonic()  # a message in or out, a card: `aha install --when-idle` waits on it
         self.typing_every = TYPING_EVERY
+
+    def _turn(self, account: Account):
+        """The model for this person's whole task (llm.turn), or nothing to wait for (a test's model)."""
+        return self.llm.turn(account.address) if hasattr(self.llm, "turn") else contextlib.nullcontext()
 
     def session(self, account: Account) -> Session:
         return self.sessions[account.address]
@@ -390,48 +409,55 @@ class Agent:
         sent_before = self.session(account).sent
         asked_at = 0 if scheduled else account.seq  # the item of the message that started it (SPEC §7.4)
         typing = asyncio.create_task(self._typing(account))
+        # The model is this person's for the whole task, its title and summary included: its cache stays theirs
+        # (SPEC §3.3 "One task at a time"). Waiting for the turn shows as "finishing someone else's request".
+        turn = self._turn(account)
+        await turn.__aenter__()
         try:
-            answer, checked, text = await self._within_limit(account, self.solve(account, text))
-        except asyncio.CancelledError:
-            account.transcript({"kind": "stopped"})
-            await self._stop_typing(account, typing)
-            raise
-        except TimeoutError:
-            answer, checked, stopped = messages.TOO_LONG, False, True
-        except ApprovalExpired:
-            answer, checked, stopped = messages.APPROVAL_EXPIRED, False, True
-        except ModelUnavailable as e:
-            log.error("model unavailable: %s", e)
-            answer, checked, stopped = messages.MODEL_DOWN, False, True
-        except Exception:
-            log.exception("task failed")
-            answer, checked, stopped = messages.FAILED, False, True
-        else:
-            stopped = answer.startswith(messages.TOO_MANY_STEPS)
-        if not answer.strip():
-            # After "✅ Save" there may be nothing to add; if they've heard nothing at all, say something.
-            answer = "" if self.session(account).sent > sent_before else "…"
-        await self._stop_typing(account, typing)  # before the answer, so no refresh can land after it
-        if scheduled:
-            quiet = answer.strip().lstrip("*_` ").startswith(schedule.NOTHING)
-            note = answer.split(schedule.NOTHING, 1)[1].lstrip(" :*_`-") if quiet else answer
-            schedule.update(account, scheduled, lambda e: {**e, "last": " ".join(note.split())[:500]})
-            if quiet:
-                account.transcript({"kind": "answer", "text": "", "scheduled": "nothing to report", "note": note})
-                return  # watching for a change, and there's none: say nothing, keep the chat clean
+            try:
+                answer, checked, text = await self._within_limit(account, self.solve(account, text))
+            except asyncio.CancelledError:
+                account.transcript({"kind": "stopped"})
+                await self._stop_typing(account, typing)
+                raise
+            except TimeoutError:
+                answer, checked, stopped = messages.TOO_LONG, False, True
+            except ApprovalExpired:
+                answer, checked, stopped = messages.APPROVAL_EXPIRED, False, True
+            except ModelUnavailable as e:
+                log.error("model unavailable: %s", e)
+                answer, checked, stopped = messages.MODEL_DOWN, False, True
+            except Exception:
+                log.exception("task failed")
+                answer, checked, stopped = messages.FAILED, False, True
+            else:
+                stopped = answer.startswith(messages.TOO_MANY_STEPS)
+            if not answer.strip():
+                # After "✅ Save" there may be nothing to add; if they've heard nothing at all, say something.
+                answer = "" if self.session(account).sent > sent_before else "…"
+            await self._stop_typing(account, typing)  # before the answer, so no refresh can land after it
+            if scheduled:
+                quiet = answer.strip().lstrip("*_` ").startswith(schedule.NOTHING)
+                note = answer.split(schedule.NOTHING, 1)[1].lstrip(" :*_`-") if quiet else answer
+                schedule.update(account, scheduled, lambda e: {**e, "last": " ".join(note.split())[:500]})
+                if quiet:
+                    account.transcript({"kind": "answer", "text": "", "scheduled": "nothing to report", "note": note})
+                    return  # watching for a change, and there's none: say nothing, keep the chat clean
+                if answer:
+                    answer = f"⏰ {answer}"
             if answer:
-                answer = f"⏰ {answer}"
-        if answer:
-            # Unfinished stays unfolded after a break (SPEC §7.4 "Folding"): a task that stopped, or a question.
-            await self.send(account, answer, open="stopped" if stopped else "asks" if folding.asks(answer) else "")
-        account.transcript({"kind": "answer", "text": answer})
-        conv = context.record_turn(account, text, answer, checked)
-        # The task's last request, still cached in the person's slot: the title and the summary are asked at its
-        # end, so they cost only their own words (SPEC §3.2 "Cache slots", §4.4, §7.4).
-        prompt, self.session(account).last_prompt = self.session(account).last_prompt, None
-        if answer and not stopped:
-            await self._title(account, answer, prompt, asked_at, text)
-        await self._fold(account, conv, prompt, answer)
+                # Unfinished stays unfolded after a break (SPEC §7.4 "Folding"): a task that stopped, or a question.
+                await self.send(account, answer, open="stopped" if stopped else "asks" if folding.asks(answer) else "")
+            account.transcript({"kind": "answer", "text": answer})
+            conv = context.record_turn(account, text, answer, checked)
+            # The task's last request, still cached in the person's slot: the title and the summary are asked at its
+            # end, so they cost only their own words (SPEC §3.2 "Cache slots", §4.4, §7.4).
+            prompt, self.session(account).last_prompt = self.session(account).last_prompt, None
+            if answer and not stopped:
+                await self._title(account, answer, prompt, asked_at, text)
+            await self._fold(account, conv, prompt, answer)
+        finally:
+            await turn.__aexit__(None, None, None)
 
     async def _title(
         self, account: Account, answer: str, prompt: list[dict] | None, asked_at: int = 0, asked: str = ""
@@ -488,7 +514,8 @@ class Agent:
 
         # The browser is reached only through this account's own context (SPEC §3.4).
         browser = self.browser.for_account(account.id) if self.browser else None
-        ctx = ToolContext(account, self.approvals, self.config, TaskState(), browser, send)
+        approvals = _Pausing(self.approvals, self.llm, account.address)  # a card frees the model meanwhile
+        ctx = ToolContext(account, approvals, self.config, TaskState(), browser, send)
         addresses.remember(ctx.task.seen_urls, text)  # a link the person sent is theirs, not the model's
         tools = self.registry.specs()
         last = ""
