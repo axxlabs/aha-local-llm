@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
-from . import checks, context, folding, messages
+from . import checks, context, dates, folding, messages
 from .accounts import Account, Accounts
 from .approvals import Approvals
 from .config import Config
@@ -501,7 +501,14 @@ class Agent:
 
     async def solve(self, account: Account, text: str) -> tuple[str, bool, str]:
         """Returns the answer, whether it passed the checks, and everything the person said during the task."""
-        task: list[dict] = [{"role": "user", "content": text}]
+        today = dt.datetime.now(ZoneInfo(self.config.timezone)).date()
+
+        def with_dates(message: str) -> str:
+            """The days the message names, worked out in code, right after it (SPEC §3.5 "Dates")."""
+            line = dates.note(message, today)
+            return f"{message}\n\n{line}" if line else message
+
+        task: list[dict] = [{"role": "user", "content": with_dates(text)}]
         has_photo = False
 
         def take_photos(message: dict) -> None:
@@ -541,7 +548,7 @@ class Agent:
         for _ in range(self.config.max_model_calls):
             extras, self.session(account).inbox = self.session(account).inbox, []
             for extra in extras:
-                task.append({"role": "user", "content": NEW_MESSAGE.format(text=extra)})
+                task.append({"role": "user", "content": NEW_MESSAGE.format(text=with_dates(extra))})
                 sources.append(extra)
                 addresses.remember(ctx.task.seen_urls, extra)
                 text = f"{text}\n\n{extra}"
