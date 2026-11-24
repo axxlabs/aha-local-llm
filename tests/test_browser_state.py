@@ -384,7 +384,7 @@ def test_a_site_action_claimed_without_a_browser_action_is_caught():
     )
     assert not any(c.failed(clicked) for c in checks.CLAIM_CHECKS)
     # Reading the trolley back isn't a claim of an action.
-    read = checks.Draft("read my trolley to me", "Your delivery slot is booked for Tuesday.", TaskState(), True)
+    read = checks.Draft("read my trolley to me", "Your delivery slot is booked for 01/12/2026.", TaskState(), True)
     assert not any(c.failed(read) for c in checks.CLAIM_CHECKS)
 
 

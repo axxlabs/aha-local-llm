@@ -48,7 +48,7 @@ async def message_user(args: dict, ctx: ToolContext) -> ToolResult:
 
 async def current_time(args: dict, ctx: ToolContext) -> ToolResult:
     now = dt.datetime.now(ZoneInfo(ctx.config.timezone))
-    return ToolResult(now.strftime(f"%A %d %B %Y, %H:%M ({ctx.config.timezone}, UTC%z)"))
+    return ToolResult(now.strftime(f"%d/%m/%Y %H:%M, a %A ({ctx.config.timezone}, UTC%z)"))
 
 
 def register(reg: Registry) -> None:

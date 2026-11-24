@@ -383,6 +383,25 @@ PROMISE_RETRY = retry(
 )
 
 
+# Weekdays (SPEC §3.5.1): the model writes every date as DD/MM/YYYY and no weekday; the app shows each date with
+# its weekday, worked out there. A weekday it writes itself can be wrong (seen, again and again). Quoted words
+# (in quotes, or a "> " line) are someone else's and may keep theirs.
+WEEKDAY_WORD = re.compile(
+    r"\b(?:Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat|Sun)\b\.?|\b(?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day\b"
+    r"|\b(?:segunda|terça|terca|quarta|quinta|sexta)(?:-feira)?\b|\bsábado\b|\bdomingo\b"
+)
+QUOTED = re.compile(r"[\"“][^\"”\n]*[\"”]|^>.*$", re.M)
+
+
+def writes_weekday(answer: str) -> bool:
+    return bool(WEEKDAY_WORD.search(QUOTED.sub(" ", answer)))
+
+
+WEEKDAY_RETRY = retry(
+    "Your draft writes weekdays. Never write a weekday: write every date in full as DD/MM/YYYY (e.g. 29/11/2026), "
+    "taken from the data or the Dates line; the app shows each date with its weekday, worked out correctly."
+)
+
 # In this order; each runs at most once per task.
 CLAIM_CHECKS = (
     Check(
@@ -445,6 +464,12 @@ CLAIM_CHECKS = (
         SCREENSHOT_RETRY,
         "the person asked to see a page and nothing was sent; asking for show_screenshot",
     ),
+    Check(
+        "weekday",
+        lambda d: writes_weekday(d.answer),
+        WEEKDAY_RETRY,
+        "draft answer wrote weekdays; asking for full dates (DD/MM/YYYY) instead",
+    ),
     # Last: the specific checks above say better what's missing ("Scheduled… I'll check" is a schedule claim).
     Check(
         "promise",
@@ -480,6 +505,9 @@ _MON_RE = (
 )
 DAY_FIRST = re.compile(rf"\b{_WD_RE}\.?,?\s+(\d{{1,2}})(?:st|nd|rd|th)?\s+{_MON_RE}\b(?:\s+(\d{{4}}))?", re.I)
 MONTH_FIRST = re.compile(rf"\b{_WD_RE}\.?,?\s+{_MON_RE}\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?\b(?:,?\s+(\d{{4}}))?", re.I)
+
+
+BEFORE_FULL_DATE = re.compile(rf"\b{_WD_RE}\.?,?\s+(\d{{1,2}}/\d{{1,2}}/\d{{4}})\b", re.I)
 
 
 def _nearest(today: dt.date, month: int, day: int, year: int | None) -> dt.date | None:
@@ -520,6 +548,9 @@ def fix_weekdays(answer: str, today: dt.date) -> tuple[str, int]:
         fixed += 1
         return _as(word, d.weekday()) + m.group(0)[len(word) :]
 
+    # A weekday the model still wrote right before a full date: the app's label shows the right one.
+    answer, n = BEFORE_FULL_DATE.subn(r"\2", answer)
+    fixed += n
     answer = DAY_FIRST.sub(lambda m: repair(m, m.group(2), m.group(3), m.group(4)), answer)
     answer = MONTH_FIRST.sub(lambda m: repair(m, m.group(3), m.group(2), m.group(4)), answer)
     return answer, fixed

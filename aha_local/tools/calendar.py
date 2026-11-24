@@ -185,15 +185,6 @@ def shown(value: dt.datetime | dt.date) -> str:
     return value.strftime("%Y-%m-%d %H:%M") if isinstance(value, dt.datetime) else value.isoformat()
 
 
-def weekday(text: str) -> str:
-    """'2026-11-29 18:00' → 'Sun 2026-11-29 18:00': the day said, so a wrong date shows (seen: "Saturday 29
-    November" for a Sunday)."""
-    try:
-        return f"{dt.date.fromisoformat(text[:10]).strftime('%a')} {text}"
-    except ValueError:
-        return text
-
-
 def day_field(start: str) -> Field:
     """Which day it is, on the card, in words: the person sees at once if it's the wrong one."""
     try:
@@ -215,7 +206,8 @@ def signed(notes: str) -> str:
 
 
 def describe(event: dict, tz) -> str:
-    start, end = weekday(from_api(event.get("start", {}), tz)), from_api(event.get("end", {}), tz)
+    # No weekday: the model never writes one (it guesses them wrong); the app shows each date with its weekday.
+    start, end = from_api(event.get("start", {}), tz), from_api(event.get("end", {}), tz)
     parts = [f"[{event.get('id', '')}] {event.get('summary', '(no title)')}: {start} to {end}"]
     if event.get("location"):
         parts.append(f"at {event['location']}")

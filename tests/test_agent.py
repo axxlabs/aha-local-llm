@@ -77,7 +77,7 @@ async def test_prefix_is_identical_across_accounts_and_days(accounts):
     b = context.build(other, [], "Europe/London", "Home", 131072, now=dt.datetime(2026, 11, 21))
     assert a[0] == b[0]  # the system prompt never changes
     assert "{{" not in a[0]["content"] and "2026" not in a[0]["content"]
-    assert "Friday 20 November 2026" in a[1]["content"] and "Saturday 21 November 2026" in b[1]["content"]
+    assert "20/11/2026, a Friday" in a[1]["content"] and "21/11/2026, a Saturday" in b[1]["content"]
 
 
 async def test_tool_traffic_is_dropped_after_the_task(agent, llm, chat, accounts, registry):
@@ -86,7 +86,7 @@ async def test_tool_traffic_is_dropped_after_the_task(agent, llm, chat, accounts
 
     registry.add(Tool("big_page", "a page", params(), big))
     llm.call("big_page")
-    llm.answer("Booked Flat Iron, Fri 27 Nov 14:00, ref FX12.")
+    llm.answer("Booked Flat Iron, 27/11 14:00, ref FX12.")
     await say(agent, "book it")
     await settle(agent)
     llm.answer("You're welcome.")

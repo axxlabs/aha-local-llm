@@ -62,7 +62,7 @@ def estimate(messages: list[dict]) -> int:
 def days_ahead(now: dt.datetime, count: int = 14) -> str:
     """The coming days with their weekdays, so "this Saturday" needs no date arithmetic (seen: the 29th taken for a
     Saturday; it was a Sunday). Changes once a day, like the date above it."""
-    return ", ".join((now + dt.timedelta(days=i)).strftime("%a %Y-%m-%d") for i in range(1, count + 1))
+    return ", ".join((now + dt.timedelta(days=i)).strftime("%a %d/%m/%Y") for i in range(1, count + 1))
 
 
 def context_block(account: Account, timezone: str, household: str, now: dt.datetime | None = None) -> str:
@@ -71,7 +71,7 @@ def context_block(account: Account, timezone: str, household: str, now: dt.datet
     summary = conv.get("summary") or "(no earlier conversation yet)"
     return (
         "<context>\n"
-        f"Today: {now.strftime('%A %d %B %Y')} ({timezone}). Household: {household}.\n"
+        f"Today: {now.strftime('%d/%m/%Y')}, a {now.strftime('%A')} ({timezone}). Household: {household}.\n"
         f"The next 14 days: {days_ahead(now)}.\n"
         f"You are talking with: {account.label} ({account.address.split(':', 1)[0]} chat).\n\n"
         "What you remember about them (each fact approved by them):\n"

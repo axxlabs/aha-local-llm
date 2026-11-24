@@ -10,17 +10,20 @@ TUESDAY = dt.date(2026, 11, 24)
 def test_the_weekday_isnt_joined_with_a_number_from_elsewhere():
     """Seen: "Tuesday, 2pm, for 2 people" on Tuesday 24 Nov booked as "Tuesday 2 December" (a Wednesday)."""
     line = note("Book a table on flatiron KingsX, Tuesday, 2pm, for 2 people.", TUESDAY)
-    assert "today is Tuesday 24 November 2026; the next one is Tuesday 1 December 2026" in line
-    assert "2 December" not in line
+    assert "“Tuesday” = 24/11/2026 (today), or 01/12/2026 (the next one)" in line
+    assert "02/12" not in line
 
 
-def test_days_and_dates_are_worked_out():
-    assert "“Friday” = Friday 27 November 2026 (the one after: Friday 4 December 2026)" in note("Friday at 8", TUESDAY)
-    assert "“tomorrow” = Wednesday 25 November 2026" in note("tomorrow 9am", TUESDAY)
-    assert "“the 2nd” = Wednesday 2 December 2026" in note("on the 2nd at 1pm", TUESDAY)
-    assert "“2 Dec” = Wednesday 2 December 2026" in note("2 Dec at 2pm", TUESDAY)
-    assert "Thursday 26 November 2026" in note("reservar quinta-feira 20h", TUESDAY)
-    assert "Saturday 28 November 2026" in note("Sat 7pm", TUESDAY)
+def test_days_and_dates_are_worked_out_as_full_dates():
+    assert "“Friday” = 27/11/2026 (the one after: 04/12/2026)" in note("Friday at 8", TUESDAY)
+    assert "“next Friday” = 27/11/2026, or 04/12/2026 if they mean the week after" in note("next Friday", TUESDAY)
+    assert "“tomorrow” = 25/11/2026" in note("tomorrow 9am", TUESDAY)
+    assert "“the 2nd” = 02/12/2026" in note("on the 2nd at 1pm", TUESDAY)
+    assert "“2 Dec” = 02/12/2026" in note("2 Dec at 2pm", TUESDAY)
+    assert "26/11/2026" in note("reservar quinta-feira 20h", TUESDAY)
+    assert "28/11/2026" in note("Sat 7pm", TUESDAY)
+    assert "“this weekend” = 28/11/2026 to 29/11/2026" in note("this weekend", TUESDAY)
+    assert "“next week” = 30/11/2026 to 06/12/2026" in note("next week", TUESDAY)
 
 
 def test_ordinary_words_and_numbers_arent_dates():
@@ -50,3 +53,14 @@ def test_talk_about_a_checked_draft_is_dropped():
     text, passed = finish(answer, ["Sun 2026-11-29 18:00 to 19:00"], retried=True, today=TUESDAY)
     assert "guesses" not in text and "12:00" not in text and passed
     assert "Sync (18:00–19:00)" in text
+
+
+def test_answers_write_no_weekdays():
+    """The model writes full dates; the app shows the weekday (SPEC §3.5.1). Quotes keep theirs."""
+    from aha_local import checks
+
+    assert checks.writes_weekday("Sync with Natalia on Sun 29/11/2026")
+    assert checks.writes_weekday("See you on Saturday")
+    assert not checks.writes_weekday("Sync with Natalia on 29/11/2026 at 17:00")
+    assert not checks.writes_weekday('Natalia said: "Sunday works"')
+    assert checks.fix_weekdays("on Sat 29/11/2026 at 17:00", TUESDAY) == ("on 29/11/2026 at 17:00", 1)

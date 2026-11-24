@@ -47,11 +47,14 @@ MONTH_DAY = re.compile(rf"\b({_MONTHS_RE})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?\b(?!
 ORDINAL = re.compile(r"\b(?:the\s+|dia\s+)(\d{1,2})(?:st|nd|rd|th|º)?\b|\b(\d{1,2})(?:st|nd|rd|th)\b", re.I)
 TODAY = re.compile(r"\b(today|tonight|hoje)\b", re.I)
 TOMORROW = re.compile(r"\b(tomorrow|amanhã|amanha)\b", re.I)
+WEEKEND = re.compile(r"\b(this|next)?\s*weekend\b|\b(este|próximo|proximo)?\s*fim de semana\b", re.I)
+NEXT_WEEK = re.compile(r"\bnext week\b|\bpróxima semana\b|\bproxima semana\b|\bsemana que vem\b", re.I)
 AFTER_TOMORROW = re.compile(r"\b(day after tomorrow|depois de amanhã|depois de amanha)\b", re.I)
 
 
 def say(d: dt.date) -> str:
-    return f"{d.strftime('%A')} {d.day} {d.strftime('%B %Y')}"
+    """A full date, DD/MM/YYYY: how the model writes every date (the app shows its weekday)."""
+    return d.strftime("%d/%m/%Y")
 
 
 def _weekday(word: str) -> int | None:
@@ -88,10 +91,14 @@ def note(text: str, today: dt.date) -> str:
             continue
         ahead = (wd - today.weekday()) % 7
         first = today + dt.timedelta(days=ahead or 7)
+        key = word.rstrip(".")
+        before = text[: text.find(word)].lower().rstrip()
         if ahead == 0:
-            found[word.rstrip(".")] = f"today is {say(today)}; the next one is {say(first)}"
+            found[key] = f"{say(today)} (today), or {say(first)} (the next one)"
+        elif before.endswith(("next", "próxima", "proxima", "próximo", "proximo")):
+            found[f"next {key}"] = f"{say(first)}, or {say(first + dt.timedelta(days=7))} if they mean the week after"
         else:
-            found[word.rstrip(".")] = f"{say(first)} (the one after: {say(first + dt.timedelta(days=7))})"
+            found[key] = f"{say(first)} (the one after: {say(first + dt.timedelta(days=7))})"
     for m in DAY_MONTH.finditer(text):
         d = _next_day_of_month(today, int(m.group(1)), _MONTH_WORD[m.group(2).lower()])
         if d:
@@ -106,7 +113,15 @@ def note(text: str, today: dt.date) -> str:
         d = _next_day_of_month(today, int(m.group(1) or m.group(2)))
         if d:
             found[m.group(0).strip()] = say(d)
+    if m := WEEKEND.search(text):
+        sat = today + dt.timedelta(days=(5 - today.weekday()) % 7)
+        if (m.group(1) or m.group(2) or "").lower().startswith(("next", "pr")) and today.weekday() < 5:
+            sat += dt.timedelta(days=7)
+        found[m.group(0)] = f"{say(sat)} to {say(sat + dt.timedelta(days=1))}"
+    if m := NEXT_WEEK.search(text):
+        monday = today + dt.timedelta(days=7 - today.weekday())
+        found[m.group(0)] = f"{say(monday)} to {say(monday + dt.timedelta(days=6))}"
     if not found:
         return ""
     parts = "; ".join(f"“{k}” = {v}" for k, v in found.items())
-    return f"(Dates, worked out by the computer: {parts}. Use these dates.)"
+    return f"(Dates, worked out by the computer: {parts}. Use these dates, written as DD/MM/YYYY.)"

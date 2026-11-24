@@ -54,7 +54,7 @@ def parse_local(text: str, tz: ZoneInfo) -> dt.datetime | None:
 
 
 def show(when: dt.datetime) -> str:
-    return when.strftime("%a %d %b %Y, %H:%M")
+    return when.strftime("%d/%m/%Y %H:%M")  # no weekday: the app labels the date with its own
 
 
 def _at(day: dt.date, clock: dt.time, tz: ZoneInfo) -> dt.datetime:

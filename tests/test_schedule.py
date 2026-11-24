@@ -152,7 +152,7 @@ async def test_missed_while_off(scheduled_agent, chat, accounts):
     schedule.save(fe, [one_off, daily])
     await scheduler.tick(now=local("2026-11-22T23:00"))  # 15 and 16 hours late
     assert [m.text for m in chat.sent] == [
-        "⏰ Missed while the computer was off (reminder, Sun 22 Nov 2026, 08:00): Call Sam"
+        "⏰ Missed while the computer was off (reminder, 22/11/2026 08:00): Call Sam"
     ]
     (left,) = schedule.load(fe)
     assert left["id"] == "def456" and left["next"] == local("2026-11-23T07:00")
@@ -160,7 +160,7 @@ async def test_missed_while_off(scheduled_agent, chat, accounts):
     chat.sent.clear()
     schedule.save(fe, [entry("2026-11-23T08:00", "none")])
     await scheduler.tick(now=local("2026-11-23T10:00"))  # 2 hours late: still sent, marked
-    assert chat.sent[0].text.startswith("⏰ Call Sam _(late: due Mon 23 Nov 2026, 08:00)_")
+    assert chat.sent[0].text.startswith("⏰ Call Sam _(late: due 23/11/2026 08:00)_")
 
 
 async def test_limits_and_past_times(scheduled_agent, accounts, config):
