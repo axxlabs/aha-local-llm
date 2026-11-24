@@ -199,7 +199,7 @@ async def test_sending_is_a_card_with_the_exact_email_and_edits_are_what_is_sent
         ("To", "sam@example.com", "text"),
         ("Cc", "", "text"),
         ("Subject", "Dinner", "text"),
-        ("Message", "See you at 7.\n\nWritten by Aha! (A Private AI Assistant)", "longtext"),  # signed in code
+        ("Message", "See you at 7.\n\nWritten by Aha!\n- Fe's Private AI Assistant", "longtext"),  # signed in code
     ]
     path, sent = google.sent[0]
     msg = message_from_bytes(base64.urlsafe_b64decode(sent["raw"]), policy=policy.default)

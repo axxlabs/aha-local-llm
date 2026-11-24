@@ -68,16 +68,12 @@ REMINDER_UNKNOWN = "I couldn't find that one. Say **reminders** to see the list 
 
 
 # Outbound messages are signed, in code (SPEC §3.4): on the card, so the person sees it and can change it.
-WRITTEN_BY = "Written by Aha! (A Private AI Assistant)"
+def signature(name: str) -> str:
+    return f"Written by Aha!\n- {name}'s Private AI Assistant"
 
 
-def signed_email(body: str) -> str:
-    """An email's text ending with the signature on its own last line (never twice)."""
-    body = body.strip()
-    return body if "written by aha" in body.lower() else f"{body}\n\n{WRITTEN_BY}".strip()
-
-
-def signed_chat(text: str) -> str:
-    """A chat message with the signature at the end of the same line: a new line would send it early."""
+def signed(text: str, name: str) -> str:
+    """A message to someone else, ending with the signature on its own lines (never twice). On a messaging site
+    the new lines are typed as Shift+Enter, so they don't send the message early."""
     text = text.strip()
-    return text if "written by aha" in text.lower() else f"{text} — {WRITTEN_BY}".strip(" —")
+    return text if "written by aha" in text.lower() else f"{text}\n\n{signature(name)}".strip()

@@ -51,9 +51,14 @@ def move_code(ref: str, rng: random.Random | None = None) -> str:
     return f"async (page) => {{ const el = page.locator({_locator(ref)}); {_move_to_element(rng)}return 'ok'; }}"
 
 
-def type_code(ref: str, text: str, submit: bool, rng: random.Random | None = None) -> str:
+NEWLINES = ("Enter", "Shift+Enter")  # what a new line in the text is typed as (Shift+Enter: messaging sites)
+
+
+def type_code(ref: str, text: str, submit: bool, rng: random.Random | None = None, newline: str = "Enter") -> str:
     """Click into the field and type `text` one key at a time with uneven delays; Enter after if `submit`."""
     rng = rng or random.Random()
+    if newline not in NEWLINES:
+        raise ValueError("newline")
     literal = json.dumps(json.dumps(text))
     enter = (
         f"await page.waitForTimeout({rng.randint(150, 400)}); await page.keyboard.press('Enter'); " if submit else ""
@@ -62,7 +67,7 @@ def type_code(ref: str, text: str, submit: bool, rng: random.Random | None = Non
         f"async (page) => {{ const el = page.locator({_locator(ref)}); {_move_to_element(rng)}"
         "await el.click({ timeout: 5000 }); await el.fill(''); "
         f"for (const ch of JSON.parse({literal})) {{ "
-        "if (ch === '\\n') await page.keyboard.press('Enter'); else await page.keyboard.type(ch); "
+        f"if (ch === '\\n') await page.keyboard.press('{newline}'); else await page.keyboard.type(ch); "
         "await page.waitForTimeout(40 + Math.floor(Math.random() * 110)); } "
         f"{enter}return 'ok'; }}"
     )

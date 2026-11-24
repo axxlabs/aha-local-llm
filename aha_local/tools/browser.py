@@ -548,17 +548,22 @@ async def run_code(session, code: str) -> bool:
         return False
 
 
-async def human_type(session, ref: str, text: str, submit: bool) -> bool:
+async def human_type(session, ref: str, text: str, submit: bool, newline: str = "Enter") -> bool:
     """Type into a field one key at a time (SPEC §3.4). False if it couldn't: the caller falls back."""
     if not human.is_ref(ref) or len(text) > human.MAX_HUMAN_TYPING:
         return False
-    return await run_code(session, human.type_code(ref, text, submit))
+    return await run_code(session, human.type_code(ref, text, submit, newline=newline))
 
 
 async def run_approved(session, name: str, args: dict, ctx: ToolContext) -> ToolResult:
     """Run an approved action; typing goes at human pace where it can (SPEC §3.4)."""
     typing = name == "browser_type" and not args.get("slowly") and isinstance(args.get("text"), str)
-    if typing and await human_type(session, str(args.get("target", "")), args["text"], bool(args.get("submit"))):
+    # On a messaging site Enter sends: a new line in the text is Shift+Enter there (SPEC §3.4).
+    host = urlsplit(ctx.task.page_url).hostname or ""
+    newline = "Shift+Enter" if host and site_of(host) in MESSAGE_SITES else "Enter"
+    if typing and await human_type(
+        session, str(args.get("target", "")), args["text"], bool(args.get("submit")), newline
+    ):
         return await call_with_snapshot(session, "browser_snapshot", {}, ctx)
     if name == "browser_fill_form" and isinstance(args.get("fields"), list):
         # In the form's order: text fields typed one key at a time, the others (checkboxes, lists) filled by the
@@ -674,7 +679,7 @@ def make_handler(name: str):
                 form.title = f"Send this message on {action.site}?"
                 for f in form.fields:  # signed on the card, in code (SPEC §3.4): the person sees it, can change it
                     if f.label == "Text" or MESSAGE_BOX.search(f.label):
-                        f.value = messages.signed_chat(f.value)
+                        f.value = messages.signed(f.value, ctx.account.label)
         decision, refused = await guard.ask(ctx, "action", form.title, form.fields, shot)
         if refused:
             return refused
