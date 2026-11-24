@@ -31,10 +31,25 @@ instead.
 
 ## What you need
 
-- Linux with rootless Podman and systemd (tested on Fedora 44)
-- An NVIDIA GPU with 16 GB of VRAM, the NVIDIA driver and the Container Toolkit (CDI)
+- Linux with systemd **256 or later** (for `systemd-creds --user`): Fedora 41+, Debian 13, Ubuntu 24.10+
+  (Ubuntu 24.04 has 255, too old). Tested on Fedora 44.
+- An NVIDIA GPU with 16 GB of VRAM, the NVIDIA driver and the NVIDIA Container Toolkit (CDI)
 - 32 GB of RAM or more, about 30 GB of disk for the model
-- gocryptfs, for the encrypted browser profiles (`sudo dnf install gocryptfs`)
+- A TPM 2.0 is used when there is one, to seal the keys to this computer (without one they're sealed to the host
+  key only)
+
+The packages:
+
+| | Fedora | Debian / Ubuntu |
+|---|---|---|
+| Containers | `sudo dnf install podman` | `sudo apt install podman` |
+| Encrypted browser profiles | `sudo dnf install gocryptfs fuse3` | `sudo apt install gocryptfs fuse3` |
+| TPM sealing (systemd-creds) | `sudo dnf install tpm2-tss` | `sudo apt install libtss2-esys-3.0.2-0t64 libtss2-rc0t64 libtss2-mu-4.0.1-0t64` |
+| Download and build tools | `sudo dnf install git curl` | `sudo apt install git curl` |
+| uv (runs aha) | `curl -LsSf https://astral.sh/uv/install.sh \| sh` | the same |
+| NVIDIA Container Toolkit | [NVIDIA's guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html), then `sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml` | the same |
+
+`aha doctor` checks what's missing and says how to fix it.
 
 ## Install
 

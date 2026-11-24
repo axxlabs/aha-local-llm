@@ -634,7 +634,16 @@ def cmd_doctor(a) -> None:
     if not HOME_CONFIG.exists():
         raise SystemExit(1)
     config = Config.load(HOME_CONFIG)
-    check("podman", bool(shutil.which("podman")), "sudo dnf install podman")
+    check("podman", bool(shutil.which("podman")), "sudo dnf install podman  (Debian/Ubuntu: sudo apt install podman)")
+    check(
+        "gocryptfs and FUSE 3 (encrypted browser profiles)",
+        bool(shutil.which("gocryptfs") and shutil.which("fusermount3")),
+        "sudo dnf install gocryptfs fuse3  (Debian/Ubuntu: sudo apt install gocryptfs fuse3)",
+    )
+    version = subprocess.run(["systemctl", "--version"], capture_output=True, text=True).stdout.split()
+    systemd = int(version[1]) if len(version) > 1 and version[1].isdigit() else 0
+    check(f"systemd 256 or later (systemd-creds --user), found {systemd}", systemd >= 256, "a newer distribution")
+    check("git and curl", bool(shutil.which("git") and shutil.which("curl")), "sudo dnf install git curl")
     cdi = (
         subprocess.run(["nvidia-ctk", "cdi", "list"], capture_output=True, text=True)
         if shutil.which("nvidia-ctk")
