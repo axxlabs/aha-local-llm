@@ -33,9 +33,19 @@ import mcp.types as mt
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
+from .. import messages
 from ..approvals import Field
 from ..items import Image
-from ..policy.browser import MESSAGE_SITES, classify, form_for, offered, open_action, open_form, sends_message
+from ..policy.browser import (
+    MESSAGE_BOX,
+    MESSAGE_SITES,
+    classify,
+    form_for,
+    offered,
+    open_action,
+    open_form,
+    sends_message,
+)
 from ..policy.urls import check_url, site_of
 from . import guard, human, logins, signins
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
@@ -662,6 +672,9 @@ def make_handler(name: str):
             form = form_for(name, labelled(name, args, ctx), action.site)
             if action.kind == "send":
                 form.title = f"Send this message on {action.site}?"
+                for f in form.fields:  # signed on the card, in code (SPEC §3.4): the person sees it, can change it
+                    if f.label == "Text" or MESSAGE_BOX.search(f.label):
+                        f.value = messages.signed_chat(f.value)
         decision, refused = await guard.ask(ctx, "action", form.title, form.fields, shot)
         if refused:
             return refused

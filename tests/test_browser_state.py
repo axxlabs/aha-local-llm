@@ -456,11 +456,12 @@ async def test_on_whatsapp_web_the_message_box_is_always_a_card_and_the_page_is_
     await agent.inbound(fe, "tell Sam on WhatsApp I'm on my way")
     card = await chat.next()
     assert card.card["title"] == "Send this message on whatsapp.com?"
-    assert [(f["label"], f["value"]) for f in card.card["fields"]] == [("Text", "On my way")]
+    signed = "On my way — Written by Aha! (A Private AI Assistant)"  # signed in code, on one line (SPEC §3.4)
+    assert [(f["label"], f["value"]) for f in card.card["fields"]] == [("Text", signed)]
     assert fake.contexts[-1].fields == {"e1": "Sam"}  # the search ran without a card: the site is trusted
     await agent.approval_reply(fe, card.card["id"], "approve")
     await settle(agent)
-    assert fake.contexts[-1].fields == {"e1": "Sam", "e2": "On my way"}
+    assert fake.contexts[-1].fields == {"e1": "Sam", "e2": signed}
     assert sum(1 for m in chat.sent if m.card) == 1
 
 

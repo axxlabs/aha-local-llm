@@ -65,3 +65,19 @@ REMINDERS = "Your reminders and scheduled tasks:\n{items}\n\nTo remove one: **ca
 NO_REMINDERS = 'You have no reminders or scheduled tasks. Ask me, e.g. "remind me at 6 to call Sam".'
 REMINDER_CANCELLED = "Cancelled."
 REMINDER_UNKNOWN = "I couldn't find that one. Say **reminders** to see the list with ids."
+
+
+# Outbound messages are signed, in code (SPEC §3.4): on the card, so the person sees it and can change it.
+WRITTEN_BY = "Written by Aha! (A Private AI Assistant)"
+
+
+def signed_email(body: str) -> str:
+    """An email's text ending with the signature on its own last line (never twice)."""
+    body = body.strip()
+    return body if "written by aha" in body.lower() else f"{body}\n\n{WRITTEN_BY}".strip()
+
+
+def signed_chat(text: str) -> str:
+    """A chat message with the signature at the end of the same line: a new line would send it early."""
+    text = text.strip()
+    return text if "written by aha" in text.lower() else f"{text} — {WRITTEN_BY}".strip(" —")

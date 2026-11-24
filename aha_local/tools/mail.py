@@ -19,6 +19,7 @@ from html import unescape
 
 import httpx
 
+from .. import messages
 from ..approvals import Field
 from ..rest import Vault
 from . import guard
@@ -372,7 +373,7 @@ def _compose(kind: str):
             Field("To", " ".join(str(args.get("to", "")).split())),
             Field("Cc", " ".join(str(args.get("cc", "") or "").split())),
             Field("Subject", subject),
-            Field("Message", str(args.get("body", "")).strip()[:MAX_BODY], "longtext"),
+            Field("Message", messages.signed_email(str(args.get("body", "")))[:MAX_BODY], "longtext"),
         ]
         if reply:
             fields.append(Field("In reply to", f"{reply.get('from', '')}: {reply.get('subject', '')}", "info"))
