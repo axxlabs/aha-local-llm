@@ -127,10 +127,11 @@ def photo(value: object) -> Image | None:
     return Image(mime=value["mime"], b64=b64)
 
 
-def browser_list(account: Account) -> list[dict]:
-    """Settings → Your browser: the sites it remembers, the trusted ones, and saved logins (SPEC §3.4, §5.7, §5.8)."""
+def browser_list(account: Account, known: list[dict]) -> list[dict]:
+    """Settings → Your browser: the sites it remembers (`known`, read from the person's browser), the trusted ones,
+    and saved logins (SPEC §3.4, §5.7, §5.8)."""
     trust, saved = set(trusted.sites(account)), logins.sites(account)
-    listed = {s["site"]: {**s, "trusted": s["site"] in trust} for s in signins.sites(account)}
+    listed = {s["site"]: {**s, "trusted": s["site"] in trust} for s in known}
     for site in (trust | saved) - set(listed):
         listed[site] = {"site": site, "signed_in": False, "trusted": site in trust}
     return [{**listed[s], "login_saved": s in saved} for s in sorted(listed)]
@@ -428,7 +429,8 @@ class Channel:
                     await self.agent.forget_site(account, site)
                 elif t == "browser_clear":
                     await self.agent.clear_browser(account)
-            await reply({"t": "browser", "sites": browser_list(account)})
+            known = await self.agent.browser_sites(account) if self.agent is not None else []
+            await reply({"t": "browser", "sites": browser_list(account, known)})
         elif t in ("connections_request", "email_disconnect"):
             # Settings → Connections (SPEC §7.4): what this person connected Aha! to. The address only, never a token.
             email = clean_text(msg.get("email"), 320) or ""

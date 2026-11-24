@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 Axxlabs Limited
+# Each person's browser profile, encrypted at rest (SPEC §3.4 "Browser profiles"): gocryptfs over the data folder's
+# browser-profiles.enc, mounted only while aha runs, at a runtime path (never on disk in the clear). Its password is
+# derived from aha's data key and sealed to this computer like it.
+[Unit]
+Description=aha browser profiles (encrypted)
+
+[Service]
+Type=simple
+LoadCredentialEncrypted=profiles-key:@PROFILES_KEY_CRED@
+ExecStartPre=/usr/bin/mkdir -p @PROFILES@
+ExecStart=/usr/bin/gocryptfs -fg -passfile %d/profiles-key -noprealloc @PROFILES_ENC@ @PROFILES@
+# Ready once the folder is mounted, so the browser never starts on an empty, unencrypted folder.
+ExecStartPost=/bin/sh -c 'for i in $(seq 100); do mountpoint -q @PROFILES@ && exit 0; sleep 0.1; done; exit 1'
+ExecStop=/usr/bin/fusermount3 -u @PROFILES@
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

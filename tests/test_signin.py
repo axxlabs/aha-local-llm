@@ -66,13 +66,15 @@ class FakeContext:
         """What Playwright MCP's browser_run_code_unsafe does with the harness's fixed code."""
         self.codes.append(code)
         echo = f"\n### Ran Playwright code\n```js\n{code}\n```"  # the real one echoes the code: typed text too
-        if code in (signins.GET_STATE, signins.GET_STATE_LIGHT):
-            state = {"cookies": self.cookies, "origins": [] if "indexedDB" not in code else self.origins}
-            return text_result("### Result\n" + json.dumps(json.dumps(state)) + echo)
-        if "setStorageState" in code:
-            state = json.loads(json.loads(LITERAL.search(code).group(1)))
-            self.cookies, self.origins = list(state["cookies"]), list(state["origins"])
-        elif "keyboard.type" in code:  # typing one key at a time
+        if code == signins.COOKIE_DOMAINS:
+            domains = sorted({c["domain"] for c in self.cookies})
+            return text_result("### Result\n" + json.dumps(json.dumps(domains)) + echo)
+        if "clearDataForOrigin" in code:  # forget a site: its cookies and its origins' storage
+            site = json.loads(json.loads(LITERAL.search(code).group(1)))
+            self.cookies = [c for c in self.cookies if not signins.matches(c["domain"], site)]
+            self.origins = [o for o in self.origins if not signins.matches(o["origin"].split("//")[1], site)]
+            return text_result('### Result\n"1"' + echo)
+        if "keyboard.type" in code:  # typing one key at a time
             ref = re.search(r"aria-ref=(\w+)", code).group(1)
             self.fields[ref] = json.loads(json.loads(LITERAL.search(code).group(1)))
             self.order.append(f"typed {ref}")
@@ -210,13 +212,36 @@ class FakeContext:
 
 
 class FakeBrowser:
+    """The browser container: a supervisor that starts one browser per person, each with a profile that lasts
+    (SPEC §3.4 "Browser profiles"): connecting again finds the same cookies and storage."""
+
     def __init__(self) -> None:
-        self.contexts: list[FakeContext] = []
+        self.contexts: list[FakeContext] = []  # every connection's view, in order (the latest last)
+        self.profiles: dict[str, FakeContext] = {}  # account id → their profile
+        self.ports: dict[int, str] = {}
+        self.calls: list[tuple[str, str]] = []  # (path, id) the supervisor was asked
         server = self
+
+        async def supervise(path: str, account_id: str) -> dict:
+            server.calls.append((path, account_id))
+            if path == "/forget":
+                server.profiles.pop(account_id, None)
+            if path == "/start":
+                port = 8931 + len(server.ports)
+                server.ports[port] = account_id
+                return {"port": port}
+            return {}
 
         class Session(BrowserSession):
             async def _run(self) -> None:
-                ctx = FakeContext()
+                url = self.url if isinstance(self.url, str) else await self.url()
+                who = server.ports[int(url.split(":")[2].split("/")[0])]
+                if who == "probe":
+                    ctx = FakeContext()
+                else:
+                    ctx = server.profiles.setdefault(who, FakeContext())
+                    ctx.closed = False
+                    ctx.url = "about:blank"  # a new window
                 server.contexts.append(ctx)
                 self.tools = TOOLS
                 self.ready.set()
@@ -228,20 +253,16 @@ class FakeBrowser:
                     ctx.closed = True
 
         self.Session = Session
+        self.supervise = supervise
+
+    def open(self) -> list[FakeContext]:
+        return [c for c in self.contexts if not c.closed]
 
 
 @pytest.fixture
 async def setup(config, accounts, llm, registry, chat, tmp_path):
     fake = FakeBrowser()
-    pool = BrowserPool("x", idle_seconds=1800, session=fake.Session)
-
-    async def opened(account_id, session):
-        await signins.restore(accounts.get(account_id), session)
-
-    async def closing(account_id, session):
-        await signins.capture(accounts.get(account_id), session)
-
-    pool.on_open, pool.on_close = opened, closing
+    pool = BrowserPool("http://aha-browser:8930", idle_seconds=1800, session=fake.Session, supervise=fake.supervise)
     assert await browser.register(registry, pool, tmp_path / "pins.json", wait=2) == len(TOOLS)
     agent = Agent(config, accounts, llm, registry, chat, pool)
     yield agent, pool, fake
@@ -271,7 +292,7 @@ async def start_sign_in(agent, llm, chat, account, url="https://www.waitrose.com
 
 
 async def test_the_person_types_the_password_and_the_model_never_sees_it(setup, llm, chat, accounts):
-    agent, _, fake = setup
+    agent, pool, fake = setup
     fe = person(accounts)
     card = await start_sign_in(agent, llm, chat, fe)
     c = card.card
@@ -294,7 +315,7 @@ async def test_the_person_types_the_password_and_the_model_never_sees_it(setup, 
     assert "••••" in json.dumps(llm.requests[-1]["messages"], ensure_ascii=False)
     assert "Signed in on waitrose.com." in recorded
     assert not (fe.dir / logins.FILE).exists()  # the box wasn't ticked: nothing saved
-    assert signins.sites(fe) == [{"site": "waitrose.com", "signed_in": True}]
+    assert await signins.sites(fe, pool.for_account(fe.id)) == [{"site": "waitrose.com", "signed_in": True}]
     raw = (fe.dir / signins.FILE).read_bytes()
     assert b"s3ss10n" not in raw and b"waitrose" not in raw and PASSWORD.encode() not in raw  # encrypted at rest
 
@@ -352,19 +373,18 @@ async def test_sign_ins_come_back_only_for_the_same_person_and_can_be_forgotten(
     await agent.approval_reply(fe, card.card["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD, "false"])
     await settle(agent)
 
-    await pool.close(fe.id)  # idle timeout: the context is gone…
+    await pool.close(fe.id)  # the agent restarting: the connection goes…
     await pool.for_account(fe.id).call("browser_tabs", {"action": "list"})
-    assert [c["value"] for c in fake.contexts[-1].cookies] == ["s3ss10n"]  # …and comes back signed in
+    assert [c["value"] for c in fake.contexts[-1].cookies] == ["s3ss10n"]  # …the profile stays: still signed in
     await pool.for_account(hb.id).call("browser_tabs", {"action": "list"})
     assert fake.contexts[-1].cookies == []  # never into another person's browser
 
     await agent.inbound(fe, "sign-ins")
     assert "- waitrose.com (signed in)" in chat.sent[-1].text
-    fe_context = fake.contexts[-2]
     await agent.inbound(fe, "forget sign-in www.waitrose.com")
     assert "forgotten waitrose.com" in chat.sent[-1].text
-    assert signins.sites(fe) == [] and not (fe.dir / signins.FILE).exists()
-    assert fe_context.closed and not pool.is_open(fe.id)  # nothing of it is left in memory either
+    assert await signins.sites(fe, pool.for_account(fe.id)) == [] and not (fe.dir / signins.FILE).exists()
+    assert fake.profiles[fe.id].cookies == []  # forgotten in the browser itself, its storage too
     await agent.inbound(fe, "forget sign-in waitrose.com")
     assert "doesn't remember waitrose.com" in chat.sent[-1].text
 

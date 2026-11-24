@@ -2,11 +2,11 @@
 # Copyright (C) 2026 Axxlabs Limited
 """The browser: Playwright MCP behind the policy (SPEC §3.4, §5.2).
 
-One MCP connection to aha-browser per account, so one browser context per account: tabs, cookies, storage and
-logins never cross between people (SPEC §3.4). A task only ever reaches its own account's connection, through
-`ctx.browser`; the model can't name another. A connection opens on the account's first browser call (its
-browser state is put back first), keeps its page between tasks, and closes after `idle_minutes` unused (its
-state saved first), on `aha delete`, and when the agent stops.
+One browser per person, each with its own profile folder in the encrypted mount (SPEC §3.4 "Browser profiles"),
+started by aha-browser's supervisor; one MCP connection to each: tabs, cookies, storage and logins never cross
+between people. The browser keeps everything itself, so nothing is exported or put back. A task only ever reaches
+its own account's browser, through `ctx.browser`; the model can't name another. A connection opens on the
+account's first browser call and keeps its page between tasks; Clear browser and `aha delete` delete the profile.
 
 Each browser tool the model sees is wrapped: the policy decides auto, approval or block from the real
 arguments; approvals are answered only by the person (approvals.py).
@@ -23,12 +23,14 @@ import logging
 import re
 import struct
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from dataclasses import field as dc_field
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import httpx
 import mcp.types as mt
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
@@ -88,22 +90,20 @@ CANT_TELL = (
 class BrowserSession:
     """One MCP connection, owned by a background task so its page survives between calls."""
 
-    def __init__(self, url: str) -> None:
-        self.url = url
+    def __init__(self, url: str | Callable[[], Awaitable[str]]) -> None:
+        self.url = url  # the browser's address, or how to get it (started on demand by the supervisor)
         self.queue: asyncio.Queue = asyncio.Queue()
         self.ready = asyncio.Event()
         self.tools: list[mt.Tool] = []
         self.busy = 0
         self.last_used = time.monotonic()
-        self.opening: asyncio.Task | None = None  # restoring the browser state: calls wait for it
-        self.restored = False  # the state went in; only then may this context's state be saved over it
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._run())
 
     async def stop(self, timeout: float = 5) -> None:
-        """Close the connection, which discards its browser context."""
+        """Close the connection. The person's browser and its profile stay (SPEC §3.4 "Browser profiles")."""
         if not self._task or self._task.done():
             return
         if self.ready.is_set():
@@ -117,7 +117,8 @@ class BrowserSession:
     async def _run(self) -> None:
         while True:
             try:
-                async with streamablehttp_client(self.url) as (r, w, _), ClientSession(r, w) as s:
+                url = self.url if isinstance(self.url, str) else await self.url()  # again after a lost connection
+                async with streamablehttp_client(url) as (r, w, _), ClientSession(r, w) as s:
                     await s.initialize()
                     self.tools = (await s.list_tools()).tools
                     self.ready.set()
@@ -151,29 +152,44 @@ class BrowserSession:
 
 
 class BrowserPool:
-    """One BrowserSession per account (SPEC §3.4)."""
+    """One browser per person, each with a real profile of its own (SPEC §3.4 "Browser profiles"), started by the
+    browser container's supervisor; one MCP connection to each. The profile is the browser's own folder, in the
+    encrypted mount: nothing is exported or put back, so a site keeps everything it stores (seen: WhatsApp Web's
+    keys lost by an exported copy, and its link with them)."""
 
-    def __init__(self, url: str, idle_seconds: float, session=BrowserSession) -> None:
-        self.url = url
+    def __init__(self, url: str, idle_seconds: float, session=BrowserSession, supervise=None) -> None:
+        self.url = url.rstrip("/")  # the supervisor
         self.idle_seconds = idle_seconds
         self._session = session
+        self._supervise = supervise or self._post
         self._sessions: dict[str, BrowserSession] = {}
         self._held: dict[str, int] = {}
         self._reaper: asyncio.Task | None = None
-        # Called once when an account's context opens, before its first call: restores its state (SPEC §3.4).
-        self.on_open = None
-        # Called before a context closes for being idle or the agent stopping: saves its state (SPEC §3.4).
-        self.on_close = None
+
+    async def _post(self, path: str, account_id: str) -> dict:
+        async with httpx.AsyncClient(timeout=60) as http:
+            r = await http.post(f"{self.url}{path}", json={"id": account_id})
+        r.raise_for_status()
+        return r.json()
+
+    def _address(self, account_id: str):
+        async def address() -> str:
+            port = (await self._supervise("/start", account_id))["port"]
+            return f"http://{urlsplit(self.url).hostname}:{int(port)}/mcp"
+
+        return address
 
     async def tools(self, wait: float = 60) -> list[mt.Tool]:
-        """The browser's tool definitions, from a short-lived connection of no account's."""
-        probe = self._session(self.url)
+        """The browser's tool definitions, from a browser of no one's (no profile)."""
+        probe = self._session(self._address("probe"))
         probe.start()
         try:
             await asyncio.wait_for(probe.ready.wait(), timeout=wait)
             return probe.tools
         finally:
             await probe.stop()
+            with contextlib.suppress(Exception):
+                await self._supervise("/stop", "probe")
 
     def start(self, every: float = 60) -> None:
         self._reaper = asyncio.create_task(self._reap(every))
@@ -181,28 +197,17 @@ class BrowserPool:
     def session(self, account_id: str) -> BrowserSession:
         s = self._sessions.get(account_id)
         if s is None:
-            s = self._sessions[account_id] = self._session(self.url)
+            s = self._sessions[account_id] = self._session(self._address(account_id))
             s.start()
-            if self.on_open is not None:
-                s.opening = asyncio.create_task(self._open(account_id, s))
-            else:
-                s.restored = True
-            log.info("browser context opened for an account (%d open)", len(self._sessions))
+            log.info("browser connected for an account (%d open)", len(self._sessions))
         return s
-
-    async def _open(self, account_id: str, s: BrowserSession) -> None:
-        try:
-            await self.on_open(account_id, s)
-            s.restored = True
-        except Exception:
-            log.exception("restoring a browser state failed; this context's state won't be saved over it")
 
     def for_account(self, account_id: str) -> AccountBrowser:
         return AccountBrowser(self, account_id)
 
     @contextmanager
     def hold(self, account_id: str):
-        """While an account's task runs, its context isn't closed for being idle."""
+        """While an account's task runs, its browser isn't closed for being idle."""
         self._held[account_id] = self._held.get(account_id, 0) + 1
         try:
             yield
@@ -222,21 +227,23 @@ class BrowserPool:
             s.last_used = time.monotonic()
 
     def open_session(self, account_id: str) -> BrowserSession | None:
-        """The account's context if it's open and its state was restored (so saving it is safe)."""
         s = self._sessions.get(account_id)
-        return s if s is not None and s.restored and s.ready.is_set() else None
+        return s if s is not None and s.ready.is_set() else None
 
-    async def close(self, account_id: str, save: bool = True) -> None:
-        """Close the account's context. `save`: keep its state first (not when forgetting or clearing it)."""
-        if save and self.on_close is not None and (s := self.open_session(account_id)) is not None:
-            try:
-                await self.on_close(account_id, s)
-            except Exception:
-                log.exception("saving a browser state before closing failed")
+    async def close(self, account_id: str, browser_too: bool = False) -> None:
+        """Close the connection; `browser_too`: the person's browser as well (its profile stays on disk)."""
         s = self._sessions.pop(account_id, None)
         if s is not None:
             await s.stop()
-            log.info("browser context closed for an account (%d open)", len(self._sessions))
+            log.info("browser disconnected for an account (%d open)", len(self._sessions))
+        if browser_too:
+            with contextlib.suppress(Exception):
+                await self._supervise("/stop", account_id)
+
+    async def forget(self, account_id: str) -> None:
+        """Clear browser: the person's browser stops and their whole profile folder is deleted."""
+        await self.close(account_id)
+        await self._supervise("/forget", account_id)
 
     async def reap(self) -> None:
         if self.idle_seconds <= 0:  # the default: windows stay open, like the person's own browser (SPEC §3.4)
@@ -244,7 +251,7 @@ class BrowserPool:
         now = time.monotonic()
         for account_id, s in list(self._sessions.items()):
             if account_id not in self._held and not s.busy and now - s.last_used >= self.idle_seconds:
-                await self.close(account_id)
+                await self.close(account_id, browser_too=True)
 
     async def _reap(self, every: float) -> None:
         while True:
@@ -269,10 +276,7 @@ class AccountBrowser:
         self._account_id = account_id
 
     async def call(self, name: str, args: dict, timeout: float = 90) -> mt.CallToolResult:
-        s = self._pool.session(self._account_id)
-        if s.opening is not None:
-            await s.opening
-        return await s.call(name, args, timeout)
+        return await self._pool.session(self._account_id).call(name, args, timeout)
 
     def is_open(self) -> bool:
         return self._pool.is_open(self._account_id)
@@ -883,9 +887,9 @@ async def browser_login(args: dict, ctx: ToolContext) -> ToolResult:
     signed = not is_sign_in_form(ctx.task.last_snapshot, await current_url(session))
     if signed:
         try:  # they stay signed in, like "remember me" in their own browser (SPEC §3.4)
-            await signins.signed_in(ctx.account, session, host, site)
+            signins.signed_in(ctx.account, host, site)  # the browser keeps the session in its profile
         except Exception:
-            log.exception("couldn't save the browser state after a sign-in")
+            log.exception("couldn't note a sign-in")
         if ctx.task.signed_in_sites is not None:
             ctx.task.signed_in_sites.add(site)
         ctx.task.private = True  # the task now holds private data (SPEC §5.2)

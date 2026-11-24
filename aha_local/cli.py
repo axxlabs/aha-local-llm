@@ -34,7 +34,12 @@ UNITS = [
     "aha-browser.container",
     "aha-agent.container",
 ]
-SERVICES = ["aha-agent", "aha-browser", "aha-search", "aha-llm"]
+SERVICES = ["aha-agent", "aha-browser", "aha-search", "aha-llm", "aha-profiles"]
+PLAIN_UNITS = ["aha-profiles.service"]  # installed as ordinary systemd user units, not by Quadlet
+SYSTEMD_USER_DIR = Path.home() / ".config" / "systemd" / "user"  # plain units (not containers): aha-profiles
+PROFILES_KEY_CRED = HOME_CONFIG.parent / "profiles-key.cred"
+PROFILES_ENC = HOME_DATA / "browser-profiles.enc"  # each person's browser profile, encrypted (SPEC §3.4)
+PROFILES = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "aha" / "profiles"
 AGENT_IMAGE = "localhost/aha-agent:latest"
 DATA_KEY_CRED = HOME_CONFIG.parent / "data-key.cred"
 BROWSER_CONFIG = HOME_CONFIG.parent / "browser.json"  # the browser's Playwright MCP configuration (SPEC §3.7)
@@ -93,7 +98,7 @@ def has_tpm() -> bool:
     return subprocess.run(["systemd-analyze", "has-tpm2", "-q"], capture_output=True).returncode == 0
 
 
-def seal_data_key(key: bytes, target: Path) -> str:
+def seal_data_key(key: bytes, target: Path, name: str = "data-key") -> str:
     """Seal the key to this computer (host key + TPM, or host key only without a TPM); returns which."""
     if not shutil.which("systemd-creds"):
         die("systemd-creds is needed to protect the data key (systemd 256 or later).")
@@ -102,7 +107,7 @@ def seal_data_key(key: bytes, target: Path) -> str:
     tmp = target.with_name(target.name + ".tmp")
     tmp.unlink(missing_ok=True)
     subprocess.run(
-        ["systemd-creds", "--user", "encrypt", f"--with-key={with_key}", "--name=data-key", "-", str(tmp)],
+        ["systemd-creds", "--user", "encrypt", f"--with-key={with_key}", f"--name={name}", "-", str(tmp)],
         input=key,
         check=True,
         capture_output=True,
@@ -140,6 +145,40 @@ def ensure_data_key() -> None:
     show_recovery_code(key)
 
 
+def profiles_password(data_key: bytes) -> str:
+    """The browser profiles' gocryptfs password, derived from the data key: its recovery code covers them too."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    return HKDF(hashes.SHA256(), 32, None, b"aha-browser-profiles-v1").derive(data_key).hex()
+
+
+def ensure_profiles(data_key: bytes | None = None, force: bool = False) -> None:
+    """The encrypted folder for each person's browser profile (SPEC §3.4 "Browser profiles"): gocryptfs, its
+    password derived from the data key and sealed to this computer like it."""
+    if not shutil.which("gocryptfs"):
+        die("gocryptfs keeps each person's browser profile encrypted: install it first (sudo dnf install gocryptfs).")
+    if PROFILES_KEY_CRED.exists() and (PROFILES_ENC / "gocryptfs.conf").exists() and not force:
+        return
+    key = data_key or unseal_data_key(DATA_KEY_CRED)
+    if key is None:
+        die(f"Can't unseal {DATA_KEY_CRED} on this computer, so the browser profiles' key can't be made.")
+    password = profiles_password(key)
+    seal_data_key(password.encode(), PROFILES_KEY_CRED, name="profiles-key")
+    if not (PROFILES_ENC / "gocryptfs.conf").exists():
+        PROFILES_ENC.mkdir(mode=0o700, parents=True, exist_ok=True)
+        runtime = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
+        tmp = runtime / "aha-profiles-pass"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, password.encode())
+            os.close(fd)
+            subprocess.run(["gocryptfs", "-init", "-q", "-passfile", str(tmp), str(PROFILES_ENC)], check=True)
+        finally:
+            tmp.unlink(missing_ok=True)
+        print(f"Made the encrypted folder for browser profiles: {PROFILES_ENC}")
+
+
 def cmd_recovery_key(a) -> None:
     if not a.show:
         die("This prints the key that decrypts all your Aha! data. Run `aha recovery-key --show` to see it.")
@@ -166,6 +205,8 @@ def cmd_restore(a) -> None:
     except ValueError as e:
         die(str(e))
     with_key = seal_data_key(key, DATA_KEY_CRED)
+    if (PROFILES_ENC / "gocryptfs.conf").exists():  # the profiles' key comes from the data key: seal it here too
+        ensure_profiles(key, force=True)
     print(f"Sealed the recovery key to this computer ({with_key}). Start aha with `aha restart`.")
 
 
@@ -229,11 +270,14 @@ def render_units(config: Config) -> dict[str, str]:
         "@AGENT_IMAGE@": AGENT_IMAGE,
         "@DATA_KEY_CRED@": str(DATA_KEY_CRED),
         "@BROWSER_CONFIG@": str(BROWSER_CONFIG),
+        "@PROFILES@": str(PROFILES),
+        "@PROFILES_ENC@": str(PROFILES_ENC),
+        "@PROFILES_KEY_CRED@": str(PROFILES_KEY_CRED),
         "@TIMEZONE@": config.timezone,
         "@LANG@": config.language.replace("-", "_") + ".UTF-8",
     }
     out = {}
-    for unit in UNITS:
+    for unit in [*UNITS, *PLAIN_UNITS]:
         text = (DEPLOY / "quadlet" / unit).read_text()
         for k, v in values.items():
             text = text.replace(k, v)
@@ -301,8 +345,10 @@ def install() -> None:
     )
     ensure_data_key()  # an install from before encryption at rest gets its key here (SPEC §3.8.1 Upgrade)
     QUADLET_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_profiles()  # each person's browser profile, encrypted (SPEC §3.4 "Browser profiles")
+    SYSTEMD_USER_DIR.mkdir(parents=True, exist_ok=True)
     for name, text in render_units(config).items():
-        (QUADLET_DIR / name).write_text(text)
+        (SYSTEMD_USER_DIR if name in PLAIN_UNITS else QUADLET_DIR).joinpath(name).write_text(text)
     BROWSER_CONFIG.write_text(render_browser_config(config))
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     print(f"Installed {len(UNITS)} units in {QUADLET_DIR}. Start with `aha start`.")
@@ -313,6 +359,8 @@ def cmd_uninstall(a) -> None:
     subprocess.run(["systemctl", "--user", "stop", *[f"{s}.service" for s in SERVICES]], check=False)
     for unit in UNITS:
         (QUADLET_DIR / unit).unlink(missing_ok=True)
+    for unit in PLAIN_UNITS:
+        (SYSTEMD_USER_DIR / unit).unlink(missing_ok=True)
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
     print(f"Removed the units. Your data stays in {HOME_DATA}.")
 

@@ -34,6 +34,7 @@ instead.
 - Linux with rootless Podman and systemd (tested on Fedora 44)
 - An NVIDIA GPU with 16 GB of VRAM, the NVIDIA driver and the Container Toolkit (CDI)
 - 32 GB of RAM or more, about 30 GB of disk for the model
+- gocryptfs, for the encrypted browser profiles (`sudo dnf install gocryptfs`)
 
 ## Install
 
@@ -56,7 +57,7 @@ To keep it running while you're logged out: `loginctl enable-linger $USER`.
 |---|---|---|
 | `aha-llm` | llama.cpp with Qwen3.6-35B-A3B (vision) | internal only: no internet, no LAN |
 | `aha-search` | SearXNG | internet |
-| `aha-browser` | Playwright MCP, Chromium in a virtual display (Xvfb) with your household's language and timezone, so sites see an ordinary browser; a separate browser per person, its tabs closed after 30 minutes unused; what it remembers (cookies, site data) is kept by the agent, encrypted | internet |
+| `aha-browser` | Playwright MCP, Chromium in a virtual display (Xvfb) with your household's language and timezone, so sites see an ordinary browser; a separate browser per person, each with its own profile (cookies, site data, everything a site stores) in an encrypted folder (gocryptfs, unlocked from aha's data key) | internet |
 | `aha-agent` | this repo: agent loop, tools, policy, approvals, memories, end-to-end encryption, tunnel | both |
 
 All are rootless Podman containers managed by systemd Quadlet units (`deploy/quadlet/`), with capabilities
@@ -102,6 +103,11 @@ can't be read without this computer, or without the recovery code `aha init` sho
 from whoever controls the running computer: the agent needs plaintext to work. Full-disk encryption (LUKS) is
 still recommended; `aha doctor` warns without it. `aha recovery-key --show` shows the code again;
 `aha restore` (code on stdin) seals it to a new computer.
+
+Each person's browser profile is a real browser profile (so every site keeps what it stores, WhatsApp Web's keys
+included), in a gocryptfs folder inside the data folder (`browser-profiles.enc`). Its password is derived from the
+data key and sealed the same way (`profiles-key.cred`); the `aha-profiles` service mounts it, at a runtime path
+only while aha runs. The recovery code covers it too.
 
 ## Development
 

@@ -61,6 +61,14 @@ class FakeBrowser:
 
         self.Session = Session
 
+        self.calls: list[tuple[str, str]] = []
+
+        async def supervise(path: str, account_id: str) -> dict:
+            self.calls.append((path, account_id))
+            return {"port": 8931}
+
+        self.supervise = supervise
+
     def open(self) -> list[FakeContext]:
         return [c for c in self.contexts if not c.closed]
 
@@ -72,7 +80,9 @@ def fake_browser() -> FakeBrowser:
 
 @pytest.fixture
 async def pool(fake_browser):
-    p = BrowserPool("http://aha-browser:8931/mcp", idle_seconds=1800, session=fake_browser.Session)
+    p = BrowserPool(
+        "http://aha-browser:8930", idle_seconds=1800, session=fake_browser.Session, supervise=fake_browser.supervise
+    )
     yield p
     await p.stop()
 
@@ -193,12 +203,22 @@ async def test_deleting_an_account_discards_its_browser_context(pool, fake_brows
     )
     assert (await Service._handle(service, {"cmd": "delete", "account": fe.name}))["ok"]
     assert not pool.is_open(fe.id) and not fake_browser.open()
+    assert ("/forget", fe.id) in fake_browser.calls  # their whole browser profile is deleted
     assert stopped == [fe.name] and not agent.sessions  # its task stopped, nothing of it left in memory
 
 
-def test_the_browser_container_never_shares_a_context_between_connections():
-    unit = (Path(__file__).parents[1] / "deploy" / "quadlet" / "aha-browser.container").read_text()
-    assert "--isolated" in unit and "--shared-browser-context" not in unit
+def test_each_person_has_a_browser_and_profile_of_their_own():
+    """SPEC §3.4 "Browser profiles": one Playwright MCP per person, its own profile folder in the encrypted mount;
+    the probe for the tool definitions has none."""
+    deploy = Path(__file__).parents[1] / "deploy"
+    supervisor = (deploy / "browser" / "supervisor.mjs").read_text()
+    assert '"--user-data-dir", `${PROFILES}/${id}`' in supervisor and "--shared-browser-context" not in supervisor
+    assert 'id === "probe" ? ["--isolated"]' in supervisor
+    assert "/^(?:[a-f0-9]{8,64}|probe)$/" in supervisor  # an id is never a path
+    unit = (deploy / "quadlet" / "aha-browser.container").read_text()
+    assert "Requires=aha-profiles.service" in unit and "Volume=@PROFILES@:/profiles" in unit
+    profiles = (deploy / "quadlet" / "aha-profiles.service").read_text()
+    assert "gocryptfs" in profiles and "LoadCredentialEncrypted=profiles-key:" in profiles
 
 
 async def test_by_default_a_window_stays_open(fake_browser):

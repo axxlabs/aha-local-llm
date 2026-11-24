@@ -140,10 +140,11 @@ def test_the_browser_looks_like_a_persons(tmp_path, monkeypatch):
     assert "Image=mcr.microsoft.com/playwright/mcp@sha256:" in unit
     entry = json.loads(re.search(r"^Entrypoint=(.+)$", unit, re.M).group(1))
     assert entry[:4] == ["/usr/bin/tini", "-s", "--", "xvfb-run"] and "--headless" not in entry
-    exec_line = re.search(r"^Exec=(.+)$", unit, re.M).group(1)
+    assert entry[-2:] == ["node", "/etc/aha-browser/supervisor.mjs"]  # one browser per person (SPEC §3.4)
+    supervisor = (root / "deploy/browser/supervisor.mjs").read_text()
     for flag in ("--headless", "--user-agent", "--viewport-size", "--shared-browser-context"):
-        assert flag not in exec_line, flag
-    assert "--isolated" in exec_line and "--config /etc/aha-browser/config.json" in exec_line
+        assert flag not in supervisor, flag
+    assert '"--config", "/etc/aha-browser/config.json"' in supervisor
 
     monkeypatch.setattr(cli, "HOME_DATA", tmp_path / "data")
     config = Config(

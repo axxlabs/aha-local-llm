@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
-"""Each person's browser state: what their browser remembers between conversations (SPEC §3.4).
+"""What aha notes about each person's browser (SPEC §3.4).
 
-The state is Playwright's storage state (every cookie, and each origin's localStorage and IndexedDB), plus the
-sites the person signed in on through a sign-in card. It's kept encrypted in the account's own folder, put back
-into that account's browser context when it opens and saved again after each task and before the context
-closes; never into another account's context. It's read and written with fixed code of this module through
-`browser_run_code_unsafe`, a tool the model can't call (SPEC §5.2).
+The browser itself remembers everything, in the person's own profile folder (SPEC §3.4 "Browser profiles"):
+nothing is exported or put back. This module keeps only aha's notes about it, encrypted in the account's folder:
+the sites the person signed in on through `browser_login` (for the policy, SPEC §5.2), and the page that was open
+last (where a new, blank window picks up). The sites the browser keeps data for are read from the browser, and a
+site is forgotten in the browser, with fixed code of this module through `browser_run_code_unsafe`, a tool the
+model can't call (SPEC §5.2).
 """
 
 from __future__ import annotations
@@ -24,61 +25,28 @@ from ..policy.urls import site_of
 log = logging.getLogger("aha.signins")
 
 FILE = "browser.json"
-OLD_FILE = "sign-ins.json"  # before the browser kept everything: only the sites kept with "Keep me signed in"
-VERSION = 1
-MAX_STATE = 32 * 1024 * 1024  # bytes of JSON; past it, the largest IndexedDB databases are left out first
-TIMEOUT = 30  # seconds for reading or writing the state in the browser
-TIMEOUT_FULL = 120  # reading it with IndexedDB, after a task: a big site's (WhatsApp Web's) takes a while
-GET_STATE = "async (page) => JSON.stringify(await page.context().storageState({ indexedDB: true }))"
-GET_STATE_LIGHT = "async (page) => JSON.stringify(await page.context().storageState())"
+VERSION = 2  # 1 also held an exported copy of the browser's storage: no more (SPEC §3.4 "Browser profiles")
+TIMEOUT = 30  # seconds for the harness's own browser code
 GET_URL = "async (page) => page.url()"
+COOKIE_DOMAINS = "async (page) => JSON.stringify([...new Set((await page.context().cookies()).map((c) => c.domain))])"
 MIN_SECRET = 3  # shorter values aren't masked in results: they'd blank out ordinary text
 
 
 def redact(text: str, secrets: list[str]) -> str:
-    """Hide what the person typed on a sign-in card, wherever it shows up again (SPEC §3.4)."""
+    """Hide what the person typed on a login card, wherever it shows up again (SPEC §5.8)."""
     for s in sorted({s for s in secrets if len(s) >= MIN_SECRET}, key=len, reverse=True):
         text = text.replace(s, MASK)
     return text
 
 
-# ---- the file
-
-
-def empty() -> dict:
-    return {"v": VERSION, "state": {"cookies": [], "origins": []}, "signed_in": {}, "saved": 0}
-
-
-def _migrate(account: Account) -> dict | None:
-    """An old sign-ins.json becomes the first browser state: those cookies, those sites signed in."""
-    old_path = account.dir / OLD_FILE
-    old = account.vault.read_json(old_path, None) if old_path.exists() else None
-    if old is None:
-        return None
-    data = empty()
-    for host, entry in old.items():
-        data["state"]["cookies"].extend(c for c in entry.get("cookies", []) if isinstance(c, dict))
-        data["signed_in"][host] = {"site": entry.get("site", site_of(host)), "at": entry.get("saved", 0)}
-    data["saved"] = int(time.time())
-    save(account, data)
-    old_path.unlink(missing_ok=True)
-    log.info("moved kept sign-ins into the browser state (%d sites)", len(data["signed_in"]))
-    return data
+# ---- aha's notes
 
 
 def load(account: Account) -> dict:
     path = account.dir / FILE
     data = account.vault.read_json(path, None) if path.exists() else None
-    if data is None:
-        data = _migrate(account)
-    if not isinstance(data, dict):
-        return empty()
-    out = empty()
-    state = data.get("state") if isinstance(data.get("state"), dict) else {}
-    out["state"]["cookies"] = [c for c in state.get("cookies", []) if isinstance(c, dict)]
-    out["state"]["origins"] = [o for o in state.get("origins", []) if isinstance(o, dict)]
-    out["signed_in"] = {h: e for h, e in (data.get("signed_in") or {}).items() if isinstance(e, dict)}
-    out["saved"] = data.get("saved", 0)
+    data = data if isinstance(data, dict) else {}
+    out = {"signed_in": {h: e for h, e in (data.get("signed_in") or {}).items() if isinstance(e, dict)}}
     if isinstance(data.get("page"), str):
         out["page"] = data["page"]
     return out
@@ -86,20 +54,16 @@ def load(account: Account) -> dict:
 
 def save(account: Account, data: dict) -> None:
     path = account.dir / FILE
-    state = data["state"]
-    if state["cookies"] or state["origins"] or data["signed_in"]:
-        account.vault.write_json(path, {**data, "v": VERSION})
+    if data.get("signed_in") or data.get("page"):
+        account.vault.write_json(path, {"v": VERSION, **data})
     else:
         path.unlink(missing_ok=True)
 
 
 def clear(account: Account) -> None:
-    """Clear browser data: everything the person's browser remembers (the caller closes the open context)."""
+    """With Clear browser: the notes go with the profile."""
     (account.dir / FILE).unlink(missing_ok=True)
-    (account.dir / OLD_FILE).unlink(missing_ok=True)
-
-
-# ---- what's in it
+    (account.dir / "sign-ins.json").unlink(missing_ok=True)  # from before the browser kept everything
 
 
 def matches(domain: str, site: str) -> bool:
@@ -107,32 +71,34 @@ def matches(domain: str, site: str) -> bool:
     return d == site or d.endswith("." + site)
 
 
-def _origin_host(origin: str) -> str:
-    return origin.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0].lower()
-
-
 def _entry_site(host: str, entry: dict) -> str:
     return str(entry.get("site") or site_of(host))
 
 
 def signed_in_sites(account: Account) -> set[str]:
-    """The sites the person signed in on through a sign-in card (for the policy, SPEC §5.6)."""
+    """The sites the person signed in on through `browser_login` (for the policy, SPEC §5.2)."""
     return {_entry_site(h, e) for h, e in load(account)["signed_in"].items()}
 
 
+def signed_in(account: Account, host: str, site: str) -> None:
+    """The person signed in on `host`: noted (the browser keeps the session itself)."""
+    data = load(account)
+    data["signed_in"][host] = {"site": site, "at": int(time.time())}
+    save(account, data)
+
+
 def last_page(account: Account) -> str:
-    """The page open when the state was last saved: where a new, blank window picks up (SPEC §3.4)."""
+    """The page open at the end of the last task: where a new, blank window picks up (SPEC §3.4)."""
     return load(account).get("page", "")
 
 
-def sites(account: Account) -> list[dict]:
-    """The sites the browser keeps data for, signed-in ones marked: [{"site", "signed_in"}], sorted."""
-    data = load(account)
-    names = {site_of(c["domain"].lstrip(".")) for c in data["state"]["cookies"] if isinstance(c.get("domain"), str)}
-    names |= {site_of(h) for o in data["state"]["origins"] if (h := _origin_host(str(o.get("origin", ""))))}
-    signed = {_entry_site(h, e) for h, e in data["signed_in"].items()}
-    names = (names | signed) - {""}
-    return [{"site": s, "signed_in": s in signed} for s in sorted(names)]
+async def remember_page(account: Account, session) -> None:
+    """After a task: note the page that's open (a blank one keeps the last)."""
+    url = _result(await session.call("browser_run_code_unsafe", {"code": GET_URL}, timeout=TIMEOUT))
+    if isinstance(url, str) and url.startswith(("https://", "http://")):
+        data = load(account)
+        data["page"] = url[:2000]
+        save(account, data)
 
 
 def site_name(text: str) -> str:
@@ -142,28 +108,52 @@ def site_name(text: str) -> str:
     return site_of(name) if "." in name else ""
 
 
-def forget(account: Account, site: str) -> bool:
-    """Forget one site's cookies and data (its domain and subdomains). The caller closes the open context."""
+# ---- in the browser
+
+
+async def sites(account: Account, session) -> list[dict]:
+    """The sites the browser keeps cookies for, and the ones signed in: [{"site", "signed_in"}], sorted."""
+    names: set[str] = set()
+    if session is not None:
+        domains = _result(await session.call("browser_run_code_unsafe", {"code": COOKIE_DOMAINS}, timeout=TIMEOUT))
+        names = {site_of(str(d).lstrip(".")) for d in json.loads(domains)} if isinstance(domains, str) else set()
+    signed = signed_in_sites(account)
+    names = (names | signed) - {""}
+    return [{"site": s, "signed_in": s in signed} for s in sorted(names)]
+
+
+def forget_code(site: str) -> str:
+    """Fixed code: the site's cookies, and its origins' storage (local storage, IndexedDB, caches, service
+    workers), cleared in the person's own browser. The site goes in as a JSON string literal, never as code."""
+    literal = json.dumps(json.dumps(site))
+    return (
+        "async (page) => { const site = JSON.parse(" + literal + "); const ctx = page.context(); "
+        "const mine = (d) => { d = d.replace(/^\\./, ''); return d === site || d.endsWith('.' + site); }; "
+        "const hosts = new Set([site, 'www.' + site, ...(await ctx.cookies()).map((c) => c.domain).filter(mine)"
+        ".map((d) => d.replace(/^\\./, ''))]); "
+        "await ctx.clearCookies({ domain: new RegExp('(^|\\\\.)' + site.replace(/\\./g, '\\\\.') + '$') }); "
+        "const cdp = await ctx.newCDPSession(page); "
+        "for (const h of hosts) for (const p of ['https://', 'http://']) { "
+        "try { await cdp.send('Storage.clearDataForOrigin', { origin: p + h, storageTypes: 'all' }); } catch {} } "
+        "await cdp.detach(); return JSON.stringify(hosts.size); }"
+    )
+
+
+async def forget(account: Account, session, site: str) -> bool:
+    """Forget one site in the person's browser (its domain and subdomains), and aha's notes about it."""
     name = site_name(site)
     if not name:
         return False
+    known = name in {s["site"] for s in await sites(account, session)}
+    if session is not None:
+        _result(await session.call("browser_run_code_unsafe", {"code": forget_code(name)}, timeout=TIMEOUT))
     data = load(account)
-    state = data["state"]
-    cookies = [c for c in state["cookies"] if not matches(str(c.get("domain", "")), name)]
-    origins = [o for o in state["origins"] if not matches(_origin_host(str(o.get("origin", ""))), name)]
-    signed = {h: e for h, e in data["signed_in"].items() if _entry_site(h, e) != name}
-    before = (len(state["cookies"]), len(state["origins"]), len(data["signed_in"]))
-    if (len(cookies), len(origins), len(signed)) == before:
-        return False
-    data["state"] = {"cookies": cookies, "origins": origins}
-    data["signed_in"] = signed
-    if matches(_origin_host(data.get("page", "")), name):
+    data["signed_in"] = {h: e for h, e in data["signed_in"].items() if _entry_site(h, e) != name}
+    host = data.get("page", "").split("://", 1)[-1].split("/", 1)[0]
+    if host and matches(host, name):
         data.pop("page")
     save(account, data)
-    return True
-
-
-# ---- in the browser
+    return known
 
 
 def _result(r: mt.CallToolResult):
@@ -173,111 +163,3 @@ def _result(r: mt.CallToolResult):
         raise RuntimeError("the browser didn't run the harness code")
     body = text.split("### Result", 1)[1].split("\n### ", 1)[0].strip()
     return json.loads(body)
-
-
-def _set_code(state: dict) -> str:
-    # The state goes in as a JSON string literal, parsed by the page: a cookie value can't become code.
-    literal = json.dumps(json.dumps(state))
-    return f"async (page) => {{ await page.context().setStorageState(JSON.parse({literal})); return 'ok'; }}"
-
-
-def _fresh(items: list[dict], now: float) -> list[dict]:
-    return [c for c in items if not (isinstance(c.get("expires"), (int, float)) and 0 < c["expires"] < now)]
-
-
-async def _read(session, code: str, timeout: float = TIMEOUT) -> dict:
-    value = _result(await session.call("browser_run_code_unsafe", {"code": code}, timeout=timeout))
-    state = json.loads(value) if isinstance(value, str) else value
-    if not isinstance(state, dict):
-        raise RuntimeError("the browser returned no storage state")
-    return {
-        "cookies": [c for c in state.get("cookies", []) if isinstance(c, dict) and isinstance(c.get("domain"), str)],
-        "origins": [o for o in state.get("origins", []) if isinstance(o, dict)],
-    }
-
-
-def _size(state: dict) -> int:
-    return len(json.dumps(state, ensure_ascii=False).encode())
-
-
-def trim(state: dict, limit: int | None = None) -> dict:
-    """Leave out the largest IndexedDB databases, one at a time, until the state fits. A site's big caches go
-    first (WhatsApp Web's messages, which it fetches again from the phone); the small databases that keep it
-    signed in or linked stay (seen: the whole IndexedDB dropped for being too large, and WhatsApp Web unlinked)."""
-    limit = MAX_STATE if limit is None else limit
-    size = _size(state)
-    dbs = sorted(
-        ((_size(db), o, db) for o in state["origins"] for db in (o.get("indexedDB") or []) if isinstance(db, dict)),
-        key=lambda x: -x[0],
-    )
-    for db_size, origin, db in dbs:
-        if size <= limit:
-            break
-        origin["indexedDB"] = [d for d in origin["indexedDB"] if d is not db]
-        size -= db_size
-        log.info("browser state too large: left out a %d MB IndexedDB database", db_size // 1_000_000)
-    if size > limit:  # still too large without any IndexedDB: cookies and page storage only, then cookies only
-        for o in state["origins"]:
-            o.pop("indexedDB", None)
-        if _size(state) > limit:
-            log.info("browser state still too large; saving cookies only")
-            return {"cookies": state["cookies"], "origins": []}
-    return state
-
-
-def keep_indexeddb(state: dict, previous: dict) -> dict:
-    """The state read without IndexedDB, with each origin's IndexedDB from the last good save, so a read that
-    failed never loses what was saved (a site stays signed in or linked)."""
-    before = {o.get("origin"): o.get("indexedDB") for o in previous.get("origins", []) if o.get("indexedDB")}
-    seen = set()
-    for o in state["origins"]:
-        seen.add(o.get("origin"))
-        if o.get("origin") in before:
-            o["indexedDB"] = before[o["origin"]]
-    state["origins"] += [
-        {"origin": origin, "localStorage": [], "indexedDB": dbs} for origin, dbs in before.items() if origin not in seen
-    ]
-    return state
-
-
-async def read_state(session, previous: dict | None = None) -> dict:
-    """The context's storage state, at most MAX_STATE (the largest IndexedDB databases left out first). If reading
-    it with IndexedDB fails, the IndexedDB of the last save (`previous`) is kept."""
-    try:
-        return trim(await _read(session, GET_STATE, TIMEOUT_FULL))
-    except Exception as e:
-        log.warning("couldn't read the browser state with IndexedDB (%s); keeping the last saved one", type(e).__name__)
-    state = await _read(session, GET_STATE_LIGHT)
-    return trim(keep_indexeddb(state, previous or {}))
-
-
-async def restore(account: Account, session) -> int:
-    """Put the person's browser state into their context that just opened. Returns how many cookies."""
-    data = load(account)
-    state = {"cookies": _fresh(data["state"]["cookies"], time.time()), "origins": data["state"]["origins"]}
-    if state["cookies"] or state["origins"]:
-        _result(await session.call("browser_run_code_unsafe", {"code": _set_code(state)}, timeout=TIMEOUT))
-        log.info("restored a browser state (%d cookies, %d origins)", len(state["cookies"]), len(state["origins"]))
-    return len(state["cookies"])
-
-
-async def capture(account: Account, session) -> None:
-    """Save the context's state as the person's browser state (after a task, before the context closes)."""
-    data = load(account)
-    data["state"] = await read_state(session, data.get("state"))
-    data["saved"] = int(time.time())
-    try:
-        url = _result(await session.call("browser_run_code_unsafe", {"code": GET_URL}, timeout=TIMEOUT))
-    except Exception:
-        url = ""
-    if isinstance(url, str) and url.startswith(("https://", "http://")):  # a blank page keeps the last one
-        data["page"] = url[:2000]
-    save(account, data)
-
-
-async def signed_in(account: Account, session, host: str, site: str) -> None:
-    """The person signed in on `host` through a sign-in card: mark it and save the state now."""
-    data = load(account)
-    data["signed_in"][host] = {"site": site, "at": int(time.time())}
-    save(account, data)
-    await capture(account, session)

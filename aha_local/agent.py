@@ -208,7 +208,7 @@ class Agent:
             )
             return
         if command in ("sign-ins", "signins", "sign ins"):
-            kept = signins.sites(account)
+            kept = await self.browser_sites(account)
             lines = "\n".join(f"- {s['site']}{messages.SIGNED_IN if s['signed_in'] else ''}" for s in kept)
             await self.send(account, messages.SIGNINS.format(sites=lines) if kept else messages.NO_SIGNINS)
             return
@@ -310,37 +310,46 @@ class Agent:
                 await self._run(account, text, scheduled)
         finally:
             self.session(account).task = None
-            await self.save_browser(account)
+            await self.note_page(account)
 
-    # ---- the person's browser state (SPEC §3.4)
+    # ---- the person's browser (SPEC §3.4 "Browser profiles": it keeps everything in its own profile)
 
-    async def save_browser(self, account: Account) -> None:
-        """After a task: save what the browser remembers, so it's there next time (cookies the site renewed too)."""
+    def _browser(self, account: Account):
+        """The person's own browser, or None (no browser on this computer)."""
+        return self.browser.for_account(account.id) if self.browser is not None else None
+
+    async def note_page(self, account: Account) -> None:
+        """After a task: note the page that's open, where a new, blank window picks up."""
         session = self.browser.open_session(account.id) if self.browser is not None else None
         if session is None:
             return
         try:
-            await signins.capture(account, session)
+            await signins.remember_page(account, session)
         except Exception:
-            log.warning("couldn't save the browser state")
+            log.warning("couldn't note the browser's page")
+
+    async def browser_sites(self, account: Account) -> list[dict]:
+        """Settings → Your browser: the sites the person's browser keeps data for, read from it."""
+        try:
+            return await signins.sites(account, self._browser(account))
+        except Exception:
+            log.warning("couldn't read the browser's sites")
+            return await signins.sites(account, None)
 
     async def forget_site(self, account: Account, site: str) -> bool:
-        """Forget one site's cookies and data; the open context closes so nothing of it stays in memory."""
-        await self.save_browser(account)  # what the open context knows now, before taking the site out
-        found = signins.forget(account, site)
+        """Forget one site in the person's browser (cookies and storage), and its saved logins."""
+        found = await signins.forget(account, self._browser(account), site)
         found = logins.forget(account, signins.site_name(site) or site) or found  # its saved logins go too (§5.8)
-        if found and self.browser is not None:
-            await self.browser.close(account.id, save=False)
         return found
 
     async def clear_browser(self, account: Account) -> None:
-        """Clear browser data: stop the running task, close the context without saving it, delete the state."""
+        """Clear browser: stop the running task, then the person's browser, and delete their whole profile."""
         await self.stop(account, quiet=True)
         if self.browser is not None:
-            await self.browser.close(account.id, save=False)
+            await self.browser.forget(account.id)
         signins.clear(account)
         logins.clear(account)
-        log.info("browser data cleared for an account")
+        log.info("browser cleared for an account: its profile deleted")
 
     async def _run(self, account: Account, text: str, scheduled: str | None = None) -> None:
         while True:

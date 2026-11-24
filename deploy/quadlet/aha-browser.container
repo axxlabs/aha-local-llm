@@ -1,9 +1,12 @@
 # The browser (Playwright MCP, Chromium). Run headed in a virtual display (Xvfb, inside the container) with the
 # household's language and timezone, like an ordinary browser (SPEC §3.4 "Looking like a person's browser").
-# Chromium writes no profile to disk (--isolated): each person's browser state is kept by the agent, encrypted.
+# Each person's browser keeps its own profile in the encrypted mount (SPEC §3.4 "Browser profiles").
 # The other aha services are blocked at the browser level, and the agent blocks private addresses in code.
 [Unit]
-Description=aha browser (Playwright MCP)
+Description=aha browser (one Playwright MCP per person, each with its own profile)
+# Each person's profile folder is inside the encrypted mount (SPEC §3.4 "Browser profiles").
+Requires=aha-profiles.service
+After=aha-profiles.service
 
 [Container]
 ContainerName=aha-browser
@@ -13,16 +16,19 @@ Network=aha-egress.network
 SecurityLabelDisable=true
 NoNewPrivileges=true
 ShmSize=1g
-PodmanArgs=--memory=4g --pids-limit=1024
+PodmanArgs=--memory=6g --pids-limit=2048
 # Headed under xvfb-run: the image's own entrypoint passes --headless, so it's replaced here (same tini, same
 # no-sandbox as the image).
-Entrypoint=["/usr/bin/tini", "-s", "--", "xvfb-run", "-a", "-s", "-screen 0 1920x1080x24 -nolisten tcp", "node", "/app/cli.js", "--browser", "chromium", "--no-sandbox"]
+Entrypoint=["/usr/bin/tini", "-s", "--", "xvfb-run", "-a", "-s", "-screen 0 1920x1080x24 -nolisten tcp", "node", "/etc/aha-browser/supervisor.mjs"]
+# The person running aha (uid 1000 here, as the image's node user): only they can read the decrypted mount.
+UserNS=keep-id
+Volume=@PROFILES@:/profiles
+Volume=@DEPLOY@/browser/supervisor.mjs:/etc/aha-browser/supervisor.mjs:ro
 # Written by `aha install` from deploy/browser/config.json: launch arguments, language, timezone, init script.
 Volume=@BROWSER_CONFIG@:/etc/aha-browser/config.json:ro
 Volume=@DEPLOY@/browser/init.js:/etc/aha-browser/init.js:ro
 Environment=TZ=@TIMEZONE@
 Environment=LANG=@LANG@
-Exec=--config /etc/aha-browser/config.json --host 0.0.0.0 --port 8931 --allowed-hosts aha-browser:8931 --caps vision --image-responses allow --isolated --blocked-origins "http://aha-search:8080;http://aha-llm:8081;http://aha-browser:8931"
 
 [Service]
 Restart=on-failure

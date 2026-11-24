@@ -23,86 +23,28 @@ def tool_results(llm) -> list[str]:
     return [m["content"] for m in llm.requests[-1]["messages"] if m.get("role") == "tool"]
 
 
-async def test_any_site_is_remembered_between_tasks_and_contexts(setup, llm, chat, accounts):
+async def test_any_site_is_remembered_between_tasks_and_restarts(setup, llm, chat, accounts):
+    """SPEC §3.4 "Browser profiles": the browser keeps everything in its own profile; connecting again (after an
+    agent restart) finds it as it was, IndexedDB included. Nothing is exported or saved by aha."""
     agent, pool, fake = setup
     fe = person(accounts)
     llm.call("browser_navigate", url="https://www.shop.example/visit-1/")
     llm.answer("Opened.")
     await agent.inbound(fe, "open the shop")
     await settle(agent)
-    # Saved after the task, encrypted: no sign-in needed for a site to be remembered.
-    assert signins.sites(fe) == [{"site": "shop.example", "signed_in": False}]
-    raw = (fe.dir / signins.FILE).read_bytes()
-    assert b"visitor" not in raw and b"shop.example" not in raw
+    assert await signins.sites(fe, pool.for_account(fe.id)) == [{"site": "shop.example", "signed_in": False}]
     first = fake.contexts[-1]
-    await pool.close(fe.id)  # idle: saved again, then closed
+    first.origins.append({"origin": "https://web.whatsapp.com", "indexedDB": [{"name": "wawc"}]})
+    await pool.close(fe.id)  # the agent restarting: the connection goes, the browser and its profile stay
     assert first.closed
     await pool.for_account(fe.id).call("browser_tabs", {"action": "list"})
     again = fake.contexts[-1]
-    assert [c["value"] for c in again.cookies] == ["v1"] and again.origins[0]["origin"] == "https://www.shop.example"
+    assert again is first and [c["value"] for c in again.cookies] == ["v1"]  # the same profile
+    assert {"origin": "https://web.whatsapp.com", "indexedDB": [{"name": "wawc"}]} in again.origins
+    assert not any("storageState" in c or "setStorageState" in c for c in again.codes)  # nothing exported
 
 
-async def test_a_state_that_failed_to_restore_is_never_saved_over(setup, accounts):
-    agent, pool, _ = setup
-    fe = person(accounts)
-    signins.save(
-        fe,
-        {**signins.empty(), "state": {"cookies": [{"name": "a", "value": "1", "domain": ".x.example"}], "origins": []}},
-    )
-
-    async def broken(account_id, session):
-        raise RuntimeError("the browser was restarting")
-
-    pool.on_open = broken
-    await pool.for_account(fe.id).call("browser_tabs", {"action": "list"})
-    assert pool.open_session(fe.id) is None
-    await agent.save_browser(fe)
-    await pool.close(fe.id)
-    assert signins.load(fe)["state"]["cookies"][0]["value"] == "1"  # still there
-
-
-async def test_expired_cookies_are_dropped_and_large_states_shrink(setup, accounts, monkeypatch):
-    _, pool, fake = setup
-    fe = person(accounts)
-    cookies = [
-        {"name": "old", "value": "x", "domain": ".a.example", "expires": 1000},
-        {"name": "live", "value": "y", "domain": ".a.example", "expires": -1},
-    ]
-    signins.save(fe, {**signins.empty(), "state": {"cookies": cookies, "origins": []}})
-    await pool.for_account(fe.id).call("browser_tabs", {"action": "list"})
-    ctx = fake.contexts[-1]
-    assert [c["name"] for c in ctx.cookies] == ["live"]
-
-    keys = {"name": "keys", "stores": []}  # small: what keeps a site linked (WhatsApp Web's keys)
-    cache = {"name": "cache", "stores": [{"records": ["x" * 400]}]}  # large: a cache the site fetches again
-    ctx.origins = [{"origin": "https://a.example", "localStorage": [], "indexedDB": [keys, cache]}]
-    monkeypatch.setattr(signins, "MAX_STATE", 500)
-    await signins.capture(fe, pool.open_session(fe.id))
-    state = signins.load(fe)["state"]
-    assert state["origins"][0]["indexedDB"] == [keys]  # the largest database left out, the rest kept
-    assert [c["name"] for c in state["cookies"]] == ["live"]
-
-
-def test_a_failed_full_read_keeps_the_indexeddb_of_the_last_save():
-    """Seen: reading a big state timed out and the save that followed had no IndexedDB: WhatsApp Web unlinked."""
-    previous = {"origins": [{"origin": "https://web.whatsapp.com", "indexedDB": [{"name": "wawc"}]}]}
-    light = {"cookies": [], "origins": [{"origin": "https://web.whatsapp.com", "localStorage": [{"name": "k"}]}]}
-    kept = signins.keep_indexeddb(light, previous)
-    assert kept["origins"] == [
-        {"origin": "https://web.whatsapp.com", "localStorage": [{"name": "k"}], "indexedDB": [{"name": "wawc"}]}
-    ]
-
-
-async def test_old_kept_sign_ins_become_the_first_browser_state(accounts):
-    fe = person(accounts)
-    cookie = {"name": "sid", "value": "z", "domain": ".waitrose.com", "path": "/"}
-    fe.vault.write_json(fe.dir / signins.OLD_FILE, {"waitrose.com": {"site": "waitrose.com", "cookies": [cookie]}})
-    assert signins.sites(fe) == [{"site": "waitrose.com", "signed_in": True}]
-    assert not (fe.dir / signins.OLD_FILE).exists() and (fe.dir / signins.FILE).exists()
-    assert signins.load(fe)["state"]["cookies"] == [cookie]
-
-
-async def test_clear_browser_forgets_everything(setup, llm, chat, accounts):
+async def test_clear_browser_deletes_the_whole_profile(setup, llm, chat, accounts):
     agent, pool, fake = setup
     fe, hb = person(accounts), accounts.create("Hb")
     for who in (fe, hb):
@@ -112,10 +54,11 @@ async def test_clear_browser_forgets_everything(setup, llm, chat, accounts):
         await settle(agent)
     await agent.inbound(fe, "clear browser")
     assert "forgotten every site" in chat.sent[-1].text
+    assert ("/forget", fe.id) in fake.calls and fe.id not in fake.profiles  # the profile folder is deleted
     assert not (fe.dir / signins.FILE).exists() and not pool.is_open(fe.id)
-    assert signins.sites(hb) and pool.is_open(hb.id)  # another person's browser is untouched
+    assert hb.id in fake.profiles and pool.is_open(hb.id)  # another person's browser is untouched
     await pool.for_account(fe.id).call("browser_tabs", {"action": "list"})
-    assert fake.contexts[-1].cookies == []
+    assert fake.contexts[-1].cookies == []  # a new, empty profile
 
 
 async def test_after_a_signed_in_page_a_new_site_is_a_card(setup, llm, chat, accounts):
@@ -275,15 +218,7 @@ async def test_a_remembered_session_that_ended_is_said_plainly_and_not_glossed_o
     """Seen with the real model (2026-11-22): Waitrose was remembered, its session had ended, the model assumed not."""
     agent, _, _ = setup
     fe = person(accounts)
-    cookie = {"name": "sid", "value": "old", "domain": ".waitrose.com", "path": "/"}
-    signins.save(
-        fe,
-        {
-            **signins.empty(),
-            "state": {"cookies": [cookie], "origins": []},
-            "signed_in": {"waitrose.com": {"site": "waitrose.com"}},
-        },
-    )
+    signins.signed_in(fe, "waitrose.com", "waitrose.com")  # signed in once; the session has since ended
     llm.call("browser_navigate", url="https://www.waitrose.com/login")  # the fake page has a password field
     llm.answer("You're signed in to Waitrose, I've added the toilet paper.")  # glosses over the sign-in page
     llm.call("browser_login")
@@ -414,7 +349,7 @@ async def test_a_new_windows_blank_page_is_said_and_the_last_page_given(setup, l
     await agent.inbound(fe, "open my trolley")
     await settle(agent)
     assert signins.last_page(fe) == "https://www.shop.example/trolley/visit-1/"
-    await pool.close(fe.id)  # idle: a blank page is never saved as the last page
+    await pool.close(fe.id)  # the agent restarting: the window comes back blank
     assert signins.last_page(fe) == "https://www.shop.example/trolley/visit-1/"
 
     n = len(llm.requests)
@@ -431,7 +366,7 @@ async def test_a_new_windows_blank_page_is_said_and_the_last_page_given(setup, l
     assert retry.startswith("[aha check]") and "blank page of a new browser window" in retry
     assert chat.texts()[-1] == "Your trolley has the rice in it."
 
-    assert signins.forget(fe, "shop.example") and signins.last_page(fe) == ""
+    assert await agent.forget_site(fe, "shop.example") and signins.last_page(fe) == ""
 
 
 def test_a_site_action_claimed_without_a_browser_action_is_caught():

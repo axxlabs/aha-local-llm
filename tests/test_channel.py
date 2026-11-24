@@ -22,6 +22,7 @@ from aha_local.rest import Vault
 
 class FakeAgent:
     def __init__(self) -> None:
+        self.remembered: dict[str, set[str]] = {}  # account id → the sites their browser keeps data for
         self.said: list[str] = []
         self.photos: list = []
         self.replies: list[tuple] = []
@@ -45,14 +46,26 @@ class FakeAgent:
         self.stopped += 1
         self.quiet = quiet
 
+    async def browser_sites(self, account):
+        """What the person's browser keeps data for (the real agent reads it from the browser)."""
+        from aha_local.tools import signins
+
+        signed = signins.signed_in_sites(account)
+        names = self.remembered.get(account.id, set()) | signed
+        return [{"site": s, "signed_in": s in signed} for s in sorted(names)]
+
     async def forget_site(self, account, site):
         from aha_local.tools import signins
 
-        return signins.forget(account, site)
+        name = signins.site_name(site)
+        known = name in self.remembered.get(account.id, set())
+        self.remembered.get(account.id, set()).discard(name)
+        return await signins.forget(account, None, site) or known
 
     async def clear_browser(self, account):
         from aha_local.tools import signins
 
+        self.remembered.pop(account.id, None)
         signins.clear(account)
 
 
@@ -292,18 +305,8 @@ async def test_settings_show_and_forget_what_the_browser_remembers(tmp_path):
     await phone.send({"t": "hello", "name": "P"})
     phone.inbox()
     acct = rig.accounts.find("Ana")
-    cookies = [
-        {"name": "sid", "value": "1", "domain": ".waitrose.com", "path": "/"},
-        {"name": "id", "value": "2", "domain": "www.news.example", "path": "/"},
-    ]
-    signins.save(
-        acct,
-        {
-            **signins.empty(),
-            "state": {"cookies": cookies, "origins": []},
-            "signed_in": {"waitrose.com": {"site": "waitrose.com"}},
-        },
-    )
+    rig.agent.remembered[acct.id] = {"waitrose.com", "news.example"}
+    signins.signed_in(acct, "waitrose.com", "waitrose.com")
     await phone.send({"t": "browser_request"})
     assert phone.inbox() == [
         {
