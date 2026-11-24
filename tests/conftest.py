@@ -43,7 +43,9 @@ class FakeLLM:
     def queued(self, who) -> bool:
         return who in self.queued_for
 
-    async def chat(self, messages, tools=None, max_tokens=4096, who=None, tool_choice="auto", thinking=True) -> Reply:
+    async def chat(
+        self, messages, tools=None, max_tokens=4096, who=None, tool_choice="auto", thinking=True, background=False
+    ) -> Reply:
         if tool_choice == "none":  # a title: not part of the script
             self.titles.append(messages)
             return Reply("Test title")

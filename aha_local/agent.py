@@ -156,6 +156,8 @@ class Agent:
         """A message the person typed, maybe with a photo (already shown on their devices by the channel)."""
         text = text.strip()
         self.last_activity = time.monotonic()
+        if hasattr(self.llm, "wrote"):
+            self.llm.wrote(account.address)  # their cache slot is the newest to keep (SPEC §3.2)
         account.transcript({"kind": "user", "text": text, "image": bool(image)})
         if self.browser is not None:
             self.browser.touch(account.id)  # the window stays open idle_minutes after their last message
@@ -592,7 +594,9 @@ class Agent:
         if not folded:
             return
         try:
-            reply = await self.llm.chat(context.fold_request(conv, folded), max_tokens=1500, who=account.address)
+            reply = await self.llm.chat(
+                context.fold_request(conv, folded), max_tokens=1500, who=account.address, background=True
+            )
         except ModelUnavailable:
             return
         if reply.content:

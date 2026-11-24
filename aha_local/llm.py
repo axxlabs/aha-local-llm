@@ -39,6 +39,40 @@ class Reply:
     timings: dict = field(default_factory=dict)  # llama.cpp's: prompt_ms, prompt_n, predicted_ms, predicted_n
 
 
+class Slots:
+    """Which of the model server's cache slots each person uses (SPEC §3.2 "Cache slots").
+
+    Every request starts with the same system prompt and tools, so the server's own choice (the slot whose cache
+    matches best) put everyone in one slot, and each person's request threw out the other's conversation. Here each
+    active person keeps a slot of their own; the last one is for background work (summaries), so that never
+    throws a conversation out either. A new person always gets a slot: when all are taken, the person whose last
+    message is oldest gives theirs up until they write again."""
+
+    def __init__(self, count: int, last: dict[str, float]) -> None:
+        self.count = count
+        self.owner: dict[int, str] = {}  # slot → person
+        self.last = last  # person → when they last wrote (kept by the client)
+
+    @property
+    def background(self) -> int | None:
+        return self.count - 1 if self.count >= 2 else None
+
+    def of(self, who: str) -> int | None:
+        if self.count < 2:  # one slot: nothing to choose
+            return None
+        for slot, owner in self.owner.items():
+            if owner == who:
+                return slot
+        mine = range(self.count - 1)
+        free = [s for s in mine if s not in self.owner]
+        slot = free[0] if free else min(mine, key=lambda s: self.last.get(self.owner[s], 0.0))
+        if slot in self.owner:
+            log.info("cache slot %d moves to another person (theirs was the oldest message)", slot)
+        self.owner[slot] = who
+        self.last.setdefault(who, time.monotonic())
+        return slot
+
+
 class LLM:
     """One model call at a time: there is one GPU (SPEC §3.3)."""
 
@@ -50,6 +84,31 @@ class LLM:
         # Who's using the model and who's waiting for it: one request at a time on the GPU (SPEC §3.3).
         self.holder: str | None = None
         self.waiting: dict[str, int] = {}
+        self.slots: Slots | None = None  # read from the server on the first call (SPEC §3.2 "Cache slots")
+        self.last_wrote: dict[str, float] = {}  # person → when they last wrote: who keeps a slot
+
+    async def _slots(self) -> Slots:
+        """The server's slots, asked once; until it answers (the model still loading), the server chooses."""
+        if self.slots is not None:
+            return self.slots
+        try:
+            r = await self.client.get(self.url.removesuffix("/v1") + "/props", params={"model": self.model})
+            count = int(r.json().get("total_slots", 0)) if r.status_code == 200 else None
+        except (httpx.HTTPError, ValueError):
+            count = None
+        if count is None:
+            return Slots(0, self.last_wrote)  # ask again next time
+        self.slots = Slots(count, self.last_wrote)
+        log.info("model server: %d cache slots", count)
+        return self.slots
+
+    def wrote(self, who: str) -> None:
+        """The person sent a message: their slot is the newest one to keep."""
+        self.last_wrote[who] = time.monotonic()
+
+    def forget_slots(self) -> None:
+        """Another model is loaded: its slots start empty, and may be a different number."""
+        self.slots = None
 
     def queued(self, who: str) -> bool:
         """`who` is waiting for the model while someone else's request runs: their turn hasn't come yet."""
@@ -63,6 +122,7 @@ class LLM:
         who: str | None = None,
         tool_choice: str = "auto",
         thinking: bool = True,
+        background: bool = False,
     ) -> Reply:
         body = {"model": self.model, "messages": messages, "max_tokens": max_tokens}
         if tools:
@@ -70,6 +130,10 @@ class LLM:
             body["tool_choice"] = tool_choice
         if not thinking:  # only the end of the prompt changes, so the cached prefix still matches (SPEC §4.2)
             body["chat_template_kwargs"] = {"enable_thinking": False}
+        slots = await self._slots()
+        slot = slots.background if background else (slots.of(who) if who else None)
+        if slot is not None:
+            body["id_slot"] = slot
         if who:
             self.waiting[who] = self.waiting.get(who, 0) + 1
         try:

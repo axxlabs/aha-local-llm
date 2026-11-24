@@ -69,6 +69,8 @@ class ModelChoice:
             return False
         if model != self.llm.model:
             self.llm.model = model
+            if hasattr(self.llm, "forget_slots"):
+                self.llm.forget_slots()
             self.vault.write_json(self.path, {"model": model})
             log.info("model set to %s", model)
         return True

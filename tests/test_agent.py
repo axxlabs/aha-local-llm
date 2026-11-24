@@ -190,10 +190,10 @@ async def test_messages_after_the_last_step_become_one_follow_up(agent, llm, cha
     gate = asyncio.Event()
     real_chat = llm.chat
 
-    async def slow_answer(messages, tools=None, max_tokens=4096, who=None):
+    async def slow_answer(messages, tools=None, max_tokens=4096, who=None, **kw):
         if len(llm.requests) == 0:
             await gate.wait()
-        return await real_chat(messages, tools, max_tokens, who)
+        return await real_chat(messages, tools, max_tokens, who, **kw)
 
     llm.chat = slow_answer
     llm.answer("first done")
@@ -273,10 +273,10 @@ async def test_typing_ends_before_the_answer_and_stays_off_during_the_summary(ag
     gate = asyncio.Event()
     real_chat = llm.chat
 
-    async def slow_summary(messages, tools=None, max_tokens=4096, who=None):
-        if len(llm.requests) == 1:  # the fold, after the answer
+    async def slow_summary(messages, tools=None, max_tokens=4096, who=None, **kw):
+        if len(llm.requests) == 1:  # the title and the fold, after the answer
             await gate.wait()
-        return await real_chat(messages, tools, max_tokens, who)
+        return await real_chat(messages, tools, max_tokens, who, **kw)
 
     llm.chat = slow_summary
     llm.answer("Fine.")
@@ -341,9 +341,10 @@ async def test_everyone_hears_when_aha_restarts(accounts):
 
 async def test_the_model_is_one_at_a_time_and_a_waiting_person_is_told_they_are_queued():
     """SPEC §3.3: while another person's request runs, the app shows "waiting its turn", not "working"."""
-    from aha_local.llm import LLM
+    from aha_local.llm import LLM, Slots
 
     llm = LLM("http://llm", "m")
+    llm.slots = Slots(0, {})  # no server to ask for its slots here
     started, release = asyncio.Event(), asyncio.Event()
 
     async def post(body):
@@ -368,9 +369,9 @@ async def test_typing_says_queued_while_the_task_waits_for_another_persons_reque
     agent.typing_every = 0.01
     real_chat = llm.chat
 
-    async def slow(messages, tools=None, max_tokens=4096, who=None):
+    async def slow(messages, tools=None, max_tokens=4096, who=None, **kw):
         await asyncio.sleep(0.05)
-        return await real_chat(messages, tools, max_tokens, who)
+        return await real_chat(messages, tools, max_tokens, who, **kw)
 
     llm.chat = slow
     llm.answer("done")
@@ -402,9 +403,9 @@ async def test_a_task_that_keeps_working_past_the_limit_is_stopped(agent, llm, c
     agent.config = dataclasses.replace(agent.config, max_task_seconds=0.1)
     real_chat = llm.chat
 
-    async def slow(messages_, tools=None, max_tokens=4096, who=None):
+    async def slow(messages_, tools=None, max_tokens=4096, who=None, **kw):
         await asyncio.sleep(0.3)
-        return await real_chat(messages_, tools, max_tokens, who)
+        return await real_chat(messages_, tools, max_tokens, who, **kw)
 
     llm.chat = slow
     llm.answer("too late")
