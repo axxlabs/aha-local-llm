@@ -173,14 +173,19 @@ def form_for(name: str, args: dict, site: str) -> Form:
     return Form(f"Run “{name}”{where}?", [Field("Arguments", json.dumps(args, ensure_ascii=False))])
 
 
-def open_form(url: str, data: bool = False) -> Form:
-    """The card for opening an address; with what it sends when it carries data (SPEC §5.2 rule 7)."""
+MADE_UP = "Aha! put this address together itself: it isn't in anything it read or you sent. It may be wrong."
+
+
+def open_form(url: str, data: bool = False, made_up: bool = False) -> Form:
+    """The card for opening an address; with what it sends when it carries data (SPEC §5.2 rule 7), and a warning
+    when nothing in the task showed it (addresses.made_up)."""
     site, _ = check_url(url)
+    warn = [Field("Note", MADE_UP, "info")] if made_up else []
     if data:
         return Form(
             f"Open this address? It sends what's in it to {site}",
-            [Field("Address", url), Field("It sends", addresses.describe(url), "info")],
+            [Field("Address", url), Field("It sends", addresses.describe(url), "info"), *warn],
         )
     if addresses.is_search(url):
         return Form(f"Search {site} for this?", [Field("Address", url)])
-    return Form(f"Open {site}?", [Field("Address", url)])
+    return Form(f"Open {site}?", [Field("Address", url), *warn])

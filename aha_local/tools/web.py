@@ -11,6 +11,7 @@ import trafilatura
 
 from .. import RELEASE
 from ..approvals import Field
+from ..policy import addresses
 from ..policy.browser import open_action, open_form
 from ..policy.gate import Action, explain
 from ..policy.urls import check_url, resolves_publicly
@@ -38,7 +39,8 @@ async def gated_open(ctx: ToolContext, url: str) -> tuple[str, ToolResult | None
     if verdict.outcome == "block":
         return url, ToolResult(f"Blocked: {verdict.why}.", error=True)
     if verdict.outcome == "card":
-        form = open_form(url, data=verdict.why.startswith("data"))
+        made_up = addresses.made_up(url, ctx.task.seen_urls)
+        form = open_form(url, data=verdict.why.startswith("data"), made_up=made_up)
         why = explain(verdict.why, action.site)
         decision, refused = await guard.ask(ctx, "action", form.title, form.fields, why=why)
         if refused:

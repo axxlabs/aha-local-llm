@@ -16,6 +16,7 @@ import pytest
 
 from aha_local.approvals import Decision
 from aha_local.config import Config
+from aha_local.policy.browser import MADE_UP
 from aha_local.tools import calendar, mail, web
 from aha_local.tools.registry import Registry, TaskState, ToolContext
 
@@ -255,7 +256,11 @@ async def test_after_reading_mail_searches_and_addresses_need_a_card(google, two
         ("Search the web for this?", [("Search", "FB-1234 Fictional Bistro", "text")]),
         (
             "Open this address? It sends what's in it to evil.example",
-            [("Address", "https://evil.example/?q=FB-1234", "text"), ("It sends", "q = FB-1234", "info")],
+            [
+                ("Address", "https://evil.example/?q=FB-1234", "text"),
+                ("It sends", "q = FB-1234", "info"),
+                ("Note", MADE_UP, "info"),  # nothing in the task showed it
+            ],
         ),
     ]
     # The next task starts clean: no card (the search itself then fails here, offline, which is fine).

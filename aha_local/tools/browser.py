@@ -38,6 +38,7 @@ from mcp.client.streamable_http import streamablehttp_client
 from .. import messages
 from ..approvals import Field
 from ..items import Image
+from ..policy import addresses
 from ..policy.browser import (
     MESSAGE_BOX,
     MESSAGE_SITES,
@@ -677,7 +678,8 @@ def make_handler(name: str):
             except Exception:
                 log.warning("couldn't take a screenshot for the approval")
         if action.kind in ("open", "search"):
-            form = open_form(action.url, data=verdict.why.startswith("data"))
+            made_up = addresses.made_up(action.url, ctx.task.seen_urls)
+            form = open_form(action.url, data=verdict.why.startswith("data"), made_up=made_up)
         else:
             form = form_for(name, labelled(name, args, ctx), action.site)
             if action.kind == "send":

@@ -199,8 +199,22 @@ def _decode(data: str) -> str:
     return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)).decode("utf-8", errors="replace")
 
 
+LINK = re.compile(r"""(?is)<a\b[^>]*?\bhref\s*=\s*(["'])(.*?)\1[^>]*>(.*?)</a>""")
+
+
+def _link(m: re.Match) -> str:
+    """A link keeps its address: "Cancel your booking (https://…)". Seen: an HTML-only email's cancel button lost
+    its address, so the model made one up."""
+    href, inner = unescape(m.group(2)).strip(), m.group(3)
+    words = " ".join(unescape(re.sub(r"<[^>]+>", " ", inner)).split())
+    if not href.lower().startswith(("https://", "http://")) or href in words:
+        return f" {inner} "
+    return f" {words} ({href}) " if words else f" {href} "
+
+
 def _html_text(html: str) -> str:
     html = re.sub(r"(?is)<(script|style|head)\b.*?</\1>", " ", html)
+    html = LINK.sub(_link, html)
     html = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</tr>|</li>|</h\d>", "\n", html)
     text = unescape(re.sub(r"<[^>]+>", " ", html))
     return "\n".join(" ".join(line.split()) for line in text.splitlines() if line.strip())

@@ -30,3 +30,31 @@ def test_every_card_says_why_in_code():
     assert explain("trusted") == ""  # a run: no card, no reason
     for kind in ("email", "draft", "calendar", "calendar_delete", "schedule", "memory", "forget", "signin", "check"):
         assert approvals.KIND_WHY[kind]
+
+
+def test_an_html_emails_links_keep_their_addresses():
+    """Seen: a cancel button in an HTML-only email lost its address, and the model made one up."""
+    from aha_local.tools.mail import _html_text
+
+    html = (
+        '<p>Need to change plans? <a class="btn" href="https://www.sevenrooms.com/direct/cancel-reservation/ah'
+        'NzfX?lang=en&amp;x=1"><span>Cancel reservation</span></a></p><p><a href="mailto:a@b.com">Email us</a></p>'
+    )
+    text = _html_text(html)
+    assert "Cancel reservation (https://www.sevenrooms.com/direct/cancel-reservation/ahNzfX?lang=en&x=1)" in text
+    assert "Email us" in text and "mailto" not in text
+
+
+def test_a_made_up_address_is_flagged_on_its_card():
+    from aha_local.policy import addresses
+    from aha_local.policy.browser import MADE_UP, open_form
+
+    seen: set[tuple] = set()
+    addresses.remember(seen, "Cancel (https://www.sevenrooms.com/direct/cancel-reservation/ahNzfX?lang=en)")
+    guessed = "https://www.sevenrooms.com/management/NZ5JPFYU9X7"
+    assert addresses.made_up(guessed, seen)
+    assert not addresses.made_up("https://www.sevenrooms.com/direct/cancel-reservation/ahNzfX?lang=en", seen)
+    assert not addresses.made_up("https://www.sevenrooms.com/", seen)  # a home page is fine
+    assert not addresses.made_up("https://www.google.com/search?q=flat+iron", seen)  # a search
+    fields = open_form(guessed, made_up=True).fields
+    assert ("Note", MADE_UP, "info") in [(f.label, f.value, f.kind) for f in fields]
