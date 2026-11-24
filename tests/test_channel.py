@@ -244,6 +244,9 @@ async def test_approval_cards_and_replies(tmp_path):
     assert rig.agent.replies == [("abcd1234", "approve", ["x"], "")]
     await phone.send({"t": "stop"})
     assert rig.agent.stopped == 1
+    await phone.send({"t": "cut"})  # [collapse]: a cut item, kept and sent to every device
+    cut = phone.inbox()[-1]
+    assert cut["t"] == "cut" and cut["item"] is True and isinstance(cut["seq"], int)
     await phone.send({"t": "nonsense"})
     assert phone.inbox()[-1] == {"t": "error", "code": "unknown_type"}
 
@@ -491,3 +494,19 @@ async def test_settings_show_and_disconnect_the_persons_email(tmp_path, monkeypa
     await phone.send({"t": "email_disconnect", "email": "ana.work@example.com"})
     assert phone.inbox() == [{"t": "connections", "email": "ana@example.com", "emails": ["ana@example.com"]}]
     assert revoked == ["ana.work@example.com"]
+
+
+def test_collapse_publishes_a_cut_and_the_next_part_starts_after_it():
+    """[collapse] in the app: a cut item for every device; the computer's titles start after it (SPEC §7.4)."""
+    from zoneinfo import ZoneInfo
+
+    from aha_local import folding
+
+    items = [
+        {"t": "msg", "seq": 1, "ts": 1000},
+        {"t": "msg", "seq": 2, "ts": 1060},
+        {"t": "cut", "seq": 3, "ts": 1100},
+    ]
+    assert folding.segment_start(items, ZoneInfo("UTC")) is None  # nothing going on after the cut
+    items.append({"t": "msg", "seq": 4, "ts": 1200})
+    assert folding.segment_start(items, ZoneInfo("UTC")) == (4, 1200)

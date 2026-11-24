@@ -355,6 +355,8 @@ class Channel:
         elif t == "stop":
             if self.agent is not None:
                 await self.agent.stop(account)
+        elif t == "cut":  # [collapse]: the part going on folds now, on every device (SPEC §7.4 "Folding")
+            await self.publish(account, {"t": "cut"})
         elif t == "sync_request":
             after = msg.get("after")
             after = after if isinstance(after, int) and after >= 0 else 0

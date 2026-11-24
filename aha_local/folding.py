@@ -48,9 +48,10 @@ def is_break(before: int, after: int, tz: ZoneInfo) -> bool:
 
 
 def segment_start(items: list[dict], tz: ZoneInfo) -> tuple[int, int] | None:
-    """(seq, ts) of the first item of the current part: since the last break, or since the last new subject.
-    `items`: the latest chat items, oldest first (Account.recent_items)."""
-    shown = [(it["seq"], it["ts"]) for it in items if it.get("t") in SHOWN]
+    """(seq, ts) of the first item of the current part: since the last break, the last new subject, or the last
+    cut (the person's [collapse]). `items`: the latest chat items, oldest first (Account.recent_items)."""
+    cuts = [it["seq"] for it in items if it.get("t") == "cut"]
+    shown = [(it["seq"], it["ts"]) for it in items if it.get("t") in SHOWN and it["seq"] > max(cuts, default=0)]
     if not shown:
         return None
     start = len(shown) - 1
