@@ -194,11 +194,17 @@ class Channel:
 
     # ---- output for the agent (agent.AgentOut, approvals.Out)
 
-    async def message(self, account: Account, text: str, image: Image | None = None) -> None:
+    async def message(self, account: Account, text: str, image: Image | None = None, open: str = "") -> None:
         item: dict = {"t": "msg", "role": "aha", "text": text}
         if image is not None:
             item["image"] = image.to_dict()
+        if open:  # "asks" or "stopped": the app keeps it unfolded after a break (SPEC §7.4 "Folding")
+            item["open"] = open
         await self.publish(account, item, notify=True)
+
+    async def title(self, account: Account, start: int, text: str) -> None:
+        """The title of the conversation since item `start`, shown when the app folds it (SPEC §7.4)."""
+        await self.publish(account, {"t": "title", "from": start, "text": text})
 
     async def text(self, account: Account, text: str) -> None:
         await self.message(account, text)

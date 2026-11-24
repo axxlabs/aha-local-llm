@@ -6,14 +6,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime as dt
 import json
 import logging
 import secrets
 import time
 from collections import defaultdict
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
-from . import checks, context, messages
+from . import checks, context, folding, messages
 from .accounts import Account, Accounts
 from .approvals import Approvals
 from .config import Config
@@ -48,7 +50,8 @@ def model_record(model: str, reply, secrets_typed: list[str]) -> dict:
 class AgentOut(Protocol):
     """Where the agent's output goes: the end-to-end channel to the person's devices (e2e/channel.py)."""
 
-    async def message(self, account: Account, text: str, image: Image | None = None) -> None: ...
+    async def message(self, account: Account, text: str, image: Image | None = None, open: str = "") -> None: ...
+    async def title(self, account: Account, start: int, text: str) -> None: ...
     async def typing(self, account: Account, on: bool, queued: bool = False) -> None: ...
     async def card(self, account: Account, card: dict) -> None: ...
     async def state(self, account: Account, approval_id: str, state: str) -> None: ...
@@ -108,13 +111,14 @@ class Agent:
         self.sent: dict[str, int] = defaultdict(int)  # messages sent per account, to know if they've heard back
         self.photos: dict[str, list[Image]] = defaultdict(list)  # photos from the person, for the next model call
         self.typing_every = TYPING_EVERY
+        self.last_prompt: dict[str, list[dict]] = {}  # each account's latest model request, for its title
 
     # ---- outbound
 
-    async def send(self, account: Account, text: str, image: Image | None = None) -> None:
+    async def send(self, account: Account, text: str, image: Image | None = None, open: str = "") -> None:
         self.sent[account.address] += 1
         account.transcript({"kind": "out", "text": text, "image": bool(image)})
-        await self.out.message(account, text[:20_000], image)
+        await self.out.message(account, text[:20_000], image, open)
 
     # ---- inbound
 
@@ -357,15 +361,17 @@ class Agent:
             await self._stop_typing(account, typing)
             raise
         except TimeoutError:
-            answer, checked = messages.TOO_LONG, False
+            answer, checked, stopped = messages.TOO_LONG, False, True
         except ApprovalExpired:
-            answer, checked = messages.APPROVAL_EXPIRED, False
+            answer, checked, stopped = messages.APPROVAL_EXPIRED, False, True
         except ModelUnavailable as e:
             log.error("model unavailable: %s", e)
-            answer, checked = messages.MODEL_DOWN, False
+            answer, checked, stopped = messages.MODEL_DOWN, False, True
         except Exception:
             log.exception("task failed")
-            answer, checked = messages.FAILED, False
+            answer, checked, stopped = messages.FAILED, False, True
+        else:
+            stopped = answer.startswith(messages.TOO_MANY_STEPS)
         if not answer.strip():
             # After "✅ Save" there may be nothing to add; if they've heard nothing at all, say something.
             answer = "" if self.sent[account.address] > sent_before else "…"
@@ -380,10 +386,34 @@ class Agent:
             if answer:
                 answer = f"⏰ {answer}"
         if answer:
-            await self.send(account, answer)
+            # Unfinished stays unfolded after a break (SPEC §7.4 "Folding"): a task that stopped, or a question.
+            await self.send(account, answer, open="stopped" if stopped else "asks" if folding.asks(answer) else "")
         account.transcript({"kind": "answer", "text": answer})
         conv = context.record_turn(account, text, answer, checked)
+        if answer and not stopped:
+            await self._title(account, answer)
         await self._fold(account, conv)
+
+    async def _title(self, account: Account, answer: str) -> None:
+        """Name the conversation since the last break, for when the app folds it (SPEC §7.4 "Folding").
+
+        Asked at the end of the task's own last request, so the model server's cached prompt still matches and
+        it costs only the new words; the question and the title are never part of the conversation."""
+        prompt = self.last_prompt.pop(account.address, None)
+        start = folding.segment_start(account.read_transcript(), ZoneInfo(self.config.timezone))
+        if prompt is None or start is None or not hasattr(self.out, "title"):
+            return
+        tz = ZoneInfo(self.config.timezone)
+        since = dt.datetime.fromtimestamp(start[1], tz).strftime("%H:%M")
+        asked = [*prompt, {"role": "assistant", "content": answer}, {"role": "user", "content": folding.ask(since)}]
+        try:
+            reply = await self.llm.chat(
+                asked, self.registry.specs(), max_tokens=60, who=account.address, tool_choice="none", thinking=False
+            )
+        except ModelUnavailable:
+            return
+        if title := folding.clean(reply.content or ""):
+            await self.out.title(account, start[0], title)
 
     async def solve(self, account: Account, text: str) -> tuple[str, bool, str]:
         """Returns the answer, whether it passed the checks, and everything the person said during the task."""
@@ -435,6 +465,7 @@ class Agent:
                 account, task, self.config.timezone, self.config.household_name, self.config.context_tokens
             )
             reply = await self.llm.chat(msgs, tools, who=account.address)
+            self.last_prompt[account.address] = msgs  # the title is asked at its end (SPEC §7.4 "Folding")
             log.info("model call: %d prompt tokens, %d cached", reply.prompt_tokens, reply.cached_tokens)
             account.transcript(model_record(self.llm.model, reply, ctx.task.secrets))
             if not reply.tool_calls:

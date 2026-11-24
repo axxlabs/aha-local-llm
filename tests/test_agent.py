@@ -328,7 +328,7 @@ async def test_everyone_hears_when_aha_restarts(accounts):
     fe, hb = person(accounts), accounts.create("Hb")
     sent = []
 
-    async def send(account, text):
+    async def send(account, text, open=""):
         if account is hb:
             raise RuntimeError("offline")  # one failing doesn't stop the others
         sent.append((account.name, text))

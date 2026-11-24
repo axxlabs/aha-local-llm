@@ -61,11 +61,15 @@ class LLM:
         tools: list[dict] | None = None,
         max_tokens: int = 4096,
         who: str | None = None,
+        tool_choice: str = "auto",
+        thinking: bool = True,
     ) -> Reply:
         body = {"model": self.model, "messages": messages, "max_tokens": max_tokens}
         if tools:
             body["tools"] = tools
-            body["tool_choice"] = "auto"
+            body["tool_choice"] = tool_choice
+        if not thinking:  # only the end of the prompt changes, so the cached prefix still matches (SPEC §4.2)
+            body["chat_template_kwargs"] = {"enable_thinking": False}
         if who:
             self.waiting[who] = self.waiting.get(who, 0) + 1
         try:

@@ -116,7 +116,7 @@ class Service:
         """Tell everyone the agent is stopping, so a task cut short isn't a mystery (SPEC §3.3)."""
         for account in self.accounts.all():
             try:
-                await self.agent.send(account, messages.RESTARTING)
+                await self.agent.send(account, messages.RESTARTING, open="stopped")
             except Exception:
                 log.warning("couldn't tell an account that aha is restarting")
 

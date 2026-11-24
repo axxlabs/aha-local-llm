@@ -32,6 +32,7 @@ class FakeLLM:
         self.requests: list[dict] = []
         self.lock = asyncio.Lock()
         self.queued_for: set[str] = set()  # accounts whose request waits behind another's
+        self.titles: list[list[dict]] = []  # the hidden title requests (SPEC §7.4 "Folding"), kept apart
 
     def answer(self, text: str) -> None:
         self.script.append(Reply(text))
@@ -42,7 +43,10 @@ class FakeLLM:
     def queued(self, who) -> bool:
         return who in self.queued_for
 
-    async def chat(self, messages, tools=None, max_tokens=4096, who=None) -> Reply:
+    async def chat(self, messages, tools=None, max_tokens=4096, who=None, tool_choice="auto", thinking=True) -> Reply:
+        if tool_choice == "none":  # a title: not part of the script
+            self.titles.append(messages)
+            return Reply("Test title")
         self.requests.append({"messages": messages, "tools": tools})
         await asyncio.sleep(0)
         return self.script.pop(0) if self.script else Reply("(script ended)")
@@ -61,9 +65,13 @@ class Chat:
         self.read = 0  # messages already returned by next()
         self.typed: list[bool] = []  # typing on/off, in order
         self.states: list[tuple[str, str]] = []
+        self.titles: list[tuple[int, str]] = []
 
-    async def message(self, account, text, image=None) -> None:
-        self.sent.append(SimpleNamespace(text=text, buttons=[], image=image, card=None))
+    async def message(self, account, text, image=None, open="") -> None:
+        self.sent.append(SimpleNamespace(text=text, buttons=[], image=image, card=None, open=open))
+
+    async def title(self, account, start, text) -> None:
+        self.titles.append((start, text))
 
     async def text(self, account, text) -> None:
         await self.message(account, text)
