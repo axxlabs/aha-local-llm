@@ -202,6 +202,18 @@ def day_field(start: str) -> Field:
         return Field("Day", "?", "info")
 
 
+CREATED_BY = "Created by Aha! (A Private AI Assistant)"
+
+
+def signed(notes: str) -> str:
+    """An event Aha! creates says so in its notes, as the last line (SPEC §3.4 "Calendar"): on the card, so the
+    person sees it and can edit it, and in the event, so guests and later readers know."""
+    notes = notes.strip()
+    if CREATED_BY.lower() in notes.lower():
+        return notes[:MAX_TEXT]
+    return (notes[: MAX_TEXT - len(CREATED_BY) - 2] + "\n\n" + CREATED_BY).strip()
+
+
 def describe(event: dict, tz) -> str:
     start, end = weekday(from_api(event.get("start", {}), tz)), from_api(event.get("end", {}), tz)
     parts = [f"[{event.get('id', '')}] {event.get('summary', '(no title)')}: {start} to {end}"]
@@ -307,7 +319,7 @@ async def calendar_add(args: dict, ctx: ToolContext) -> ToolResult:
         shown(start),
         shown(end) if end else "",
         " ".join(str(args.get("location", "") or "").split()),
-        str(args.get("notes", "") or "").strip()[:MAX_TEXT],
+        signed(str(args.get("notes", "") or "")),
         ", ".join(guests_of(str(args.get("guests", "") or "")) or []),
     )
     fields += [Field("Calendar", cal.name, "info"), day_field(fields[1].value)]

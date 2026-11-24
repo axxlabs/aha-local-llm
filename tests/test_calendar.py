@@ -252,3 +252,15 @@ def test_the_context_lists_the_coming_days_with_their_weekdays():
     days = context.days_ahead(now)
     assert days.startswith("Wed 2026-11-25, Thu 2026-11-26, Fri 2026-11-27, Sat 2026-11-28, Sun 2026-11-29")
     assert days.count(",") == 13
+
+
+async def test_every_event_aha_creates_is_signed_in_its_notes(cal, two, config):  # noqa: F811
+    fe, _ = two
+    approvals = FakeApprovals()  # declines: only the card matters here
+    await calendar.calendar_add({"title": "Dentist", "start": "2026-11-30 09:00"}, ctx_for(fe, config, approvals))
+    await calendar.calendar_add(
+        {"title": "Dinner", "start": "2026-11-30 19:00", "notes": "Ref FI-77"}, ctx_for(fe, config, approvals)
+    )
+    notes = [dict((label, value) for label, value, _ in a.fields)["Notes"] for a in approvals.asked]
+    assert notes == [calendar.CREATED_BY, f"Ref FI-77\n\n{calendar.CREATED_BY}"]
+    assert calendar.signed(f"x\n\n{calendar.CREATED_BY}") == f"x\n\n{calendar.CREATED_BY}"  # never twice
