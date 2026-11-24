@@ -99,8 +99,13 @@ class Service:
             await self.browser.stop()
 
     async def announce_restart(self) -> None:
-        """Tell everyone the agent is stopping, so a task cut short isn't a mystery (SPEC §3.3)."""
+        """Tell the people whose task is cut short (one running, or waiting on a card) that the agent is stopping,
+        so it isn't a mystery (SPEC §3.3). Nobody else: an idle restart says nothing (seen: everyone told, with
+        nothing running)."""
+        running = self.agent.running
         for account in self.accounts.all():
+            if account.address not in running:
+                continue
             try:
                 await self.agent.send(account, messages.RESTARTING, open="stopped")
             except Exception:

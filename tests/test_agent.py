@@ -319,14 +319,15 @@ async def test_a_messages_details_are_its_tasks_model_calls_and_tools(agent, llm
     assert len(trace([*records, sent], 7, budget=600)) == 5  # shortened to fit, never dropped
 
 
-async def test_everyone_hears_when_aha_restarts(accounts):
-    """A task cut short by a restart isn't a mystery: every account gets the message (SPEC §3.3)."""
+async def test_whoever_has_a_task_running_hears_when_aha_restarts(accounts):
+    """A task cut short by a restart isn't a mystery; nobody else is told (SPEC §3.3)."""
     from types import SimpleNamespace
 
     from aha_local import messages
     from aha_local.service import Service
 
     fe, hb = person(accounts), accounts.create("Hb")
+    accounts.create("Idle")
     sent = []
 
     async def send(account, text, open=""):
@@ -334,7 +335,8 @@ async def test_everyone_hears_when_aha_restarts(accounts):
             raise RuntimeError("offline")  # one failing doesn't stop the others
         sent.append((account.name, text))
 
-    service = SimpleNamespace(accounts=accounts, agent=SimpleNamespace(send=send))
+    running = {fe.address: object(), hb.address: object()}  # Idle has nothing running
+    service = SimpleNamespace(accounts=accounts, agent=SimpleNamespace(send=send, running=running))
     await Service.announce_restart(service)
     assert sent == [(fe.name, messages.RESTARTING)]
 
