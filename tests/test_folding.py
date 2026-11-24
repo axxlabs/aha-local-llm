@@ -53,8 +53,8 @@ async def test_a_question_stays_open_and_the_title_is_asked_at_the_end_of_the_ca
     asked = llm.titles[0]
     assert asked[: len(llm.requests[-1]["messages"])] == llm.requests[-1]["messages"]  # same prefix: cached
     assert asked[-2] == {"role": "assistant", "content": "There are two tables free tonight. Which one would you like?"}
-    assert "reply NEW:" in asked[-1]["content"]
-    assert "reply NEW:" not in str(fe.load_context())  # never part of the conversation
+    assert "Reply with one line only: NEW:" in asked[-1]["content"]
+    assert "Reply with one line only" not in str(fe.load_context())  # never part of the conversation
 
 
 async def test_a_task_that_stopped_stays_open_and_gets_no_title(agent, llm, chat, accounts, monkeypatch):
@@ -106,11 +106,17 @@ def test_saying_so_starts_a_new_subject():
         "Different subject: is the dentist open Saturday?",
         "something else: book Flat Iron",
         "mudando de assunto, quando é o feriado?",
+        "changing topics: Who is the president of China",
+        "new topic:who is felipe lavratti",
+        "Switching subjects - weather tomorrow?",
+        "novo assunto: feriados",
+        "moving on, what's the time in Tokyo?",
     ):
         assert folding.says_new(said), said
     for same in ("what's on my calendar?", "change the time to 8pm", "another table please"):
         assert not folding.says_new(same), same
     assert "“ok, let's change topics.”" in folding.ask("10:24", "ok, let's change topics.")
+    assert "two “who is …” questions about different people are two subjects" in folding.ask("10:24", "x")
 
 
 async def test_a_said_change_of_subject_splits_even_when_the_model_says_same(agent, llm, chat, accounts):

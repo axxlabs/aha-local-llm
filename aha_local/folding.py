@@ -17,17 +17,26 @@ BREAK_SECONDS = 2 * 3600  # a break: two hours without a message, or a new day (
 SHOWN = ("msg", "approval")  # what the chat shows; states and titles don't count for breaks
 MAX_TITLE = 60
 ASK = (
-    "[Aha! app, not from the user. Reply with one line only. The user's latest message was: “{asked}”. If it "
-    "starts a subject unrelated to what you talked about before it since {since}, reply NEW: and a title for that "
-    "message's request. Otherwise reply SAME: and a title for everything you talked about since {since}. A title "
-    "is at most 6 words, in the language of the conversation, no quotes, no full stop.]"
+    "[Aha! app, not from the user. Decide whether the user's latest message starts a new subject, then give a "
+    "title. Their latest message was: “{asked}”.\n"
+    "NEW if it is about a different thing from the conversation before it since {since}: another person, place, "
+    "company, product, booking, order, email, trip, task or question. It is NEW even when it is the same kind of "
+    "request as before: two “who is …” questions about different people are two subjects, and so are two "
+    "searches for different things. It is also NEW when the user says they're changing the subject.\n"
+    "SAME only if it continues the same thing: a follow-up or detail about it, a correction, an answer to your "
+    "question, or a message that only makes sense with what came before (“and the price?”, “book it”, “make it "
+    "8pm”, “what about the other one?”).\n"
+    "Reply with one line only: NEW: and a title for the latest message's request, or SAME: and a title for "
+    "everything you talked about since {since}. A title is at most 6 words, in the language of the conversation, "
+    "no quotes, no full stop.]"
 )
 # The person says so: a new part whatever the model answers (seen: "ok, let's change topics. What happened to …"
 # came back SAME).
 SAYS_NEW = re.compile(
-    r"\b(?:change|switch|new|different|another|other)\s+(?:the\s+)?(?:topics?|subjects?)\b|"
-    r"\b(?:something|anything)\s+(?:else|different)\b|\bon (?:a|another) note\b|\bunrelated\b|"
-    r"\b(?:mudando|mudar|trocar|trocando)\s+de\s+(?:assunto|tema)\b|\boutro\s+assunto\b",
+    r"\b(?:chang\w*|switch\w*|new|different|another|other|next)\s+(?:the\s+)?(?:topics?|subjects?)\b|"
+    r"\b(?:topic|subject)\s+change\b|\b(?:something|anything)\s+(?:else|different)\b|\bmoving on\b|"
+    r"\bon (?:a|another) note\b|\bunrelated\b|"
+    r"\b(?:mud\w*|troc\w*)\s+de\s+(?:assunto|tema)\b|\b(?:outro|novo)\s+(?:assunto|tema)\b",
     re.I,
 )
 NEW = re.compile(r"^\W*(NEW|SAME)\W*[:\-]\s*", re.I)
