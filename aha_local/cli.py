@@ -113,16 +113,21 @@ def seal_data_key(key: bytes, target: Path, name: str = "data-key") -> str:
         capture_output=True,
     )
     tmp.chmod(0o600)
-    if unseal_data_key(tmp) != key:
+    if unseal(tmp, name) != key:  # with the name it was sealed under (data-key, profiles-key)
         tmp.unlink(missing_ok=True)
-        die("Sealing the data key didn't round-trip; nothing was changed.")
+        die(f"Sealing the {name} didn't round-trip; nothing was changed.")
     os.replace(tmp, target)
     return with_key
 
 
+def unseal(cred: Path, name: str) -> bytes | None:
+    r = subprocess.run(["systemd-creds", "--user", "decrypt", f"--name={name}", str(cred), "-"], capture_output=True)
+    return r.stdout if r.returncode == 0 and r.stdout else None
+
+
 def unseal_data_key(cred: Path) -> bytes | None:
-    r = subprocess.run(["systemd-creds", "--user", "decrypt", "--name=data-key", str(cred), "-"], capture_output=True)
-    return r.stdout if r.returncode == 0 and len(r.stdout) == 32 else None
+    key = unseal(cred, "data-key")
+    return key if key is not None and len(key) == 32 else None
 
 
 def show_recovery_code(key: bytes) -> None:

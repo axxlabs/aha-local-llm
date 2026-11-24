@@ -56,3 +56,28 @@ def test_install_when_idle_waits_for_quiet_and_only_one_waits(tmp_path, monkeypa
         fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
         cli.cmd_install(SimpleNamespace(when_idle=3))
     assert "already waiting" in capsys.readouterr().out and built == [1]
+
+
+def test_sealing_checks_with_the_name_it_sealed_under(tmp_path, monkeypatch):
+    """Seen: sealing the profiles key failed its own check, which unsealed it as the data key."""
+    from aha_local import cli
+
+    sealed: dict[str, tuple[str, bytes]] = {}
+
+    def run(cmd, input=None, check=False, capture_output=False):
+        from types import SimpleNamespace
+
+        name = next(a.split("=", 1)[1] for a in cmd if a.startswith("--name="))
+        if cmd[2] == "encrypt":
+            (tmp_path / "x.tmp").write_bytes(b"sealed")
+            sealed[cmd[-1]] = (name, input)
+            return SimpleNamespace(returncode=0, stdout=b"")
+        stored_name, data = sealed[cmd[-2]]
+        return SimpleNamespace(returncode=0 if stored_name == name else 1, stdout=data if stored_name == name else b"")
+
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(cli, "has_tpm", lambda: False)
+    monkeypatch.setattr(cli.subprocess, "run", run)
+    password = cli.profiles_password(b"k" * 32).encode()
+    assert cli.seal_data_key(password, tmp_path / "x", name="profiles-key") == "host"
+    assert cli.unseal(tmp_path / "x.tmp", "profiles-key") == password
