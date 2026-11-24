@@ -35,7 +35,7 @@ from mcp.client.streamable_http import streamablehttp_client
 
 from ..approvals import Field
 from ..items import Image
-from ..policy.browser import classify, form_for, offered, open_action, open_form
+from ..policy.browser import MESSAGE_SITES, classify, form_for, offered, open_action, open_form, sends_message
 from ..policy.urls import check_url, site_of
 from . import guard, human, logins, signins
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
@@ -525,8 +525,8 @@ def note_page(ctx: ToolContext, text: str) -> None:
         return
     if ctx.task.signed_in_sites is None:
         ctx.task.signed_in_sites = signins.signed_in_sites(ctx.account)
-    if site_of(host) in ctx.task.signed_in_sites:
-        ctx.task.private = True
+    if site_of(host) in ctx.task.signed_in_sites or site_of(host) in MESSAGE_SITES:
+        ctx.task.private = True  # the person's account pages, or their messages
 
 
 async def run_code(session, code: str) -> bool:
@@ -597,6 +597,13 @@ def check_targets(name: str, args: dict, ctx: ToolContext) -> ToolResult | None:
     return None
 
 
+def labels_of(name: str, args: dict) -> list[str]:
+    """The page's labels of the elements a typing call targets (from `labelled`)."""
+    if name == "browser_fill_form" and isinstance(args.get("fields"), list):
+        return [str(f.get("name") or f.get("element") or "") for f in args["fields"] if isinstance(f, dict)]
+    return [str(args.get("element") or "")]
+
+
 def labelled(name: str, args: dict, ctx: ToolContext) -> dict:
     """Replace the model's element descriptions with the page's own labels, for the approval."""
     snap = ctx.task.last_snapshot
@@ -628,6 +635,8 @@ def make_handler(name: str):
                 action = replace(action, site=await current_site(session))  # the browser's own address
             except Exception:
                 log.warning("couldn't read the current site")
+        if action.kind == "type" and sends_message(name, action.site, labels_of(name, labelled(name, args, ctx))):
+            action = replace(action, kind="send")  # a message to someone: a card every time (SPEC §5.2)
         verdict = guard.check(ctx, action, name)  # SPEC §5.2: the one place that decides
         if verdict.outcome == "block":
             return ToolResult(f"Blocked by aha's safety policy: {verdict.why}.", error=True)
@@ -651,6 +660,8 @@ def make_handler(name: str):
             form = open_form(action.url, data=verdict.why == "data")
         else:
             form = form_for(name, labelled(name, args, ctx), action.site)
+            if action.kind == "send":
+                form.title = f"Send this message on {action.site}?"
         decision, refused = await guard.ask(ctx, "action", form.title, form.fields, shot)
         if refused:
             return refused

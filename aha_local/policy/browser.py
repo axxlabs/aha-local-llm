@@ -9,6 +9,7 @@ carry new information out of the computer; typing and addresses can.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 
 from ..approvals import Field
@@ -64,6 +65,23 @@ SAFE_KEYS = {
     "ArrowRight",
     "Shift+Tab",
 }
+
+
+# Messaging sites (SPEC §5.2 rule 2): typing into the message box sends a message to someone, so it's a `send`,
+# a card every time, trusted or not; typing elsewhere there (the search box) follows the usual rules. Their pages
+# are the person's own messages, so a page of one makes the task hold private data.
+MESSAGE_SITES = {"whatsapp.com"}
+MESSAGE_BOX = re.compile(r"\btype a message\b|^message\b|\bmensagem\b|\bescreva\b", re.I)
+
+
+def sends_message(name: str, site: str, labels: list[str]) -> bool:
+    """Typing on a messaging site that goes into its message box (or a typed key, which goes to wherever the focus
+    is): that sends a message."""
+    if site not in MESSAGE_SITES:
+        return False
+    if name == "browser_press_key":
+        return True
+    return any(MESSAGE_BOX.search(label) and "search" not in label.lower() for label in labels)
 
 
 def offered(name: str) -> bool:

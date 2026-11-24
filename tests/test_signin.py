@@ -148,6 +148,12 @@ class FakeContext:
                 f'- textbox "Verification code" [ref=e3]: {self.fields.get("e3", "")}\n'
                 '- button "Sign in" [ref=e4]\n```'
             )
+        if "whatsapp" in self.url:  # WhatsApp Web: a search box, and a chat's message box
+            return head + (
+                f'- textbox "Search input textbox" [ref=e1]: {self.fields.get("e1", "")}\n'
+                '- heading "Sam" [ref=e5]\n'
+                f'- textbox "Type a message" [ref=e2]: {self.fields.get("e2", "")}\n```'
+            )
         if "account" in self.url:  # a page with a password field, not a sign-in page
             return (
                 f"### Page\n- Page URL: {self.url}\n### Snapshot\n```yaml\n"
