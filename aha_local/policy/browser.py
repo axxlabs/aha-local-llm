@@ -151,12 +151,15 @@ def form_for(name: str, args: dict, site: str) -> Form:
     if name == "browser_type":
         el = args.get("element")
         title = f"Type into {el}{where}?" if el else f"Type this{where}?"
-        return Form(title, [Field("Text", str(args.get("text", "")))])
+        # Several lines, kept as they are, so an edit doesn't lose them (seen: a WhatsApp message's line breaks
+        # lost when it was edited on a one-line field).
+        return Form(title, [Field("Text", str(args.get("text", "")), "longtext")])
     if name == "browser_fill_form":
         fields = []
         for i, f in enumerate(args.get("fields") or [], 1):
             label = f.get("name") or f.get("element") or f"Field {i}"
-            fields.append(Field(label, str(f.get("value", ""))))
+            value = str(f.get("value", ""))
+            fields.append(Field(label, value, "longtext" if "\n" in value else "text"))
         return Form(f"Fill in {len(fields)} field{'s' if len(fields) != 1 else ''}{where}?", fields)
     if name == "browser_select_option":
         el = args.get("element") or "a list"
