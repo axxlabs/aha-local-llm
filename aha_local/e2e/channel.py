@@ -226,9 +226,10 @@ class Channel:
         """Number the item, keep it in the transcript, send it to every device of the account."""
         item = {**item, "seq": account.next_seq(), "ts": int(time.time())}
         account.transcript({"kind": "item", "item": item})
+        live = {**item, "item": True}  # a chat item, whatever its type: the app keeps and draws it (SPEC §6.5)
         for device in list(account.devices.values()):
             if device.dev in self.online:
-                await self._send(account, device, item)
+                await self._send(account, device, live)
             elif notify:
                 await self._push(account, device, item)
         return item

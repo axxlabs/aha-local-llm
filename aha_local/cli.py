@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .config import DEFAULT_TOML, HOME_CONFIG, HOME_DATA, Config, host_language, language_tag
+from .config import DEFAULT_TOML, HOME_CONFIG, HOME_DATA, Config, host_language, language_tag, settings_toml
 
 REPO = Path(__file__).resolve().parents[1]
 DEPLOY = REPO / "deploy"
@@ -195,6 +195,7 @@ def cmd_init(a) -> None:
             timezone=a.timezone,
             language=language_tag(a.language) if a.language else host_language(),
             models_dir=Path(a.models).expanduser(),
+            settings=settings_toml(),
         )
     )
     HOME_CONFIG.chmod(0o600)

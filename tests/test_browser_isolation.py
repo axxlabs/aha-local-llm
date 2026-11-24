@@ -178,14 +178,22 @@ async def test_deleting_an_account_discards_its_browser_context(pool, fake_brows
 
     fe = person(accounts)
     await pool.for_account(fe.id).call("browser_navigate", {"url": "https://a.example/"})
+    stopped = []
+
+    async def stop(account, quiet=False):
+        stopped.append(account.name)
+
+    agent = SimpleNamespace(stop=stop, sessions={fe.address: object()})
     service = SimpleNamespace(
         accounts=accounts,
+        agent=agent,
         browser=pool,
         channel=SimpleNamespace(revoke=None),
         vault=accounts.vault,
     )
     assert (await Service._handle(service, {"cmd": "delete", "account": fe.name}))["ok"]
     assert not pool.is_open(fe.id) and not fake_browser.open()
+    assert stopped == [fe.name] and not agent.sessions  # its task stopped, nothing of it left in memory
 
 
 def test_the_browser_container_never_shares_a_context_between_connections():

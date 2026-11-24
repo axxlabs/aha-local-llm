@@ -256,7 +256,6 @@ async def email_search(args: dict, ctx: ToolContext) -> ToolResult:
                 f"No connected mailbox matches “{mailbox}”. Connected: {', '.join(addresses(ctx.account))}.", error=True
             )
         conns = [one]
-    ctx.task.read_mail = True
     lines, failed = [], []
     for conn in conns:  # every mailbox, unless one was named (SPEC §3.4 "Connections")
         try:
@@ -304,7 +303,6 @@ async def email_read(args: dict, ctx: ToolContext) -> ToolResult:
         if e.response.status_code in (400, 404):
             return ToolResult("There's no such email. Use email_search to find ids.", error=True)
         raise
-    ctx.task.read_mail = True
     h = _headers(msg)
     text, files = body_text(msg.get("payload", {}))
     cut = "\n[… email cut to fit]" if len(text) > MAX_READ else ""
@@ -440,6 +438,7 @@ def register(reg: Registry) -> None:
                 mailbox=string("Optional: search only this address of theirs, e.g. their work one"),
             ),
             email_search,
+            private=True,
         )
     )
     reg.add(
@@ -448,6 +447,7 @@ def register(reg: Registry) -> None:
             "Read one email in full by its id from email_search.",
             params(["id"], id=string("Message id")),
             email_read,
+            private=True,
         )
     )
     reg.add(

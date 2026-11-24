@@ -47,9 +47,9 @@ def is_break(before: int, after: int, tz: ZoneInfo) -> bool:
     return after - before >= BREAK_SECONDS or day(before) != day(after)
 
 
-def segment_start(transcript: list[dict], tz: ZoneInfo) -> tuple[int, int] | None:
-    """(seq, ts) of the first item of the current part: since the last break, or since the last new subject."""
-    items = [r["item"] for r in transcript if r.get("kind") == "item" and isinstance(r.get("item"), dict)]
+def segment_start(items: list[dict], tz: ZoneInfo) -> tuple[int, int] | None:
+    """(seq, ts) of the first item of the current part: since the last break, or since the last new subject.
+    `items`: the latest chat items, oldest first (Account.recent_items)."""
     shown = [(it["seq"], it["ts"]) for it in items if it.get("t") in SHOWN]
     if not shown:
         return None

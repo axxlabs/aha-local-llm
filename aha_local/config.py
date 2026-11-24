@@ -34,18 +34,58 @@ language = "{language}"   # the browser's language (Accept-Language); `aha insta
 [models]
 dir = "{models_dir}"
 
-[agent]
-approval_expiry_hours = 0  # 0: a card waits until it's answered (the person checks in when they can)
-max_model_calls_per_task = 40
-max_task_minutes = 0       # 0: no time limit; the step limit above stops a model stuck in a loop
-history_sync_days = 30     # the most a device may cache or re-sync
-push_preview = false       # true: notifications show the first line of the reply
+{settings}"""
 
-[browser]
-# true: any public site opens without asking; typing and forms still need approval (SPEC §5.2).
-allow_all_sites = true
-idle_minutes = 0      # 0: each person's browser window stays open (it closes only when the agent stops)
-"""
+
+@dataclass(frozen=True)
+class Setting:
+    """One choice a person makes in config.toml: its one default, written once (SPEC §3.7)."""
+
+    section: str
+    key: str  # in the TOML
+    default: bool | int | float
+    note: str
+    field: str  # on Config
+    scale: float = 1  # TOML unit → Config unit (hours → seconds)
+
+
+SETTINGS = (
+    Setting("agent", "approval_expiry_hours", 0, "0: a card waits until it's answered", "approval_expiry", 3600),
+    Setting(
+        "agent", "max_model_calls_per_task", 40, "the step limit: stops a model stuck in a loop", "max_model_calls"
+    ),
+    Setting("agent", "max_task_minutes", 0, "0: no time limit; the step limit stops a loop", "max_task_seconds", 60),
+    Setting("agent", "history_sync_days", 30, "the most a device may cache or re-sync", "history_sync_days"),
+    Setting("agent", "push_preview", False, "true: notifications show the first line of the reply", "push_preview"),
+    Setting(
+        "browser",
+        "allow_all_sites",
+        True,
+        "true: any public site opens without asking; typing and forms still need approval (SPEC §5.2)",
+        "allow_all_sites",
+    ),
+    Setting("browser", "idle_minutes", 0, "0: each person's browser window stays open", "browser_idle_seconds", 60),
+)
+
+
+def _toml(value: bool | int | float) -> str:
+    return ("true" if value else "false") if isinstance(value, bool) else str(value)
+
+
+def settings_toml() -> str:
+    """The [agent] and [browser] sections of a new config.toml, from SETTINGS."""
+    out = []
+    for section in dict.fromkeys(s.section for s in SETTINGS):
+        out.append(f"[{section}]")
+        out += [f"{s.key} = {_toml(s.default)}  # {s.note}" for s in SETTINGS if s.section == section]
+        out.append("")
+    return "\n".join(out)
+
+
+def _default(name: str):
+    """A Config field's default when a setting gives it: SETTINGS is the only place it's written."""
+    s = next(s for s in SETTINGS if s.field == name)
+    return type(s.default)(s.default * s.scale) if not isinstance(s.default, bool) else s.default
 
 
 LANGUAGE = re.compile(r"^[a-z]{2,3}(?:-[A-Z]{2})?$")
@@ -76,16 +116,16 @@ class Config:
     timezone: str = "Europe/London"
     language: str = "en-GB"  # the browser's language, a BCP 47 tag (SPEC §3.4)
     models_dir: Path = Path.home() / "aha-models"
-    approval_expiry: float = 0  # seconds; 0: never
-    max_model_calls: int = 40
-    max_task_seconds: float = 0  # 0: no time limit (the step limit stops a loop)
-    allow_all_sites: bool = True
-    browser_idle_seconds: float = 0  # 0: never closed for being idle
+    approval_expiry: float = _default("approval_expiry")  # seconds; 0: never
+    max_model_calls: int = _default("max_model_calls")
+    max_task_seconds: float = _default("max_task_seconds")  # 0: no time limit (the step limit stops a loop)
+    allow_all_sites: bool = _default("allow_all_sites")
+    browser_idle_seconds: float = _default("browser_idle_seconds")  # 0: never closed for being idle
     source_url: str = "https://github.com/axxlabs/aha-local-llm"  # named in `help` (AGPL §13, SPEC §10.1)
     app_url: str = "https://app.aha.axxlabs.ai"  # where pairing links open the app (SPEC §6.4)
     device_url: str = ""  # the gateway's device endpoint, for the pairing link; derived from gateway_url if empty
-    history_sync_days: int = 30
-    push_preview: bool = False
+    history_sync_days: int = _default("history_sync_days")
+    push_preview: bool = _default("push_preview")
     # Service addresses (inside the containers' networks; overridable for development and tests).
     data_dir: Path = field(default_factory=lambda: Path(os.environ.get("AHA_DATA_DIR", "/data")))
     llm_url: str = field(default_factory=lambda: os.environ.get("AHA_LLM_URL", "http://aha-llm:8081/v1"))
@@ -100,24 +140,26 @@ class Config:
         path = path or Path(os.environ.get("AHA_CONFIG_FILE", "/config/config.toml"))
         raw = tomllib.loads(path.read_text())
         gw, hh, models = raw.get("gateway", {}), raw.get("household", {}), raw.get("models", {})
-        agent, browser = raw.get("agent", {}), raw.get("browser", {})
+        agent = raw.get("agent", {})
+        chosen = {}
+        for setting in SETTINGS:  # every choice from its section, with its one default
+            value = raw.get(setting.section, {}).get(setting.key, setting.default)
+            if isinstance(setting.default, bool):
+                chosen[setting.field] = bool(value)
+            else:
+                chosen[setting.field] = type(setting.default)(value) * setting.scale
+        d = {f: cls.__dataclass_fields__[f].default for f in ("household_name", "timezone", "source_url", "app_url")}
         return cls(
             gateway_url=os.environ.get("AHA_GATEWAY_URL", gw["url"]),
             gateway_pin=gw["pin"],
-            household_name=hh.get("name", "Home"),
-            timezone=hh.get("timezone", "Europe/London"),
+            household_name=hh.get("name", d["household_name"]),
+            timezone=hh.get("timezone", d["timezone"]),
             language=language_tag(hh.get("language") or host_language()),
             models_dir=Path(models.get("dir", "~/aha-models")).expanduser(),
-            approval_expiry=float(agent.get("approval_expiry_hours", 0)) * 3600,
-            max_model_calls=int(agent.get("max_model_calls_per_task", 40)),
-            max_task_seconds=float(agent.get("max_task_minutes", 0)) * 60,
-            allow_all_sites=bool(browser.get("allow_all_sites", True)),
-            browser_idle_seconds=float(browser.get("idle_minutes", 0)) * 60,
-            source_url=str(agent.get("source_url", "https://github.com/axxlabs/aha-local-llm")),
-            app_url=str(gw.get("app", "https://app.aha.axxlabs.ai")),
+            source_url=str(agent.get("source_url", d["source_url"])),
+            app_url=str(gw.get("app", d["app_url"])),
             device_url=str(gw.get("device_url", "")),
-            history_sync_days=int(agent.get("history_sync_days", 30)),
-            push_preview=bool(agent.get("push_preview", False)),
+            **chosen,
         )
 
     @property

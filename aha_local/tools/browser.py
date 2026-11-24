@@ -518,7 +518,7 @@ def note_sign_in_form(ctx: ToolContext, result: ToolResult, snapshot: str) -> No
 
 def note_page(ctx: ToolContext, text: str) -> None:
     """SPEC §5.6: has this task had a page of a site the person signed in on? From the browser's own address."""
-    if ctx.task.on_signed_in or not (m := PAGE_URL.search(text)):
+    if ctx.task.private or not (m := PAGE_URL.search(text)):
         return
     host = urlsplit(m.group(1)).hostname or ""
     if not host:
@@ -526,7 +526,7 @@ def note_page(ctx: ToolContext, text: str) -> None:
     if ctx.task.signed_in_sites is None:
         ctx.task.signed_in_sites = signins.signed_in_sites(ctx.account)
     if site_of(host) in ctx.task.signed_in_sites:
-        ctx.task.on_signed_in = True
+        ctx.task.private = True
 
 
 async def run_code(session, code: str) -> bool:
@@ -638,12 +638,15 @@ def make_handler(name: str):
                 return await call_with_snapshot(session, name, args, ctx)
             return await ran(session, name, args, action, ctx)
 
+        # The screenshot shows the page the action happens on. Opening an address happens somewhere else: the
+        # page open now would mislead (seen: an Amazon search card showing the NDTV page before it).
         shot = None
-        try:
-            shot_result = to_result(await session.call("browser_take_screenshot", {}))
-            shot = shot_result.images[0] if shot_result.images else None
-        except Exception:
-            log.warning("couldn't take a screenshot for the approval")
+        if action.kind not in ("open", "search"):
+            try:
+                shot_result = to_result(await session.call("browser_take_screenshot", {}))
+                shot = shot_result.images[0] if shot_result.images else None
+            except Exception:
+                log.warning("couldn't take a screenshot for the approval")
         if action.kind in ("open", "search"):
             form = open_form(action.url, data=verdict.why == "data")
         else:
@@ -725,7 +728,9 @@ LOGIN_BOX = re.compile(r'^\s*- textbox "([^"]*)"[^\n]*?\[ref=((?:f\d+)?e\d+)\]',
 CODE_LABEL = re.compile(r"one[- ]time|verification|security code|\bcode\b|\botp\b|2fa", re.I)
 PASSWORD_LABEL = re.compile(r"pass ?word|passcode|passwort|mot de passe|senha|contrase|\bpin\b", re.I)
 USER_LABEL = re.compile(r"e-?mail|user ?name|user id|log ?in|sign ?in|phone|mobile|account", re.I)
-MAIL_NOTE = "This came up after Aha! read your email: sign in only if this is the site you meant."
+MAIL_NOTE = (
+    "This came up after Aha! read your email, calendar or an account page: sign in only if this is the site you meant."
+)
 SAVE_LABEL = "Save this login on this computer"
 WAIT_AFTER_SUBMIT = 2.5
 
@@ -798,7 +803,7 @@ async def browser_login(args: dict, ctx: ToolContext) -> ToolResult:
             username, password, keep = saved.get("username", ""), saved["password"], False
         else:
             card = [Field("Site", host, "info")]
-            if ctx.task.read_mail:
+            if ctx.task.private:
                 card.append(Field("Check", MAIL_NOTE, "info"))
             first = len(card)
             card += [Field("Email or username", "", "text"), Field("Password", "", "secret")]
@@ -854,7 +859,7 @@ async def browser_login(args: dict, ctx: ToolContext) -> ToolResult:
             log.exception("couldn't save the browser state after a sign-in")
         if ctx.task.signed_in_sites is not None:
             ctx.task.signed_in_sites.add(site)
-        ctx.task.on_signed_in = True  # the task now holds private data (SPEC §5.2)
+        ctx.task.private = True  # the task now holds private data (SPEC §5.2)
     ctx.task.last_snapshot = signins.redact(ctx.task.last_snapshot, ctx.task.secrets)
     said = f"Signed in on {host}." if signed else f"Not signed in on {host}: look at the page for why."
     page.text = said + " The page now:\n\n" + signins.redact(page.text, ctx.task.secrets)

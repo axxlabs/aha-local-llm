@@ -20,14 +20,14 @@ def at(day: int, hour: int, minute: int = 0) -> int:
 
 
 def items(*stamps, t="msg"):
-    return [{"kind": "item", "item": {"seq": i + 1, "ts": ts, "t": t}} for i, ts in enumerate(stamps)]
+    return [{"seq": i + 1, "ts": ts, "t": t} for i, ts in enumerate(stamps)]
 
 
 def test_a_part_starts_after_two_hours_or_a_new_day():
     assert folding.segment_start(items(at(24, 9), at(24, 9, 30), at(24, 10)), LONDON) == (1, at(24, 9))
     assert folding.segment_start(items(at(24, 9), at(24, 11, 30), at(24, 12)), LONDON) == (2, at(24, 11, 30))
     assert folding.segment_start(items(at(23, 23, 50), at(24, 0, 10)), LONDON) == (2, at(24, 0, 10))  # new day
-    states = [*items(at(24, 9)), {"kind": "item", "item": {"seq": 2, "ts": at(24, 15), "t": "approval_state"}}]
+    states = [*items(at(24, 9)), {"seq": 2, "ts": at(24, 15), "t": "approval_state"}]
     assert folding.segment_start(states, LONDON) == (1, at(24, 9))  # only what the chat shows counts
     assert folding.segment_start([], LONDON) is None
 
@@ -76,7 +76,7 @@ def test_a_new_subject_starts_a_part():
     assert folding.parse("**NEW** - Flat Iron booking.") == (True, "Flat Iron booking")
     assert folding.parse("Lisbon trip") == (False, "Lisbon trip")
     shown = items(at(24, 10), at(24, 10, 5), at(24, 10, 49), at(24, 10, 50))
-    topic = {"kind": "item", "item": {"seq": 9, "ts": at(24, 10, 50), "t": "title", "from": 3, "new": True}}
+    topic = {"seq": 9, "ts": at(24, 10, 50), "t": "title", "from": 3, "new": True}
     assert folding.segment_start([*shown, topic], LONDON) == (3, at(24, 10, 49))  # from the new subject on
 
 
@@ -130,3 +130,18 @@ async def test_a_said_change_of_subject_splits_even_when_the_model_says_same(age
     await settle(agent)
     assert chat.titles == [(8, "Test title", "new")]
     assert "let's change topics" in llm.titles[0][-1]["content"]  # the question quotes the message
+
+
+def test_the_current_part_is_found_without_reading_the_whole_history(accounts, monkeypatch):
+    """Review: every task read the whole transcript to find where the part starts; now only the first time."""
+    fe = person(accounts)
+    fe.transcript({"kind": "item", "item": {"seq": 1, "ts": at(24, 9), "t": "msg", "text": "hi"}})
+    assert [i["seq"] for i in fe.recent_items()] == [1]
+    reads = []
+    monkeypatch.setattr(type(fe), "read_transcript", lambda self: reads.append(1) or [])
+    fe.transcript({"kind": "item", "item": {"seq": 2, "ts": at(24, 9, 5), "t": "msg", "text": "secret"}})
+    fe.transcript({"kind": "tool", "name": "web_search"})
+    assert fe.recent_items() == [{"seq": 1, "ts": at(24, 9), "t": "msg"}, {"seq": 2, "ts": at(24, 9, 5), "t": "msg"}]
+    assert reads == []  # kept up to date as items were written, and no text kept
+    fe.clear_history()
+    assert fe.recent_items() == [] and reads == [1]  # read again after the history changed

@@ -429,3 +429,31 @@ async def test_by_default_cards_and_tasks_wait_for_the_person_however_long(agent
     await say(agent, "✅ Save", button=ask.buttons[0].id)
     await settle(agent)
     assert chat.texts()[-1] == "Saved."
+
+
+async def test_stop_drops_everything_that_was_waiting_for_the_task(agent, llm, chat, accounts):
+    """Seen in review: Stop dropped the waiting messages but not a waiting photo, which then went with the next,
+    unrelated request. One session per person, reset as a whole."""
+    from aha_local.items import Image
+
+    fe = person(accounts)
+    release = asyncio.Event()
+
+    async def slow(args, ctx):
+        await release.wait()
+        return ToolResult("done")
+
+    agent.registry.add(Tool("slow", "", params(), slow))
+    llm.call("slow")
+    await agent.inbound(fe, "do the slow thing")
+    await asyncio.sleep(0.05)
+    await agent.inbound(fe, "", Image(mime="image/jpeg", b64="/9j/AAAA"))  # a photo while it runs
+    assert agent.session(fe).photos
+    await agent.stop(fe)
+    await settle(agent)
+    assert not agent.session(fe).photos and not agent.session(fe).inbox and not agent.running
+    llm.answer("Hello.")
+    await agent.inbound(fe, "hi")
+    await settle(agent)
+    last = llm.requests[-1]["messages"]
+    assert "image_url" not in str(last)  # the stopped task's photo didn't come along

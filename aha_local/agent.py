@@ -12,6 +12,7 @@ import logging
 import secrets
 import time
 from collections import defaultdict
+from dataclasses import dataclass, field
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
@@ -58,6 +59,26 @@ class AgentOut(Protocol):
     async def text(self, account: Account, text: str) -> None: ...
 
 
+@dataclass
+class Session:
+    """One person's live state on this computer (SPEC §3.3): the task running for them and what waits for it.
+
+    Kept together so it's reset together (seen: Stop dropped the waiting messages but not a waiting photo, which
+    then went with the next, unrelated request)."""
+
+    task: asyncio.Task | None = None
+    inbox: list[str] = field(default_factory=list)  # their messages that came in while the task ran
+    photos: list[Image] = field(default_factory=list)  # their photos, for the next model call
+    sent: int = 0  # messages sent to them, to know whether they've heard back in a task
+    last_prompt: list[dict] | None = None  # the task's latest model request: its title is asked at the end
+
+    def reset(self) -> None:
+        """Drop what's waiting (Stop, Clear history, the account deleted)."""
+        self.inbox.clear()
+        self.photos.clear()
+        self.last_prompt = None
+
+
 LIMIT_TICK = 0.5  # seconds between looks at the task's time limit
 TYPING_EVERY = 4.0  # seconds between `typing` frames while a reply is owed (SPEC §3.3)
 STOP_WORDS = {"stop", "cancel", "stop it", "stop that"}
@@ -79,14 +100,14 @@ class _Counted:
         self.agent = agent
 
     async def card(self, account: Account, card: dict) -> None:
-        self.agent.sent[account.address] += 1
+        self.agent.session(account).sent += 1
         await self.agent.out.card(account, card)
 
     async def state(self, account: Account, approval_id: str, state: str) -> None:
         await self.agent.out.state(account, approval_id, state)
 
     async def text(self, account: Account, text: str) -> None:
-        self.agent.sent[account.address] += 1
+        self.agent.session(account).sent += 1
         await self.agent.out.text(account, text)
 
 
@@ -105,18 +126,21 @@ class Agent:
         self.out = out
         self.browser = browser
         self.approvals = Approvals(_Counted(self), config.approval_expiry)
-        self.running: dict[str, asyncio.Task] = {}
-        # Messages that arrive while the account's task runs: the task reads them before its next model call.
-        self.inbox: dict[str, list[str]] = defaultdict(list)
-        self.sent: dict[str, int] = defaultdict(int)  # messages sent per account, to know if they've heard back
-        self.photos: dict[str, list[Image]] = defaultdict(list)  # photos from the person, for the next model call
+        self.sessions: dict[str, Session] = defaultdict(Session)  # each person's live state, by address
         self.typing_every = TYPING_EVERY
-        self.last_prompt: dict[str, list[dict]] = {}  # each account's latest model request, for its title
+
+    def session(self, account: Account) -> Session:
+        return self.sessions[account.address]
+
+    @property
+    def running(self) -> dict[str, asyncio.Task]:
+        """The tasks running now, by account address."""
+        return {a: s.task for a, s in self.sessions.items() if s.task is not None}
 
     # ---- outbound
 
     async def send(self, account: Account, text: str, image: Image | None = None, open: str = "") -> None:
-        self.sent[account.address] += 1
+        self.session(account).sent += 1
         account.transcript({"kind": "out", "text": text, "image": bool(image)})
         await self.out.message(account, text[:20_000], image, open)
 
@@ -130,7 +154,7 @@ class Agent:
             self.browser.touch(account.id)  # the window stays open idle_minutes after their last message
         if image is not None:
             # A photo is never a command: it goes to the running task, or starts one (SPEC §6.5).
-            self.photos[account.address].append(image)
+            self.session(account).photos.append(image)
             text = text or PHOTO_ONLY
             if await self.approvals.reply_text(account, text):
                 return  # declines the open card; the running task sees the photo with the note
@@ -195,10 +219,11 @@ class Agent:
         await self._start(account, text)
 
     async def _start(self, account: Account, text: str) -> None:
-        if account.address in self.running:
-            self.inbox[account.address].append(text)  # the running task reads it; "typing…" already shows
+        live = self.session(account)
+        if live.task is not None:
+            live.inbox.append(text)  # the running task reads it; "typing…" already shows
             return
-        self.running[account.address] = asyncio.create_task(self.run(account, text))
+        live.task = asyncio.create_task(self.run(account, text))
 
     async def approval_reply(
         self, account: Account, approval_id: str, decision: str, values: list | None = None, note: str = ""
@@ -208,8 +233,9 @@ class Agent:
 
     async def stop(self, account: Account, quiet: bool = False) -> None:
         """Cancel the running task. `quiet`: say nothing, and wait for it to wind down (Clear history, §3.8.1)."""
-        task = self.running.get(account.address)
-        self.inbox.pop(account.address, None)
+        live = self.session(account)
+        task = live.task
+        live.reset()  # what was waiting for the task goes too: nothing of it reaches a later one
         if task is None:
             if not quiet:
                 await self.send(account, messages.NOTHING_TO_STOP)
@@ -223,7 +249,7 @@ class Agent:
     # ---- tasks
 
     def is_running(self, account: Account) -> bool:
-        return account.address in self.running
+        return self.session(account).task is not None
 
     def owes_reply(self, account: Account) -> bool:
         """What "typing…" shows (SPEC §3.3): a task is running and isn't waiting for the person's approval."""
@@ -247,7 +273,7 @@ class Agent:
             late=", running late: the computer was off" if late else "",
             last=LAST_TIME.format(note=entry["last"]) if entry.get("last") else "",
         )
-        self.running[account.address] = asyncio.create_task(self.run(account, text, scheduled=entry["id"]))
+        self.session(account).task = asyncio.create_task(self.run(account, text, scheduled=entry["id"]))
 
     async def run(self, account: Account, text: str, scheduled: str | None = None) -> None:
         held = self.browser.hold(account.id) if self.browser else contextlib.nullcontext()
@@ -255,7 +281,7 @@ class Agent:
             with held:
                 await self._run(account, text, scheduled)
         finally:
-            self.running.pop(account.address, None)
+            self.session(account).task = None
             await self.save_browser(account)
 
     # ---- the person's browser state (SPEC §3.4)
@@ -293,7 +319,7 @@ class Agent:
             await self._task(account, text, scheduled)
             scheduled = None  # a follow-up is the person's own message
             # Messages that came in after the task's last model call: one follow-up task for all of them.
-            pending = self.inbox.pop(account.address, [])
+            pending, self.session(account).inbox = self.session(account).inbox, []
             if not pending:
                 break
             text = "\n\n".join(pending)
@@ -352,7 +378,7 @@ class Agent:
                     await solving
 
     async def _task_body(self, account: Account, text: str, scheduled: str | None = None) -> None:
-        sent_before = self.sent[account.address]
+        sent_before = self.session(account).sent
         asked_at = 0 if scheduled else account.seq  # the item of the message that started it (SPEC §7.4)
         typing = asyncio.create_task(self._typing(account))
         try:
@@ -375,7 +401,7 @@ class Agent:
             stopped = answer.startswith(messages.TOO_MANY_STEPS)
         if not answer.strip():
             # After "✅ Save" there may be nothing to add; if they've heard nothing at all, say something.
-            answer = "" if self.sent[account.address] > sent_before else "…"
+            answer = "" if self.session(account).sent > sent_before else "…"
         await self._stop_typing(account, typing)  # before the answer, so no refresh can land after it
         if scheduled:
             quiet = answer.strip().lstrip("*_` ").startswith(schedule.NOTHING)
@@ -400,9 +426,9 @@ class Agent:
 
         Asked at the end of the task's own last request, so the model server's cached prompt still matches and
         it costs only the new words; the question and the title are never part of the conversation."""
-        prompt = self.last_prompt.pop(account.address, None)
+        prompt, self.session(account).last_prompt = self.session(account).last_prompt, None
         asked = asked.split("\n\n", 1)[0]  # the message that started the task, not later notes
-        start = folding.segment_start(account.read_transcript(), ZoneInfo(self.config.timezone))
+        start = folding.segment_start(account.recent_items(), ZoneInfo(self.config.timezone))
         if prompt is None or start is None or not hasattr(self.out, "title"):
             return
         tz = ZoneInfo(self.config.timezone)
@@ -433,7 +459,7 @@ class Agent:
         def take_photos(message: dict) -> None:
             """Attach the person's waiting photos to a message for the model (the vision model reads them)."""
             nonlocal has_photo, text
-            photos = self.photos.pop(account.address, [])
+            photos, self.session(account).photos = self.session(account).photos, []
             if not photos:
                 return
             has_photo = True
@@ -465,7 +491,8 @@ class Agent:
             *(t["content"] for t in conv.get("turns", []) if t["role"] == "user" or t.get("checked")),
         ]
         for _ in range(self.config.max_model_calls):
-            for extra in self.inbox.pop(account.address, []):
+            extras, self.session(account).inbox = self.session(account).inbox, []
+            for extra in extras:
                 task.append({"role": "user", "content": NEW_MESSAGE.format(text=extra)})
                 sources.append(extra)
                 addresses.remember(ctx.task.seen_urls, extra)
@@ -475,7 +502,7 @@ class Agent:
                 account, task, self.config.timezone, self.config.household_name, self.config.context_tokens
             )
             reply = await self.llm.chat(msgs, tools, who=account.address)
-            self.last_prompt[account.address] = msgs  # the title is asked at its end (SPEC §7.4 "Folding")
+            self.session(account).last_prompt = msgs  # the title is asked at its end (SPEC §7.4 "Folding")
             log.info("model call: %d prompt tokens, %d cached", reply.prompt_tokens, reply.cached_tokens)
             account.transcript(model_record(self.llm.model, reply, ctx.task.secrets))
             if not reply.tool_calls:

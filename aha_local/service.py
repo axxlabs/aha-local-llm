@@ -249,6 +249,8 @@ class Service:
                 return {"ok": False, "error": f"{email} isn't connected for {acct.label} (see `aha mail status`)"}
             return {"ok": True, "revoked": await mail.disconnect(acct, email)}
         if cmd == "delete":
+            await self.agent.stop(acct, quiet=True)
+            self.agent.sessions.pop(acct.address, None)  # nothing of the person stays in memory
             for dev in list(acct.devices):
                 await self.channel.revoke(acct, dev)
             await mail.disconnect(acct)

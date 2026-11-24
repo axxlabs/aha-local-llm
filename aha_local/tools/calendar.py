@@ -230,7 +230,6 @@ async def calendar_list(args: dict, ctx: ToolContext) -> ToolResult:
             out.append(f"No events{where} from {shown(start)} to {shown(end)}.")
         else:
             out.append((f"Events{where}:\n" if where else "") + "\n".join(describe(e, tz) for e in events))
-    ctx.task.read_calendar = True  # the task now holds private data (SPEC §5.2)
     return ToolResult("\n\n".join(out))
 
 
@@ -323,7 +322,6 @@ async def calendar_update(args: dict, ctx: ToolContext) -> ToolResult:
     if isinstance(found, ToolResult):
         return found
     cal, event = found
-    ctx.task.read_calendar = True
 
     def new(key: str, current: str) -> str:
         value = args.get(key)
@@ -362,7 +360,6 @@ async def calendar_delete(args: dict, ctx: ToolContext) -> ToolResult:
     if isinstance(found, ToolResult):
         return found
     cal, event = found
-    ctx.task.read_calendar = True
     guests = [a.get("email", "") for a in event.get("attendees", []) if not a.get("self")]
     fields = [Field("Event", describe(event, tz).split("] ", 1)[-1], "info"), Field("Calendar", cal.name, "info")]
     if guests:
@@ -397,6 +394,7 @@ def register(reg: Registry) -> None:
                 calendar=CALENDAR_ARG,
             ),
             calendar_list,
+            private=True,
         )
     )
     reg.add(
@@ -432,6 +430,7 @@ def register(reg: Registry) -> None:
                 calendar=string("The calendar the event is on, if not the user's own (as in calendar_list)"),
             ),
             calendar_update,
+            private=True,
         )
     )
     reg.add(
@@ -444,5 +443,6 @@ def register(reg: Registry) -> None:
                 calendar=string("The calendar the event is on, if not the user's own (as in calendar_list)"),
             ),
             calendar_delete,
+            private=True,
         )
     )

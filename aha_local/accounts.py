@@ -81,6 +81,13 @@ class Device:
         return Cert.model_validate(self.cert) if self.cert else None
 
 
+RECENT = 2000  # chat items kept in memory per person: far more than one part of the chat
+
+
+def _brief(item: dict) -> dict:
+    return {k: item[k] for k in ("seq", "ts", "t", "from", "new") if k in item}
+
+
 @dataclass
 class Account:
     id: str
@@ -93,6 +100,9 @@ class Account:
     devices: dict[str, Device] = field(default_factory=dict)
     history_days: int | None = None  # how long the computer keeps this person's history; None: forever (§3.8.1)
     task: str | None = field(default=None, repr=False, compare=False)  # the running task: tags its records (§3.8)
+    # The latest chat items, in short (seq, ts, t, from, new): read from the transcript once, then kept up to date
+    # as items are written, so finding the current part of the chat (SPEC §7.4) never reads the whole history.
+    _recent: list[dict] | None = field(default=None, repr=False, compare=False)
 
     @property
     def address(self) -> str:
@@ -141,6 +151,18 @@ class Account:
     def transcript(self, entry: dict) -> None:
         entry = {**entry, "task": self.task} if self.task else entry
         self.vault.append(self.dir / "transcript.jsonl", _log_line(entry))
+        if self._recent is not None and entry.get("kind") == "item" and isinstance(entry.get("item"), dict):
+            self._recent.append(_brief(entry["item"]))
+            del self._recent[:-RECENT]
+
+    def recent_items(self) -> list[dict]:
+        """The latest chat items, in short (SPEC §7.4): the transcript is read only the first time."""
+        if self._recent is None:
+            items = [
+                r["item"] for r in self.read_transcript() if r.get("kind") == "item" and isinstance(r.get("item"), dict)
+            ]
+            self._recent = [_brief(it) for it in items[-RECENT:]]
+        return list(self._recent)
 
     def audit(self, entry: dict) -> None:
         self.vault.append(self.dir / "audit.jsonl", _log_line(entry))
@@ -190,6 +212,7 @@ class Account:
             return False
         cutoff = (time.time() if now is None else now) - self.history_days * 86400
         changed = self._keep_log("transcript.jsonl", cutoff)
+        self._recent = None  # read again when needed
         changed = self._keep_log("audit.jsonl", cutoff) or changed
         conv = self.load_context()
         turns = [t for t in conv.get("turns", []) if not _before(t.get("ts"), cutoff)]
@@ -207,6 +230,7 @@ class Account:
         """Delete the transcript, the audit and the conversation context. Sequence numbers carry on."""
         for name in ("transcript.jsonl", "audit.jsonl"):
             self.vault.rewrite(self.dir / name, [])
+        self._recent = None
         (self.dir / "context.json").unlink(missing_ok=True)
 
     def load_context(self) -> dict:

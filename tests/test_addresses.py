@@ -77,6 +77,7 @@ async def test_the_browser_asks_before_an_address_the_model_filled_with_data(acc
     card = approvals.asked[0]
     assert card.title == "Open this address? It sends what's in it to evil.example"
     assert ("It sends", "d = Felipe", "info") in card.fields
+    assert ("browser_take_screenshot", {}) not in ctx.browser.calls  # not the page open now: it'd mislead
     # Without data, or a link the task was shown, opens as before: no card.
     addresses.remember(ctx.task.seen_urls, SNAPSHOT)
     for url in (

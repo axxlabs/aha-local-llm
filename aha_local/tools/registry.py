@@ -40,13 +40,11 @@ class TaskState:
     page_url: str = ""  # the current page's address, from the browser
     blank_page: bool = False  # the last page the model saw is a new window's blank page (SPEC §3.4)
     ref_lines: dict[str, str] = field(default_factory=dict)  # elements seen on the current page: ref → its line
-    read_mail: bool = False  # set by email_search/email_read: the task holds private data (SPEC §5.2)
-    read_calendar: bool = False  # set by the calendar tools: the same
+    # The task holds private data (SPEC §5.2): set by the registry after any tool declared `private` ran, and by
+    # the browser when a page of a signed-in site shows. Tools never set it themselves.
+    private: bool = False
     secrets: list[str] = field(default_factory=list)  # values the person typed on a sign-in card: never shown again
-    # The sites the person signed in on (read once per task), and whether this task has had a page of one: the
-    # task then holds private data (SPEC §5.2).
-    signed_in_sites: set[str] | None = None
-    on_signed_in: bool = False
+    signed_in_sites: set[str] | None = None  # the sites the person signed in on (read once per task)
     sign_in_page: str = ""  # the site, when the latest page is a sign-in form (SPEC §3.4 "Signing in")
     login_tried: bool = False  # browser_login ran in this task (whatever happened)
     saved_login_failed: set[str] = field(default_factory=set)  # hosts whose saved login led back to a form
@@ -56,11 +54,6 @@ class TaskState:
     # exactly isn't the model writing an address (SPEC §5.2 rule 7).
     seen_urls: set[tuple] = field(default_factory=set)
     banners_tried: set[tuple[str, str]] = field(default_factory=set)  # cookie banners closed: (page, button)
-
-    @property
-    def private(self) -> bool:
-        """The task read mail or the calendar, or had a page of a signed-in site (SPEC §5.2 "Private data")."""
-        return self.read_mail or self.read_calendar or self.on_signed_in
 
 
 @dataclass
@@ -82,6 +75,7 @@ class Tool:
     description: str
     parameters: dict
     handler: Handler
+    private: bool = False  # what it returns is the person's private data: the task then holds it (SPEC §5.2)
 
     def spec(self) -> dict:
         return {
@@ -124,7 +118,10 @@ class Registry:
         except (json.JSONDecodeError, ValueError) as e:
             return ToolResult(f"The arguments for {name} weren't valid JSON ({e}).", error=True)
         try:
-            return await tool.handler(args, ctx)
+            result = await tool.handler(args, ctx)
         except Exception as e:  # a failing tool must not end the task; the model can adjust
             log.exception("tool %s failed", name)
             return ToolResult(f"{name} failed: {type(e).__name__}: {str(e)[:300]}", error=True)
+        if tool.private and not result.error:  # it read the person's private data (SPEC §5.2): declared, not set
+            ctx.task.private = True
+        return result

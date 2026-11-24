@@ -14,7 +14,7 @@ from aha_local.approvals import Decision
 from aha_local.policy.gate import Action, Facts, decide
 from aha_local.tools import calendar, mail
 
-from .test_mail import FakeApprovals, ctx_for, two  # noqa: F401  (the fixture)
+from .test_mail import FakeApprovals, call, ctx_for, two  # noqa: F401  (the fixture)
 
 EVENTS = {
     "at-fe": {
@@ -97,12 +97,12 @@ def cal(monkeypatch):
 async def test_reading_reaches_only_the_running_persons_calendar_and_marks_the_task(cal, two, config):  # noqa: F811
     fe, hb = two
     ctx = ctx_for(fe, config)
-    found = await calendar.calendar_list({"start": "2026-11-26"}, ctx)
+    found = await call("calendar_list", {"start": "2026-11-26"}, ctx)
     assert "[ev1] Dentist" in found.text and "at High St" in found.text and "Haibo" not in found.text
-    assert ctx.task.read_calendar and ctx.task.private  # new sites and searches now ask first (SPEC §5.2)
-    other = await calendar.calendar_list({"start": "2026-11-26"}, ctx_for(hb, config))
+    assert ctx.task.private  # new sites and searches now ask first (SPEC §5.2)
+    other = await call("calendar_list", {"start": "2026-11-26"}, ctx_for(hb, config))
     assert "Haibo's private thing" in other.text and "Dentist" not in other.text
-    assert (await calendar.calendar_list({"start": "next tuesday"}, ctx)).error
+    assert (await call("calendar_list", {"start": "next tuesday"}, ctx)).error
 
 
 async def test_adding_is_always_a_card_and_what_was_approved_is_what_is_saved(cal, two, config):  # noqa: F811
@@ -173,7 +173,7 @@ async def test_a_connection_from_before_the_calendar_says_to_connect_again(monke
     monkeypatch.setattr(mail, "TRANSPORT", httpx.MockTransport(FakeCalendar(scoped=False)))
     mail._tokens.clear()
     fe, _ = two
-    result = await calendar.calendar_list({"start": "2026-11-26"}, ctx_for(fe, config))
+    result = await call("calendar_list", {"start": "2026-11-26"}, ctx_for(fe, config))
     assert result.error and "aha mail connect" in result.text and "again" in result.text
 
 
@@ -186,7 +186,7 @@ def test_calendar_changes_are_sends():
 async def test_the_calendar_is_chosen_by_the_name_the_person_used(cal, two, config):  # noqa: F811
     fe, _ = two
     ctx = ctx_for(fe, config)
-    family = await calendar.calendar_list({"start": "2026-11-27", "calendar": "family calendar"}, ctx)
+    family = await call("calendar_list", {"start": "2026-11-27", "calendar": "family calendar"}, ctx)
     assert "School play" in family.text and "Family" in family.text and "Dentist" not in family.text
     approvals = FakeApprovals(Decision(True, values=["Bake sale", "2026-11-29", "", "", "", "", "Family"]))
     added = await calendar.calendar_add(
@@ -195,7 +195,7 @@ async def test_the_calendar_is_chosen_by_the_name_the_person_used(cal, two, conf
     assert approvals.asked[0].title == "Add this to the “Family” calendar (fe@example.com)?"
     assert ("Calendar", "Family", "info") in approvals.asked[0].fields
     assert cal.calendar == quote(FAMILY, safe="") and "Added to the “Family” calendar (fe@example.com)" in added.text
-    unknown = await calendar.calendar_list({"start": "2026-11-27", "calendar": "Work"}, ctx)
+    unknown = await call("calendar_list", {"start": "2026-11-27", "calendar": "Work"}, ctx)
     assert unknown.error and "“Family”" in unknown.text and "“Holidays in the UK”" in unknown.text
     holidays = FakeApprovals()
     ro = await calendar.calendar_add(
@@ -212,7 +212,7 @@ async def test_with_two_accounts_both_calendars_show_and_each_is_chosen_by_its_a
     fe, _ = two
     mail.add_connection(fe, "gmail", "fe.work@example.com", "rt-fe2")
     ctx = ctx_for(fe, config)
-    both = await calendar.calendar_list({"start": "2026-11-26"}, ctx)
+    both = await call("calendar_list", {"start": "2026-11-26"}, ctx)
     assert "Dentist" in both.text and "Team offsite" in both.text
     assert "your calendar (fe.work@example.com)" in both.text and "your calendar (fe@example.com)" in both.text
     approvals = FakeApprovals(Decision(True, values=["Offsite dinner", "2026-11-26 19:00", "", "", "", "", "x"]))
@@ -222,5 +222,5 @@ async def test_with_two_accounts_both_calendars_show_and_each_is_chosen_by_its_a
     )
     assert approvals.asked[0].title == "Add this to your calendar (fe.work@example.com)?"
     assert cal.token == "at-fe2" and cal.writes[-1][:2] == ("POST", "/events")
-    family = await calendar.calendar_list({"start": "2026-11-27", "calendar": "Family"}, ctx)  # found in the first
+    family = await call("calendar_list", {"start": "2026-11-27", "calendar": "Family"}, ctx)  # found in the first
     assert "School play" in family.text and cal.token == "at-fe"
