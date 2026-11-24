@@ -202,9 +202,10 @@ class Channel:
             item["open"] = open
         await self.publish(account, item, notify=True)
 
-    async def title(self, account: Account, start: int, text: str) -> None:
-        """The title of the conversation since item `start`, shown when the app folds it (SPEC §7.4)."""
-        await self.publish(account, {"t": "title", "from": start, "text": text})
+    async def title(self, account: Account, start: int, text: str, new: bool = False) -> None:
+        """The title of the conversation since item `start`, shown when the app folds it (SPEC §7.4); `new`: a new
+        subject starts there, so the part before it folds now."""
+        await self.publish(account, {"t": "title", "from": start, "text": text, **({"new": True} if new else {})})
 
     async def text(self, account: Account, text: str) -> None:
         await self.message(account, text)

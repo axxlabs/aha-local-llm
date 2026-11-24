@@ -82,8 +82,8 @@ class Cal:
     @property
     def label(self) -> str:
         if self.id == "primary":
-            return f"your calendar ({self.conn['email']})" if self.several and self.conn else "your calendar"
-        return f"the “{self.name}” calendar"
+            return f"your calendar ({self.conn['email']})" if self.conn else "your calendar"
+        return f"the “{self.name}” calendar" + (f" ({self.conn['email']})" if self.conn else "")
 
 
 def own(ctx: ToolContext, conn: dict | None = None) -> Cal:
@@ -225,7 +225,7 @@ async def calendar_list(args: dict, ctx: ToolContext) -> ToolResult:
         if isinstance(found, ToolResult):
             return found
         events = found.get("items", [])
-        where = "" if cal.id == "primary" and not cal.several else f" in {cal.label}"
+        where = f" in {cal.label}"  # always: the answer says which account (SPEC §3.4)
         if not events:
             out.append(f"No events{where} from {shown(start)} to {shown(end)}.")
         else:

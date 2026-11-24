@@ -70,8 +70,8 @@ class Chat:
     async def message(self, account, text, image=None, open="") -> None:
         self.sent.append(SimpleNamespace(text=text, buttons=[], image=image, card=None, open=open))
 
-    async def title(self, account, start, text) -> None:
-        self.titles.append((start, text))
+    async def title(self, account, start, text, new=False) -> None:
+        self.titles.append((start, text) if not new else (start, text, "new"))
 
     async def text(self, account, text) -> None:
         await self.message(account, text)

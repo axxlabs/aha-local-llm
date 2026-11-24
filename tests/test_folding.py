@@ -8,6 +8,7 @@ import datetime as dt
 from zoneinfo import ZoneInfo
 
 from aha_local import folding, messages
+from aha_local.llm import Reply
 
 from .conftest import person, settle
 
@@ -52,8 +53,8 @@ async def test_a_question_stays_open_and_the_title_is_asked_at_the_end_of_the_ca
     asked = llm.titles[0]
     assert asked[: len(llm.requests[-1]["messages"])] == llm.requests[-1]["messages"]  # same prefix: cached
     assert asked[-2] == {"role": "assistant", "content": "There are two tables free tonight. Which one would you like?"}
-    assert "give a title" in asked[-1]["content"]
-    assert "give a title" not in str(fe.load_context())  # never part of the conversation
+    assert "reply NEW:" in asked[-1]["content"]
+    assert "reply NEW:" not in str(fe.load_context())  # never part of the conversation
 
 
 async def test_a_task_that_stopped_stays_open_and_gets_no_title(agent, llm, chat, accounts, monkeypatch):
@@ -67,3 +68,33 @@ async def test_a_task_that_stopped_stays_open_and_gets_no_title(agent, llm, chat
     await settle(agent)
     assert chat.sent[-1].text == messages.FAILED and chat.sent[-1].open == "stopped"
     assert chat.titles == []
+
+
+def test_a_new_subject_starts_a_part():
+    assert folding.parse("NEW: Evri parcel tracking") == (True, "Evri parcel tracking")
+    assert folding.parse("SAME: Waitrose order and memories") == (False, "Waitrose order and memories")
+    assert folding.parse("**NEW** - Flat Iron booking.") == (True, "Flat Iron booking")
+    assert folding.parse("Lisbon trip") == (False, "Lisbon trip")
+    shown = items(at(24, 10), at(24, 10, 5), at(24, 10, 49), at(24, 10, 50))
+    topic = {"kind": "item", "item": {"seq": 9, "ts": at(24, 10, 50), "t": "title", "from": 3, "new": True}}
+    assert folding.segment_start([*shown, topic], LONDON) == (3, at(24, 10, 49))  # from the new subject on
+
+
+async def test_when_the_model_says_new_the_part_starts_at_the_persons_message(agent, llm, chat, accounts):
+    fe = person(accounts)
+    now = int(dt.datetime.now().timestamp())
+    fe.transcript({"kind": "item", "item": {"seq": 7, "ts": now - 600, "t": "msg"}})
+    fe.seq = 8  # the person's new message was item 8
+    fe.transcript({"kind": "item", "item": {"seq": 8, "ts": now, "t": "msg"}})
+
+    async def titled(messages, tools=None, max_tokens=4096, who=None, tool_choice="auto", thinking=True):
+        if tool_choice == "none":
+            return Reply("NEW: Email search")
+        return await plain(messages, tools, max_tokens, who)
+
+    plain = llm.chat
+    llm.chat = titled
+    llm.answer("Nothing new in your inbox.")
+    await agent.inbound(fe, "any new emails?")
+    await settle(agent)
+    assert chat.titles == [(8, "Email search", "new")]

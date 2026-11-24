@@ -17,9 +17,12 @@ BREAK_SECONDS = 2 * 3600  # a break: two hours without a message, or a new day (
 SHOWN = ("msg", "approval")  # what the chat shows; states and titles don't count for breaks
 MAX_TITLE = 60
 ASK = (
-    "[Aha! app, not from the user: in at most 6 words, in the language of the conversation, give a title for "
-    "what you and the user talked about since {since}. Reply with the title only: no quotes, no full stop.]"
+    "[Aha! app, not from the user. Reply with one line only. If the user's latest request is about a subject "
+    "unrelated to what you talked about before it since {since}, reply NEW: and a title for that latest request. "
+    "Otherwise reply SAME: and a title for everything you talked about since {since}. A title is at most 6 words, "
+    "in the language of the conversation, no quotes, no full stop.]"
 )
+NEW = re.compile(r"^\W*(NEW|SAME)\W*[:\-]\s*", re.I)
 
 
 def is_break(before: int, after: int, tz: ZoneInfo) -> bool:
@@ -28,18 +31,17 @@ def is_break(before: int, after: int, tz: ZoneInfo) -> bool:
 
 
 def segment_start(transcript: list[dict], tz: ZoneInfo) -> tuple[int, int] | None:
-    """(seq, ts) of the first item since the last break, from the items the devices were sent."""
-    shown = [
-        (r["item"]["seq"], r["item"]["ts"])
-        for r in transcript
-        if r.get("kind") == "item" and isinstance(r.get("item"), dict) and r["item"].get("t") in SHOWN
-    ]
+    """(seq, ts) of the first item of the current part: since the last break, or since the last new subject."""
+    items = [r["item"] for r in transcript if r.get("kind") == "item" and isinstance(r.get("item"), dict)]
+    shown = [(it["seq"], it["ts"]) for it in items if it.get("t") in SHOWN]
     if not shown:
         return None
     start = len(shown) - 1
     while start > 0 and not is_break(shown[start - 1][1], shown[start][1], tz):
         start -= 1
-    return shown[start]
+    topics = {it.get("from") for it in items if it.get("t") == "title" and it.get("new")}
+    later = [s for s in shown[start:] if s[0] in topics]
+    return later[-1] if later else shown[start]
 
 
 def asks(answer: str) -> bool:
@@ -50,6 +52,13 @@ def asks(answer: str) -> bool:
 
 def ask(since: str) -> str:
     return ASK.format(since=since)
+
+
+def parse(text: str) -> tuple[bool, str]:
+    """(a new subject?, the title) from the model's reply to ASK."""
+    line = next((x for x in text.strip().splitlines() if x.strip()), "")
+    m = NEW.match(line)
+    return bool(m and m.group(1).upper() == "NEW"), clean(line[m.end() :] if m else line)
 
 
 def clean(text: str) -> str:

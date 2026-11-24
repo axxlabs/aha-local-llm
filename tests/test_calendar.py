@@ -114,7 +114,7 @@ async def test_adding_is_always_a_card_and_what_was_approved_is_what_is_saved(ca
         ctx_for(fe, config, approvals),
     )
     card = approvals.asked[0]
-    assert card.kind == "calendar" and card.title == "Add this to your calendar?"
+    assert card.kind == "calendar" and card.title == "Add this to your calendar (fe@example.com)?"
     assert card.fields[:3] == [
         ("What", "Dinner", "text"),
         ("Starts", "2026-11-27 19:30", "text"),
@@ -124,7 +124,11 @@ async def test_adding_is_always_a_card_and_what_was_approved_is_what_is_saved(ca
     assert (method, path, params["sendUpdates"]) == ("POST", "/events", "none")
     assert body["summary"] == "Dinner at Flat Iron" and body["start"]["dateTime"].startswith("2026-11-27T20:00")
     assert body["end"]["dateTime"].startswith("2026-11-27T21:00")  # an hour, when no end was given
-    assert "Added to your calendar" in result.text and "approv" not in result.text and "card" not in result.text
+    assert (
+        "Added to your calendar (fe@example.com)" in result.text
+        and "approv" not in result.text
+        and "card" not in result.text
+    )
 
 
 async def test_guests_get_invitations_only_through_the_card(cal, two, config):  # noqa: F811
@@ -134,7 +138,7 @@ async def test_guests_get_invitations_only_through_the_card(cal, two, config):  
         {"title": "Lunch", "start": "2026-11-28 13:00", "guests": "sam@example.com"}, ctx_for(fe, config, approvals)
     )
     assert result.error and "the user stopped it" in result.text and not cal.writes
-    assert approvals.asked[0].title == "Add this to your calendar and invite the guests?"
+    assert approvals.asked[0].title == "Add this to your calendar (fe@example.com) and invite the guests?"
     good = ["Lunch", "2026-11-28 13:00", "", "", "", "sam@example.com"]
     await calendar.calendar_add({"title": "Lunch", "start": "x"}, ctx_for(fe, config, FakeApprovals()))
     await calendar.calendar_add(
@@ -188,9 +192,9 @@ async def test_the_calendar_is_chosen_by_the_name_the_person_used(cal, two, conf
     added = await calendar.calendar_add(
         {"title": "Bake sale", "start": "2026-11-29", "calendar": "Family"}, ctx_for(fe, config, approvals)
     )
-    assert approvals.asked[0].title == "Add this to the “Family” calendar?"
+    assert approvals.asked[0].title == "Add this to the “Family” calendar (fe@example.com)?"
     assert ("Calendar", "Family", "info") in approvals.asked[0].fields
-    assert cal.calendar == quote(FAMILY, safe="") and "Added to the “Family” calendar" in added.text
+    assert cal.calendar == quote(FAMILY, safe="") and "Added to the “Family” calendar (fe@example.com)" in added.text
     unknown = await calendar.calendar_list({"start": "2026-11-27", "calendar": "Work"}, ctx)
     assert unknown.error and "“Family”" in unknown.text and "“Holidays in the UK”" in unknown.text
     holidays = FakeApprovals()
@@ -201,7 +205,7 @@ async def test_the_calendar_is_chosen_by_the_name_the_person_used(cal, two, conf
     moved = await calendar.calendar_delete(
         {"id": "ev5", "calendar": "Family"}, ctx_for(fe, config, FakeApprovals(Decision(True, values=["", ""])))
     )
-    assert "Deleted “School play” from the “Family” calendar" in moved.text
+    assert "Deleted “School play” from the “Family” calendar (fe@example.com)" in moved.text
 
 
 async def test_with_two_accounts_both_calendars_show_and_each_is_chosen_by_its_address(cal, two, config):  # noqa: F811

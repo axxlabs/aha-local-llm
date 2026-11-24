@@ -51,7 +51,7 @@ class AgentOut(Protocol):
     """Where the agent's output goes: the end-to-end channel to the person's devices (e2e/channel.py)."""
 
     async def message(self, account: Account, text: str, image: Image | None = None, open: str = "") -> None: ...
-    async def title(self, account: Account, start: int, text: str) -> None: ...
+    async def title(self, account: Account, start: int, text: str, new: bool = False) -> None: ...
     async def typing(self, account: Account, on: bool, queued: bool = False) -> None: ...
     async def card(self, account: Account, card: dict) -> None: ...
     async def state(self, account: Account, approval_id: str, state: str) -> None: ...
@@ -353,6 +353,7 @@ class Agent:
 
     async def _task_body(self, account: Account, text: str, scheduled: str | None = None) -> None:
         sent_before = self.sent[account.address]
+        asked_at = 0 if scheduled else account.seq  # the item of the message that started it (SPEC §7.4)
         typing = asyncio.create_task(self._typing(account))
         try:
             answer, checked, text = await self._within_limit(account, self.solve(account, text))
@@ -391,10 +392,10 @@ class Agent:
         account.transcript({"kind": "answer", "text": answer})
         conv = context.record_turn(account, text, answer, checked)
         if answer and not stopped:
-            await self._title(account, answer)
+            await self._title(account, answer, asked_at)
         await self._fold(account, conv)
 
-    async def _title(self, account: Account, answer: str) -> None:
+    async def _title(self, account: Account, answer: str, asked_at: int = 0) -> None:
         """Name the conversation since the last break, for when the app folds it (SPEC §7.4 "Folding").
 
         Asked at the end of the task's own last request, so the model server's cached prompt still matches and
@@ -412,7 +413,10 @@ class Agent:
             )
         except ModelUnavailable:
             return
-        if title := folding.clean(reply.content or ""):
+        new, title = folding.parse(reply.content or "")
+        if new and asked_at > start[0]:  # a new subject: a new part starts at the person's message (SPEC §7.4)
+            await self.out.title(account, asked_at, title or "", new=True)
+        elif title:
             await self.out.title(account, start[0], title)
 
     async def solve(self, account: Account, text: str) -> tuple[str, bool, str]:
