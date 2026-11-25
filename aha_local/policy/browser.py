@@ -237,7 +237,7 @@ def form_for(name: str, args: dict, site: str, signer: str = "") -> Form:
             form.title = f"Send this message on {site}?"
             for f in form.fields:
                 if f.label == "Text" or MESSAGE_BOX.search(f.label):
-                    f.value = messages.signed(f.value, signer, chat=True)
+                    f.value = messages.signed(f.value, signer, medium="chat")
         return form
     if opens(name, args):
         return open_form(str(args.get("url", "")))

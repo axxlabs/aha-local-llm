@@ -10,6 +10,7 @@ from urllib.parse import quote
 import httpx
 import pytest
 
+from aha_local import messages
 from aha_local.approvals import Decision
 from aha_local.policy.gate import Action, Facts, decide
 from aha_local.tools import calendar
@@ -263,5 +264,6 @@ async def test_every_event_aha_creates_is_signed_in_its_notes(cal, two, config):
         {"title": "Dinner", "start": "2026-11-30 19:00", "notes": "Ref FI-77"}, ctx_for(fe, config, approvals)
     )
     notes = [dict((label, value) for label, value, _ in a.fields)["Notes"] for a in approvals.asked]
-    assert notes == [calendar.CREATED_BY, f"Ref FI-77\n\n{calendar.CREATED_BY}"]
-    assert calendar.signed(f"x\n\n{calendar.CREATED_BY}") == f"x\n\n{calendar.CREATED_BY}"  # never twice
+    created = messages.signature("", "event")
+    assert notes == [created, f"Ref FI-77\n\n{created}"]
+    assert messages.signed(f"x\n\n{created}", medium="event") == f"x\n\n{created}"  # never twice

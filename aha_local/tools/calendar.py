@@ -16,7 +16,7 @@ from urllib.parse import quote
 
 import httpx
 
-from .. import dates
+from .. import dates, messages
 from ..approvals import Field
 from . import google, guard
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
@@ -167,18 +167,6 @@ def day_field(start: str) -> Field:
     return Field("Day", dates.in_words(start), "info")
 
 
-CREATED_BY = "Created by Aha! (A Private AI Assistant)"
-
-
-def signed(notes: str) -> str:
-    """An event Aha! creates says so in its notes, as the last line (SPEC §3.4 "Calendar"): on the card, so the
-    person sees it and can edit it, and in the event, so guests and later readers know."""
-    notes = notes.strip()
-    if CREATED_BY.lower() in notes.lower():
-        return notes[:MAX_TEXT]
-    return (notes[: MAX_TEXT - len(CREATED_BY) - 2] + "\n\n" + CREATED_BY).strip()
-
-
 def describe(event: dict, tz) -> str:
     # No weekday: the model never writes one (it guesses them wrong); the app shows each date with its weekday.
     start, end = from_api(event.get("start", {}), tz), from_api(event.get("end", {}), tz)
@@ -285,7 +273,7 @@ async def calendar_add(args: dict, ctx: ToolContext) -> ToolResult:
         dates.editable(start),
         dates.editable(end) if end else "",
         " ".join(str(args.get("location", "") or "").split()),
-        signed(str(args.get("notes", "") or "")),
+        messages.signed(str(args.get("notes", "") or ""), medium="event", limit=MAX_TEXT),
         ", ".join(guests_of(str(args.get("guests", "") or "")) or []),
     )
     fields += [Field("Calendar", cal.name, "info"), day_field(fields[1].value)]

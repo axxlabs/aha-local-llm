@@ -2,6 +2,8 @@
 # Copyright (C) 2026 Axxlabs Limited
 """Every text aha sends on its own (not written by the model). One place, so wording changes are one edit."""
 
+import re
+
 STOPPED = "Stopped."
 NOTHING_TO_STOP = "Nothing is running."
 FORGOT_LAST = "Done: I've dropped our last exchange from what I keep in mind."
@@ -55,21 +57,28 @@ REMINDER_CANCELLED = "Cancelled."
 REMINDER_UNKNOWN = "I couldn't find that one. Say **reminders** to see the list with ids."
 
 
-# Outbound messages are signed, in code (SPEC §3.4): on the card, so the person sees it and can change it.
-def signature(name: str) -> str:
-    return f"Written by Aha!\n- {name}'s Private AI Assistant"
+# What Aha! writes for someone else is signed, in code (SPEC §3.4): on the card, so the person sees it and can
+# change it. One signature per medium, and one way to tell it's already there.
+SIGNATURES = {
+    "email": "Written by Aha!\n- {name}'s Private AI Assistant",
+    "chat": "(_Written by Aha!, {name}'s Private AI Assistant_)",  # WhatsApp's: one line, in its italics
+    "event": "Created by Aha! (A Private AI Assistant)",  # read by guests too: no one's name
+}
+SEPARATORS = {"email": "\n\n", "chat": "\n", "event": "\n\n"}
+ALREADY_SIGNED = re.compile(r"\b(?:written|created) by aha\b", re.I)
 
 
-def chat_signature(name: str) -> str:
-    """WhatsApp's: one line, in its italics."""
-    return f"(_Written by Aha!, {name}'s Private AI Assistant_)"
+def signature(name: str, medium: str = "email") -> str:
+    return SIGNATURES[medium].format(name=name)
 
 
-def signed(text: str, name: str, chat: bool = False) -> str:
-    """A message to someone else, ending with the signature (never twice): an email's on its own lines after a
-    blank line, a chat message's on the next line. On a messaging site a new line is typed as Shift+Enter, so it
-    doesn't send the message early."""
+def signed(text: str, name: str = "", medium: str = "email", limit: int | None = None) -> str:
+    """Text for someone else, ending with the signature (never twice), within `limit` characters with the
+    signature kept whole. On a messaging site a new line is typed as Shift+Enter, so it doesn't send early."""
     text = text.strip()
-    if "written by aha" in text.lower():
-        return text
-    return f"{text}\n{chat_signature(name)}".strip() if chat else f"{text}\n\n{signature(name)}".strip()
+    if ALREADY_SIGNED.search(text):
+        return text[:limit] if limit else text
+    sig, sep = signature(name, medium), SEPARATORS[medium]
+    if limit:
+        text = text[: max(0, limit - len(sig) - len(sep))]
+    return f"{text}{sep}{sig}".strip()
