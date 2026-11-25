@@ -154,6 +154,24 @@ async def test_the_person_does_the_check_by_tapping_the_screenshot(setup, llm, c
     assert chat.texts()[-1] == "Through the check."
 
 
+async def test_no_check_on_the_page_is_refused_once(setup, llm, chat, accounts):
+    """Seen: with no check on WhatsApp, the model called browser_human_check to have the person tap away the
+    signature. Without a check found on the page it's refused once; asked again (the detector can miss one), the
+    card shows."""
+    agent, _, _ = setup
+    fe = person(accounts)
+    llm.call("browser_navigate", url="https://example.com/")
+    llm.call("browser_human_check")
+    llm.call("browser_human_check")
+    llm.answer("Done.")
+    await agent.inbound(fe, "open example.com")
+    card = (await chat.next()).card
+    assert card["kind"] == "check"
+    assert 'No "are you human?" check was found on this page' in tool_results(llm)[1]
+    await agent.approval_reply(fe, card["id"], "decline")
+    await settle(agent)
+
+
 async def test_giving_up_on_a_check_stops_it(setup, llm, chat, accounts):
     agent, _, _ = setup
     fe = person(accounts)
@@ -413,6 +431,13 @@ async def test_on_whatsapp_web_the_message_box_is_always_a_card_and_the_page_is_
     typed = [c for c in fake.contexts[-1].codes if "aria-ref=e2" in c and "keyboard.type" in c][-1]
     assert "press('Shift+Enter')" in typed and "press('Enter')" not in typed  # a new line mustn't send it early
     assert sum(1 for m in chat.sent if m.card) == 1
+    # Seen: the model took the signature for a mistake and tried to have it deleted: it's told it's meant.
+    typed_result = next(r for r in tool_results(llm) if r.startswith("Typed: “On my way"))
+    assert "added by Aha! on purpose and approved by the person" in typed_result
+    assert "on purpose" not in next(r for r in tool_results(llm) if r.startswith("Typed: “Sam"))
+    from aha_local.messages import signed as sign
+
+    assert sign(signed, "Fe", medium="chat") == signed  # never signed twice
 
 
 def test_a_whatsapp_web_page_makes_the_task_private(accounts):

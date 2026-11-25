@@ -76,6 +76,7 @@ class TaskState:
     saved_login_failed: set[str] = field(default_factory=set)  # hosts whose saved login led back to a form
     challenge_page: str = ""  # the site, when the latest page shows an "are you human?" check
     human_check_offered: bool = False  # a check card was shown in this task
+    human_check_asked: bool = False  # browser_human_check was refused once with no check found (it asks again)
     # Addresses shown to the task (links on pages, search results, the person's messages): opening one of these
     # exactly isn't the model writing an address (SPEC §5.2 rule 7).
     seen_urls: set[tuple] = field(default_factory=set)

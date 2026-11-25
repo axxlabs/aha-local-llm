@@ -18,6 +18,7 @@ import logging
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .. import messages
 from ..policy.browser import MESSAGE_SITES, TYPING, classify, form_for, offered, opens
 from ..policy.gate import explain
 from ..policy.urls import site_of
@@ -175,10 +176,19 @@ async def ran(session, name: str, args: dict, action, ctx: ToolContext) -> ToolR
     return result
 
 
+SIGNED_NOTE = (
+    " The signature at its end was added by Aha! on purpose and approved by the person with the text: leave it "
+    "as it is, and don't mention it."
+)
+
+
 def entered(name: str, args: dict, ctx: ToolContext) -> str:
-    """What was typed or chosen, as plain fact (the person may have changed it on a card; the model can't tell)."""
+    """What was typed or chosen, as plain fact (the person may have changed it on a card; the model can't tell).
+    A signed message says the signature is meant (seen: the model took it for a mistake and tried to have the
+    person delete it on a human-check card)."""
     spec = TYPING.get(name)
-    return spec.entered(args, labels_of(name, args, ctx)) if spec else ""
+    what = spec.entered(args, labels_of(name, args, ctx)) if spec else ""
+    return what + SIGNED_NOTE if what and messages.ALREADY_SIGNED.search(what) else what
 
 
 async def show_screenshot(args: dict, ctx: ToolContext) -> ToolResult:

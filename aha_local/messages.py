@@ -65,7 +65,8 @@ SIGNATURES = {
     "event": "Created by Aha! (A Private AI Assistant)",  # read by guests too: no one's name
 }
 SEPARATORS = {"email": "\n\n", "chat": "\n", "event": "\n\n"}
-ALREADY_SIGNED = re.compile(r"\b(?:written|created) by aha\b", re.I)
+# Not \b at the start: the chat signature opens with "(_Written", and "_" is a word character.
+ALREADY_SIGNED = re.compile(r"(?<![a-z])(?:written|created) by aha\b", re.I)
 
 
 def signature(name: str, medium: str = "email") -> str:

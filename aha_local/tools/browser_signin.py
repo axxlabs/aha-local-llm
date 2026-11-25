@@ -204,6 +204,13 @@ async def page_size(session) -> tuple[int, int] | None:
         return None
 
 
+NO_CHECK = (
+    'No "are you human?" check was found on this page. This tool is only for those checks (a picture puzzle, '
+    '"verify you are human"), never to edit text or click something on the page. If a check really is on the '
+    "page, call it again."
+)
+
+
 async def browser_human_check(args: dict, ctx: ToolContext) -> ToolResult:
     """The person does a site's "are you human?" check on a card: they tap the screenshot (SPEC §3.4)."""
     session = ctx.browser
@@ -216,6 +223,11 @@ async def browser_human_check(args: dict, ctx: ToolContext) -> ToolResult:
     if why or not site:
         return guard.blocked(why)
     shown = (urlsplit(url).hostname or site).lower().removeprefix("www.")
+    if not ctx.task.challenge_page and not ctx.task.human_check_asked:
+        # Seen: with no check on WhatsApp, the model called this to have the person tap away a signature. The
+        # detector can miss a check (a puzzle in a frame), so asking again in the task shows the card.
+        ctx.task.human_check_asked = True
+        return ToolResult(NO_CHECK, error=True)
     ctx.task.human_check_offered = True
     taps_done = 0
     for _ in range(CHECK_ROUNDS):
