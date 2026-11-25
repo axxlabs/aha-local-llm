@@ -195,8 +195,12 @@ class Channel:
 
     # ---- output for the agent (agent.AgentOut, approvals.Out)
 
-    async def message(self, account: Account, text: str, image: Image | None = None, open: str = "") -> None:
+    async def message(
+        self, account: Account, text: str, image: Image | None = None, open: str = "", tools: list | None = None
+    ) -> None:
         item: dict = {"t": "msg", "role": "aha", "text": text}
+        if tools:  # what the model used to get there (SPEC §7.4 "Tools used")
+            item["tools"] = tools
         if image is not None:
             item["image"] = image.to_dict()
         if open:  # "asks" or "stopped": the app keeps it unfolded after a break (SPEC §7.4 "Folding")

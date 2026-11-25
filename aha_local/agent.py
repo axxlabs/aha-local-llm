@@ -50,7 +50,9 @@ def model_record(model: str, reply) -> dict:
 class AgentOut(Protocol):
     """Where the agent's output goes: the end-to-end channel to the person's devices (e2e/channel.py)."""
 
-    async def message(self, account: Account, text: str, image: Image | None = None, open: str = "") -> None: ...
+    async def message(
+        self, account: Account, text: str, image: Image | None = None, open: str = "", tools: list | None = None
+    ) -> None: ...
     async def title(self, account: Account, start: int, text: str, new: bool = False) -> None: ...
     async def typing(self, account: Account, on: bool, queued: bool = False) -> None: ...
     async def card(self, account: Account, card: dict) -> None: ...
@@ -70,6 +72,7 @@ class Session:
     photos: list[Image] = field(default_factory=list)  # their photos, for the next model call
     sent: int = 0  # messages sent to them, to know whether they've heard back in a task
     last_prompt: list[dict] | None = None  # the task's latest model request: its title is asked at the end
+    calls: list[str] = field(default_factory=list)  # the task's tool calls, by name (SPEC §7.4 "Tools used")
 
     def reset(self) -> None:
         """Drop what's waiting (Stop, Clear history, the account deleted)."""
@@ -162,11 +165,13 @@ class Agent:
 
     # ---- outbound
 
-    async def send(self, account: Account, text: str, image: Image | None = None, open: str = "") -> None:
+    async def send(
+        self, account: Account, text: str, image: Image | None = None, open: str = "", tools: list | None = None
+    ) -> None:
         self.last_activity = time.monotonic()
         self.session(account).sent += 1
         account.transcript({"kind": "out", "text": text, "image": bool(image)})
-        await self.out.message(account, text[:20_000], image, open)
+        await self.out.message(account, text[:20_000], image, open, tools)
 
     # ---- inbound
 
@@ -386,6 +391,7 @@ class Agent:
 
     async def _task_body(self, account: Account, text: str, scheduled: str | None = None) -> None:
         sent_before = self.session(account).sent
+        self.session(account).calls = []
         began = time.time()
         asked_at = 0 if scheduled else account.seq  # the item of the message that started it (SPEC §7.4)
         typing = asyncio.create_task(self._typing(account))
@@ -427,7 +433,8 @@ class Agent:
                     answer = f"⏰ {answer}"
             if answer:
                 # Unfinished stays unfolded after a break (SPEC §7.4 "Folding"): a task that stopped, or a question.
-                await self.send(account, answer, open="stopped" if stopped else "asks" if folding.asks(answer) else "")
+                opened = "stopped" if stopped else "asks" if folding.asks(answer) else ""
+                await self.send(account, answer, open=opened, tools=messages.tools_used(self.session(account).calls))
             account.transcript({"kind": "answer", "text": answer})
             context.record_turn(account, text, answer, checked)
             # The task's last request, still cached in the person's slot: the topic's title and memory entry are
@@ -577,6 +584,7 @@ class Agent:
                 }
             )
             for call in reply.tool_calls:
+                self.session(account).calls.append(call.name)
                 result = await self.registry.call(call.name, call.arguments, ctx)
                 addresses.remember(ctx.task.seen_urls, result.text)  # links the task was shown (SPEC §5.2)
                 if result.kind == "expired":

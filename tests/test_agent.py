@@ -473,3 +473,18 @@ async def test_the_topic_memory_is_asked_at_the_end_of_the_persons_cached_prompt
     assert asked[len(task_request)] == {"role": "assistant", "content": "Fine."}
     assert "MEMORY:" in asked[-1]["content"]
     assert acct.load_context()["topics"][0]["text"] == "said hello"
+
+
+async def test_the_answer_says_which_tools_were_used(agent, llm, chat):
+    """SPEC §7.4 "Tools used": from the task's own calls, under plain labels, in the order first used."""
+    llm.call("conversation_search", query="parcel")
+    llm.call("current_time")
+    llm.call("conversation_search", query="evri")
+    llm.answer("Your parcel is at the Evri shop.")
+    await say(agent, "where is my parcel?")
+    await settle(agent)
+    assert chat.sent[-1].tools == [{"label": "conversation history", "count": 2}]
+    llm.answer("Hello!")
+    await say(agent, "hi")
+    await settle(agent)
+    assert chat.sent[-1].tools == []  # no tool: no line
