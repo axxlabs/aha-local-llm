@@ -225,8 +225,13 @@ MEMORY_RETRY = retry(
 )
 
 
+# Aha! saying it scheduled something itself, never "scheduled" alone: "your meeting is scheduled for 14:00" is
+# a calendar answer, and sending it back made the model take back a meeting it had found (seen).
 SCHEDULE_CLAIM = re.compile(
-    r"\b(?:scheduled|i'?ll remind you|i will remind you|reminder (?:is )?set|set (?:a|the|your) reminder|"
+    r"(?:^|[.!?]\s+)(?:done[,!. ]+)?scheduled(?:[.!]|\s+(?:it|that|daily|every))|"  # "Scheduled." on its own
+    r"\b(?:i(?:'?ve| have)?(?: now| just| also)? (?:scheduled|set up a (?:reminder|task|daily|weekly))|"
+    r"(?:reminder|task|check) (?:is |has been )?(?:now )?(?:scheduled|set)|i'?ll remind you|i will remind you|"
+    r"set (?:a|the|your) reminder|"
     r"i'?ll (?:check|look|let you know)[^.]{0,60}\b(?:every|each|daily|tomorrow|at \d))",
     re.I,
 )

@@ -203,24 +203,31 @@ async def calendar_list(args: dict, ctx: ToolContext) -> ToolResult:
     query |= {"orderBy": "startTime", "maxResults": MAX_EVENTS}
     if text := " ".join(str(args.get("query", "") or "").split()):
         query["q"] = text
-    if not args.get("calendar") and len(google.connections(ctx.account)) > 1:
-        cals: list[Cal] | ToolResult = [own(ctx, c) for c in google.connections(ctx.account)]  # each account's own
-    else:
+    if args.get("calendar"):
         cal = await which(ctx, args.get("calendar"))
         cals = cal if isinstance(cal, ToolResult) else [cal]
+    else:
+        cals = await calendars(ctx)  # every calendar of every account (SPEC §3.4): "Family" too
     if isinstance(cals, ToolResult):
         return cals
-    out = []
+    out, empty, failed = [], [], []
     for cal in cals:
         found = await call(ctx, "GET", cal.events, cal.conn, params=query)
         if isinstance(found, ToolResult):
-            return found
+            if len(cals) == 1:
+                return found
+            failed.append(cal.label)
+            continue
         events = found.get("items", [])
-        where = f" in {cal.label}"  # always: the answer says which account (SPEC §3.4)
-        if not events:
-            out.append(f"No events{where} from {dates.editable(start)} to {dates.editable(end)}.")
+        if events:  # always under its calendar: the answer says which account (SPEC §3.4)
+            out.append(f"Events in {cal.label}:\n" + "\n".join(describe(e, tz) for e in events))
         else:
-            out.append((f"Events{where}:\n" if where else "") + "\n".join(describe(e, tz) for e in events))
+            empty.append(cal.label)
+    span = f"from {dates.editable(start)} to {dates.editable(end)}"
+    if empty:
+        out.append(f"No events {span} in: " + "; ".join(empty) + ".")
+    if failed:
+        out.append("Couldn't read: " + "; ".join(failed) + ".")
     return ToolResult("\n\n".join(out))
 
 
@@ -391,7 +398,7 @@ def register(reg: Registry) -> None:
     reg.add(
         Tool(
             "calendar_list",
-            "The user's Google Calendar (their own, or another of theirs by name): events from start to end (one "
+            "The user's Google Calendars (all of them, or one of theirs by name): events from start to end (one "
             "day if no end), optionally matching "
             "words. Returns ids, titles, times, places and guests. Use it for 'am I free…?', 'what's on…?', and "
             "before booking anything at a time.",

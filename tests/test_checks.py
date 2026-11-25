@@ -120,3 +120,26 @@ def test_memory_claims_need_a_memory_tool():
     assert not unbacked_memory_claim("forget where I live", "I haven't saved that, so nothing to forget.", set())
     assert unbacked_memory_claim("remember my dentist", "Done, I've saved it.", set())
     assert unbacked_memory_claim("forget that", "I'll no longer remember it.", set())
+
+
+def test_a_meeting_that_is_scheduled_is_not_a_schedule_claim():
+    """Seen: "your meeting is scheduled for 14:00" was sent back as an unbacked schedule claim, and the model took
+    back a meeting it had found. Only Aha! saying it scheduled something itself counts."""
+    from aha_local.checks import unbacked_schedule_claim
+
+    for calendar_answer in (
+        "Your meeting with Roderick is scheduled for 26/11/2026 at 13:00.",
+        "You have a 1:1 scheduled on 25/11/2026.",
+        "The call was rescheduled to 02/12/2026.",
+    ):
+        assert not unbacked_schedule_claim(calendar_answer, {"calendar_list"}), calendar_answer
+    for claim in (
+        "I've scheduled a reminder for 18:00.",
+        "Done, I scheduled it for every weekday at 8.",
+        "Your reminder is set for tomorrow.",
+        "I'll remind you at 6.",
+        "I'll check the price every morning.",
+        "Scheduled. Every weekday at 08:00 I'll check the forecast.",
+        "Done! Scheduled it for 18:00.",
+    ):
+        assert unbacked_schedule_claim(claim, set()), claim

@@ -267,3 +267,11 @@ async def test_every_event_aha_creates_is_signed_in_its_notes(cal, two, config):
     created = messages.signature("", "event")
     assert notes == [created, f"Ref FI-77\n\n{created}"]
     assert messages.signed(f"x\n\n{created}", medium="event") == f"x\n\n{created}"  # never twice
+
+
+async def test_with_no_calendar_named_every_calendar_is_searched(cal, two, config):  # noqa: F811
+    """Seen: "my meeting with Natalia" was on the Family calendar; searching only the own calendar said none."""
+    fe, _ = two
+    found = await call("calendar_list", {"start": "2026-11-27"}, ctx_for(fe, config))
+    assert "School play" in found.text and "“Family” calendar" in found.text
+    assert "Holidays in the UK" in found.text  # one the fake can't read is named, and the others still answer
