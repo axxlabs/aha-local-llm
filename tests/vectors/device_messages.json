@@ -81,8 +81,7 @@
       "text",
       "cid?",
       "image?",
-      "open?",
-      "tools?"
+      "open?"
     ],
     "title": [
       "seq",

@@ -78,8 +78,8 @@ class Chat:
         self.states: list[tuple[str, str]] = []
         self.titles: list[tuple[int, str]] = []
 
-    async def message(self, account, text, image=None, open="", tools=None) -> None:
-        self.sent.append(SimpleNamespace(text=text, buttons=[], image=image, card=None, open=open, tools=tools))
+    async def message(self, account, text, image=None, open="") -> None:
+        self.sent.append(SimpleNamespace(text=text, buttons=[], image=image, card=None, open=open))
 
     async def title(self, account, start, text, new=False) -> None:
         self.titles.append((start, text) if not new else (start, text, "new"))
