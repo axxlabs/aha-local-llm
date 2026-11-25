@@ -1,57 +1,185 @@
 {
-  "about": "The messages between the Aha! app and the computer inside the end-to-end channel (SPEC §6.5), by who sends them. The same file is in aha-local-llm (tests/vectors) and aha-app (test/vectors); each repo's tests check its code against it, and aha-local-llm checks the two copies are the same.",
+  "about": "The messages between the Aha! app and the computer inside the end-to-end channel (SPEC §6.5), by who sends them. The same file is in aha-local-llm (tests/vectors) and aha-app (test/vectors); each repo's tests check its code against it, and aha-local-llm checks the two copies are the same. `rules` holds the few rules both sides apply and must agree on.",
   "device": {
-    "hello": ["name", "push?", "version?"],
-    "say": ["cid", "text", "image?"],
-    "approval_reply": ["id", "decision", "values?", "note?"],
+    "hello": [
+      "name",
+      "push?",
+      "version?"
+    ],
+    "say": [
+      "cid",
+      "text",
+      "image?"
+    ],
+    "approval_reply": [
+      "id",
+      "decision",
+      "values?",
+      "note?"
+    ],
     "stop": [],
     "cut": [],
-    "sync_request": ["after", "days?"],
-    "history_request": ["before", "limit"],
+    "sync_request": [
+      "after",
+      "days?"
+    ],
+    "history_request": [
+      "before",
+      "limit"
+    ],
     "history_settings_request": [],
-    "history_settings_set": ["days"],
+    "history_settings_set": [
+      "days"
+    ],
     "history_clear": [],
     "memories_request": [],
-    "memory_forget": ["id"],
-    "trace_request": ["seq"],
+    "memory_forget": [
+      "id"
+    ],
+    "trace_request": [
+      "seq"
+    ],
     "model_request": [],
-    "model_set": ["model"],
+    "model_set": [
+      "model"
+    ],
     "browser_request": [],
-    "browser_forget": ["site"],
+    "browser_forget": [
+      "site"
+    ],
     "browser_clear": [],
-    "browser_trust": ["site", "trusted"],
-    "login_forget": ["site"],
+    "browser_trust": [
+      "site",
+      "trusted"
+    ],
+    "login_forget": [
+      "site"
+    ],
     "connections_request": [],
-    "email_disconnect": ["email?"],
+    "email_disconnect": [
+      "email?"
+    ],
     "devices_request": [],
-    "revoke_device": ["device"],
-    "report_preview": ["count", "note", "details", "app"],
-    "report_send": ["id"]
+    "revoke_device": [
+      "device"
+    ],
+    "report_preview": [
+      "count",
+      "note",
+      "details",
+      "app"
+    ],
+    "report_send": [
+      "id"
+    ]
   },
   "computer": {
-    "msg": ["seq", "ts", "role", "text", "cid?", "image?", "open?"],
-    "title": ["seq", "ts", "from", "text", "new?"],
-    "approval": ["seq", "ts", "id", "kind", "icon", "title", "fields", "buttons", "image?", "why?"],
-    "approval_state": ["seq", "ts", "id", "state"],
-    "cut": ["seq", "ts"],
-    "typing": ["on", "queued?"],
-    "sync": ["items", "last", "start", "working"],
-    "history_start": ["start"],
-    "history_settings": ["days"],
-    "history": ["items"],
-    "memories": ["items"],
-    "trace": ["seq", "events"],
-    "model": ["current", "choices"],
-    "browser": ["sites"],
-    "connections": ["email", "emails"],
-    "devices": ["items"],
-    "cert": ["cert"],
-    "report_draft": ["id", "text"],
-    "report_sent": ["id", "ok", "code?"],
-    "error": ["code"]
+    "msg": [
+      "seq",
+      "ts",
+      "role",
+      "text",
+      "cid?",
+      "image?",
+      "open?"
+    ],
+    "title": [
+      "seq",
+      "ts",
+      "from",
+      "text",
+      "new?"
+    ],
+    "approval": [
+      "seq",
+      "ts",
+      "id",
+      "kind",
+      "icon",
+      "title",
+      "fields",
+      "buttons",
+      "image?",
+      "why?"
+    ],
+    "approval_state": [
+      "seq",
+      "ts",
+      "id",
+      "state"
+    ],
+    "cut": [
+      "seq",
+      "ts"
+    ],
+    "typing": [
+      "on",
+      "queued?"
+    ],
+    "sync": [
+      "items",
+      "last",
+      "start",
+      "working"
+    ],
+    "history_start": [
+      "start"
+    ],
+    "history_settings": [
+      "days"
+    ],
+    "history": [
+      "items"
+    ],
+    "memories": [
+      "items"
+    ],
+    "trace": [
+      "seq",
+      "events"
+    ],
+    "model": [
+      "current",
+      "choices"
+    ],
+    "browser": [
+      "sites"
+    ],
+    "connections": [
+      "email",
+      "emails"
+    ],
+    "devices": [
+      "items"
+    ],
+    "cert": [
+      "cert"
+    ],
+    "report_draft": [
+      "id",
+      "text"
+    ],
+    "report_sent": [
+      "id",
+      "ok",
+      "code?"
+    ],
+    "error": [
+      "code"
+    ]
   },
   "pairing": {
-    "device": ["hello", "finish"],
-    "computer": ["bundle", "ok", "error"]
+    "device": [
+      "hello",
+      "finish"
+    ],
+    "computer": [
+      "bundle",
+      "ok",
+      "error"
+    ]
+  },
+  "rules": {
+    "fold_break_seconds": 7200
   }
 }

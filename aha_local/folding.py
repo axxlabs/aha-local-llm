@@ -13,7 +13,7 @@ import datetime as dt
 import re
 from zoneinfo import ZoneInfo
 
-BREAK_SECONDS = 2 * 3600  # a break: two hours without a message, or a new day (app: src/fold.ts)
+BREAK_SECONDS = 2 * 3600  # a break: two hours without a message, or a new day (app: src/fold.ts; both checked)
 SHOWN = ("msg", "approval")  # what the chat shows; states and titles don't count for breaks
 MAX_TITLE = 60
 ASK = (

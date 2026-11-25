@@ -29,3 +29,10 @@ def test_the_apps_copy_is_the_same():
     if not app.exists():
         pytest.skip("aha-app not checked out next to aha-local-llm")
     assert json.loads(app.read_text()) == SCHEMA
+
+
+def test_a_break_is_the_same_on_both_sides():
+    """Folding (SPEC §7.4): the app folds after the same break the computer titles."""
+    from aha_local import folding
+
+    assert SCHEMA["rules"]["fold_break_seconds"] == folding.BREAK_SECONDS
