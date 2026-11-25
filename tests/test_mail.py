@@ -18,6 +18,7 @@ from aha_local.approvals import Decision
 from aha_local.config import Config
 from aha_local.policy.browser import MADE_UP
 from aha_local.tools import calendar, mail, web
+from aha_local.tools import google as gapi
 from aha_local.tools.registry import Registry, TaskState, ToolContext
 
 from .conftest import person
@@ -73,13 +74,13 @@ class FakeGoogle:
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         url = request.url
-        if str(url).startswith(mail.TOKEN_URL):
+        if str(url).startswith(gapi.TOKEN_URL):
             form = parse_qs(request.content.decode())
             token = {"rt-fe": "at-fe", "rt-fe2": "at-fe2", "rt-hb": "at-hb"}.get(form["refresh_token"][0])
             if not token:
                 return httpx.Response(400, json={"error": "invalid_grant"})
             return httpx.Response(200, json={"access_token": token, "expires_in": 3600})
-        if str(url).startswith(mail.REVOKE_URL):
+        if str(url).startswith(gapi.REVOKE_URL):
             self.revoked.append(parse_qs(request.content.decode())["token"][0])
             return httpx.Response(200)
         box = MAILBOXES.get(request.headers.get("authorization", "").removeprefix("Bearer "))
@@ -133,8 +134,8 @@ class FakeApprovals:
 @pytest.fixture
 def google(monkeypatch):
     fake = FakeGoogle()
-    monkeypatch.setattr(mail, "TRANSPORT", httpx.MockTransport(fake))
-    mail._tokens.clear()
+    monkeypatch.setattr(gapi, "TRANSPORT", httpx.MockTransport(fake))
+    gapi._tokens.clear()
     return fake
 
 
@@ -142,7 +143,7 @@ def google(monkeypatch):
 def two(accounts):
     fe = person(accounts)
     hb = accounts.create("Hb")
-    accounts.vault.write_json(mail.client_file(accounts.vault), {"client_id": "c", "client_secret": "s"})
+    accounts.vault.write_json(gapi.client_file(accounts.vault), {"client_id": "c", "client_secret": "s"})
     fe.vault.write_json(
         fe.dir / "mail.json", {"provider": "gmail", "email": "fe@example.com", "refresh_token": "rt-fe"}
     )
@@ -293,9 +294,9 @@ async def test_tokens_are_only_in_the_encrypted_mail_file_and_disconnect_revokes
     fe, _ = two
     blob = b"".join(p.read_bytes() for p in fe.vault.root.rglob("*") if p.is_file())
     assert b"rt-fe" not in blob and b"rt-hb" not in blob
-    assert mail.address(fe) == "fe@example.com"
-    assert await mail.disconnect(fe) is True
-    assert google.revoked == ["rt-fe"] and not (fe.dir / "mail.json").exists() and mail.address(fe) == ""
+    assert gapi.address(fe) == "fe@example.com"
+    assert await gapi.disconnect(fe) is True
+    assert google.revoked == ["rt-fe"] and not (fe.dir / "mail.json").exists() and gapi.address(fe) == ""
 
 
 def test_the_documents_feature_is_gone(registry, tmp_path):
@@ -310,8 +311,8 @@ def test_the_documents_feature_is_gone(registry, tmp_path):
 async def test_several_accounts_are_all_searched_and_each_email_answers_from_its_own(google, two, config):
     """SPEC §3.4 "Connections": a second Gmail account for the same person."""
     fe, _ = two
-    mail.add_connection(fe, "gmail", "fe.work@example.com", "rt-fe2")
-    assert mail.addresses(fe) == ["fe@example.com", "fe.work@example.com"]
+    gapi.add_connection(fe, "gmail", "fe.work@example.com", "rt-fe2")
+    assert gapi.addresses(fe) == ["fe@example.com", "fe.work@example.com"]
     ctx = ctx_for(fe, config)
     found = await call("email_search", {"query": ""}, ctx)
     assert "Booking confirmed" in found.text and "Parcel on its way" in found.text  # both mailboxes
@@ -344,10 +345,10 @@ async def test_several_accounts_are_all_searched_and_each_email_answers_from_its
     )
     assert refused.error and len(google.sent) == 2  # never from an address that isn't theirs
 
-    mail.add_connection(fe, "gmail", "fe.work@example.com", "rt-fe2")  # connecting again replaces, never doubles
-    assert mail.addresses(fe) == ["fe@example.com", "fe.work@example.com"]
-    assert await mail.disconnect(fe, "fe.work@example.com")
-    assert google.revoked == ["rt-fe2"] and mail.addresses(fe) == ["fe@example.com"]
+    gapi.add_connection(fe, "gmail", "fe.work@example.com", "rt-fe2")  # connecting again replaces, never doubles
+    assert gapi.addresses(fe) == ["fe@example.com", "fe.work@example.com"]
+    assert await gapi.disconnect(fe, "fe.work@example.com")
+    assert google.revoked == ["rt-fe2"] and gapi.addresses(fe) == ["fe@example.com"]
 
 
 async def test_a_new_email_needs_a_subject(google, two, config):

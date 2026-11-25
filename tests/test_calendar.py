@@ -12,7 +12,8 @@ import pytest
 
 from aha_local.approvals import Decision
 from aha_local.policy.gate import Action, Facts, decide
-from aha_local.tools import calendar, mail
+from aha_local.tools import calendar
+from aha_local.tools import google as gapi
 
 from .test_mail import FakeApprovals, call, ctx_for, two  # noqa: F401  (the fixture)
 
@@ -47,7 +48,7 @@ class FakeCalendar:
         self.writes: list[tuple[str, str, dict, dict]] = []  # method, path, params, body
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
-        if str(request.url).startswith(mail.TOKEN_URL):
+        if str(request.url).startswith(gapi.TOKEN_URL):
             from urllib.parse import parse_qs
 
             token = {"rt-fe": "at-fe", "rt-fe2": "at-fe2", "rt-hb": "at-hb"}[
@@ -89,8 +90,8 @@ class FakeCalendar:
 @pytest.fixture
 def cal(monkeypatch):
     fake = FakeCalendar()
-    monkeypatch.setattr(mail, "TRANSPORT", httpx.MockTransport(fake))
-    mail._tokens.clear()
+    monkeypatch.setattr(gapi, "TRANSPORT", httpx.MockTransport(fake))
+    gapi._tokens.clear()
     return fake
 
 
@@ -170,8 +171,8 @@ async def test_changing_and_deleting_are_cards_on_the_real_event(cal, two, confi
 
 
 async def test_a_connection_from_before_the_calendar_says_to_connect_again(monkeypatch, two, config):  # noqa: F811
-    monkeypatch.setattr(mail, "TRANSPORT", httpx.MockTransport(FakeCalendar(scoped=False)))
-    mail._tokens.clear()
+    monkeypatch.setattr(gapi, "TRANSPORT", httpx.MockTransport(FakeCalendar(scoped=False)))
+    gapi._tokens.clear()
     fe, _ = two
     result = await call("calendar_list", {"start": "2026-11-26"}, ctx_for(fe, config))
     assert result.error and "aha mail connect" in result.text and "again" in result.text
@@ -180,7 +181,7 @@ async def test_a_connection_from_before_the_calendar_says_to_connect_again(monke
 def test_calendar_changes_are_sends():
     """SPEC §5.2 rule 2: always a card, trusted sites or not."""
     assert decide(Action("send"), Facts(trusted={"google.com"})).outcome == "card"
-    assert "https://www.googleapis.com/auth/calendar.events" in mail.SCOPES
+    assert "https://www.googleapis.com/auth/calendar.events" in gapi.SCOPES
 
 
 async def test_the_calendar_is_chosen_by_the_name_the_person_used(cal, two, config):  # noqa: F811
@@ -210,7 +211,7 @@ async def test_the_calendar_is_chosen_by_the_name_the_person_used(cal, two, conf
 
 async def test_with_two_accounts_both_calendars_show_and_each_is_chosen_by_its_address(cal, two, config):  # noqa: F811
     fe, _ = two
-    mail.add_connection(fe, "gmail", "fe.work@example.com", "rt-fe2")
+    gapi.add_connection(fe, "gmail", "fe.work@example.com", "rt-fe2")
     ctx = ctx_for(fe, config)
     both = await call("calendar_list", {"start": "2026-11-26"}, ctx)
     assert "Dentist" in both.text and "Team offsite" in both.text

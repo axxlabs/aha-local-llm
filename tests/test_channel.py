@@ -19,6 +19,7 @@ from aha_local.e2e import crypto as c
 from aha_local.e2e.channel import Channel
 from aha_local.protocol import E2E, CertIssued, CertRequest, DeviceStatus, Pair, Push
 from aha_local.rest import Vault
+from aha_local.tools import google as gapi
 
 
 class FakeAgent:
@@ -470,16 +471,14 @@ def test_a_reply_never_outgrows_a_message():
 
 async def test_settings_show_and_disconnect_the_persons_email(tmp_path, monkeypatch):
     """Settings → Connections (SPEC §7.4): the addresses only, never a token; Disconnect revokes one."""
-    from aha_local.tools import mail
-
     revoked = []
 
     async def revoke(account, email=""):
         revoked.append(email)
-        mail._save(account, [c for c in mail.connections(account) if c["email"] != email])
+        gapi._save(account, [c for c in gapi.connections(account) if c["email"] != email])
         return True
 
-    monkeypatch.setattr(mail, "disconnect", revoke)
+    monkeypatch.setattr(gapi, "disconnect", revoke)
     rig = Rig(tmp_path)
     _, phone = await rig.pair()
     await phone.send({"t": "hello", "name": "P"})
@@ -490,7 +489,7 @@ async def test_settings_show_and_disconnect_the_persons_email(tmp_path, monkeypa
     acct.vault.write_json(  # one connection, as stored before there could be several
         acct.dir / "mail.json", {"provider": "gmail", "email": "ana@example.com", "refresh_token": "rt"}
     )
-    mail.add_connection(acct, "gmail", "ana.work@example.com", "rt2")
+    gapi.add_connection(acct, "gmail", "ana.work@example.com", "rt2")
     await phone.send({"t": "connections_request"})
     both = ["ana@example.com", "ana.work@example.com"]
     assert phone.inbox() == [{"t": "connections", "email": "ana@example.com", "emails": both}]

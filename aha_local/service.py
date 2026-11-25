@@ -21,7 +21,7 @@ from .e2e.channel import Channel
 from .llm import LLM
 from .models import ModelChoice
 from .rest import RestError, Vault, load_or_create_instance_key
-from .tools import browser, calendar, conversation, mail, memory, schedule, web
+from .tools import browser, calendar, conversation, google, mail, memory, schedule, web
 from .tools.registry import Registry
 from .tunnel import Tunnel
 
@@ -180,17 +180,17 @@ class Service:
             client_id, secret = str(req.get("client_id", "")), str(req.get("client_secret", ""))
             if not client_id.endswith(".apps.googleusercontent.com") or not secret:
                 return {"ok": False, "error": "that isn't a Google OAuth client (Desktop app) file"}
-            self.vault.write_json(mail.client_file(self.vault), {"client_id": client_id, "client_secret": secret})
+            self.vault.write_json(google.client_file(self.vault), {"client_id": client_id, "client_secret": secret})
             return {"ok": True}
         if cmd == "mail_client":
-            client = self.vault.read_json(mail.client_file(self.vault))
+            client = self.vault.read_json(google.client_file(self.vault))
             if not client:
                 return {"ok": False, "error": "no Google OAuth client yet: run `aha mail setup --client <file>`"}
-            return {"ok": True, **client, "scopes": list(mail.SCOPES)}
+            return {"ok": True, **client, "scopes": list(google.SCOPES)}
         if cmd == "mail_status":
             out = []
             for a in self.accounts.all():
-                out.append({"name": a.label, "email": mail.address(a), "emails": mail.addresses(a)})
+                out.append({"name": a.label, "email": google.address(a), "emails": google.addresses(a)})
             return {"ok": True, "accounts": out}
         acct = self.accounts.find(str(req.get("account", "")))
         needs_account = ("devices", "revoke", "memory_list", "memory_import", "export", "rename", "delete")
@@ -235,19 +235,19 @@ class Service:
             email, token = str(req.get("email", "")), str(req.get("refresh_token", ""))
             if "@" not in email or not token:
                 return {"ok": False, "error": "missing the address or the token"}
-            mail.add_connection(acct, "gmail", email, token)  # another account, or new permissions for this one
-            return {"ok": True, "emails": mail.addresses(acct)}
+            google.add_connection(acct, "gmail", email, token)  # another account, or new permissions for this one
+            return {"ok": True, "emails": google.addresses(acct)}
         if cmd == "mail_disconnect":
             email = str(req.get("email", "") or "")
-            if email and email.lower() not in (e.lower() for e in mail.addresses(acct)):
+            if email and email.lower() not in (e.lower() for e in google.addresses(acct)):
                 return {"ok": False, "error": f"{email} isn't connected for {acct.label} (see `aha mail status`)"}
-            return {"ok": True, "revoked": await mail.disconnect(acct, email)}
+            return {"ok": True, "revoked": await google.disconnect(acct, email)}
         if cmd == "delete":
             await self.agent.stop(acct, quiet=True)
             self.agent.sessions.pop(acct.address, None)  # nothing of the person stays in memory
             for dev in list(acct.devices):
                 await self.channel.revoke(acct, dev)
-            await mail.disconnect(acct)
+            await google.disconnect(acct)
             await self.browser.forget(acct.id)  # their browser profile goes with them
             return {"ok": self.accounts.delete(acct.id) is not None}
         return {"ok": False, "error": f"unknown command {cmd!r}"}

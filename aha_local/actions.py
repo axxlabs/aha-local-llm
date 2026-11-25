@@ -14,7 +14,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from .accounts import Account
-from .tools import logins, mail, schedule, signins, trusted
+from .tools import google, logins, schedule, signins, trusted
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -53,9 +53,9 @@ def set_trust(account: Account, site: str, on: bool, via: str) -> bool:
 
 async def disconnect_email(account: Account, email: str, via: str) -> bool:
     """One connected address; every one when none is given (older apps). False if there was nothing to do."""
-    if not mail.address(account):
+    if not google.address(account):
         return False
-    await mail.disconnect(account, email)
+    await google.disconnect(account, email)
     account.audit({"email_disconnected": email or "all", "via": via})
     return True
 

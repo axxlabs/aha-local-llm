@@ -33,7 +33,7 @@ from ..accounts import Account, Accounts, Device
 from ..certs import needs_renewal
 from ..items import Image
 from ..protocol import E2E, Cert, CertIssued, CertRequest, DeviceStatus, Pair, Push, Report, ReportResult, Revoke, b64
-from ..tools import mail
+from ..tools import google
 from . import crypto, webpush
 
 log = logging.getLogger("aha.channel")
@@ -455,7 +455,7 @@ class Channel:
         """Settings → Connections (SPEC §7.4): what this person connected Aha! to. Addresses only, never a token."""
         if r.msg.get("t") == "email_disconnect":
             await actions.disconnect_email(r.account, clean_text(r.msg.get("email"), 320) or "", via="settings")
-        await r.reply({"t": "connections", "email": mail.address(r.account), "emails": mail.addresses(r.account)})
+        await r.reply({"t": "connections", "email": google.address(r.account), "emails": google.addresses(r.account)})
 
     async def _devices(self, r: Request) -> None:
         await r.reply({"t": "devices", "items": self._device_list(r.account, r.device)})

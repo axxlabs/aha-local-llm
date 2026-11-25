@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Axxlabs Limited
 """Google Calendar through its REST API (SPEC §3.4 "Calendar").
 
-The same Google connection as email (tools/mail.py): one OAuth client per computer, one token per person, looked
+The same Google connection as email (tools/google.py): one OAuth client per computer, one token per person, looked
 up from the account running the task. Reading marks the task as holding private data (SPEC §5.2); adding,
 changing and deleting events are `send` actions, always shown to the person with the exact event.
 """
@@ -17,7 +17,7 @@ from urllib.parse import quote
 import httpx
 
 from ..approvals import Field
-from . import guard, mail
+from . import google, guard
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 from .schedule import parse_local, tz_of
 
@@ -25,7 +25,6 @@ API = "https://www.googleapis.com/calendar/v3"
 OWN = {"", "primary", "main", "my calendar", "my own", "mine", "default", "your calendar", "personal"}
 MAX_EVENTS = 25
 MAX_TEXT = 4_000
-EMAIL = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")
 NO_CALENDAR = (
     "The calendar isn't connected for this person yet: their Google connection was made before Aha! could use "
     "calendars. Tell them to run `aha mail connect <their name>` again on the computer and allow the calendar on "
@@ -38,14 +37,7 @@ class NoCalendar(Exception):
 
 
 async def api(ctx: ToolContext, method: str, path: str, conn: dict | None = None, **kw) -> dict:
-    conn = conn or mail.pick(ctx.account)
-    if conn is None:
-        raise mail.NotConnected
-    token = await mail.access_token(ctx, conn)
-    async with mail._http() as http:
-        r = await http.request(method, API + path, headers={"Authorization": f"Bearer {token}"}, **kw)
-    if r.status_code == 401:
-        mail.forget_token(ctx.account.id, conn["email"])
+    r = await google.request(ctx, method, API + path, conn, **kw)
     if r.status_code == 403 and "insufficient" in r.text.lower():
         raise NoCalendar
     r.raise_for_status()
@@ -56,8 +48,8 @@ async def call(ctx: ToolContext, method: str, path: str, conn: dict | None = Non
     """The API call, or the result that explains why it couldn't be made."""
     try:
         return await api(ctx, method, path, conn, **kw)
-    except mail.NotConnected:
-        return ToolResult(mail.NOT_CONNECTED, error=True)
+    except google.NotConnected:
+        return ToolResult(google.NOT_CONNECTED, error=True)
     except NoCalendar:
         return ToolResult(NO_CALENDAR, error=True)
     except httpx.HTTPStatusError as e:
@@ -88,16 +80,16 @@ class Cal:
 
 def own(ctx: ToolContext, conn: dict | None = None) -> Cal:
     """The primary calendar of a connected account (the first one by default)."""
-    conn = conn or mail.pick(ctx.account)
-    several = len(mail.connections(ctx.account)) > 1
+    conn = conn or google.pick(ctx.account)
+    several = len(google.connections(ctx.account)) > 1
     return Cal("primary", conn["email"] if conn else "your calendar", True, conn, several)
 
 
 async def calendars(ctx: ToolContext) -> list[Cal] | ToolResult:
     """Every calendar of every connected account (SPEC §3.4 "Connections"); the own ones named by their address."""
-    conns = mail.connections(ctx.account)
+    conns = google.connections(ctx.account)
     if not conns:
-        return ToolResult(mail.NOT_CONNECTED, error=True)
+        return ToolResult(google.NOT_CONNECTED, error=True)
     several = len(conns) > 1
     cals: list[Cal] = []
     for conn in conns:
@@ -219,7 +211,7 @@ def describe(event: dict, tz) -> str:
 
 def guests_of(text: str) -> list[str] | None:
     found = [g.strip() for g in re.split(r"[,;\s]+", text or "") if g.strip()]
-    return found if all(EMAIL.match(g) for g in found) else None
+    return found if all(google.EMAIL.fullmatch(g) for g in found) else None
 
 
 # ---- reading
@@ -241,8 +233,8 @@ async def calendar_list(args: dict, ctx: ToolContext) -> ToolResult:
     query |= {"orderBy": "startTime", "maxResults": MAX_EVENTS}
     if text := " ".join(str(args.get("query", "") or "").split()):
         query["q"] = text
-    if not args.get("calendar") and len(mail.connections(ctx.account)) > 1:
-        cals: list[Cal] | ToolResult = [own(ctx, c) for c in mail.connections(ctx.account)]  # each account's own
+    if not args.get("calendar") and len(google.connections(ctx.account)) > 1:
+        cals: list[Cal] | ToolResult = [own(ctx, c) for c in google.connections(ctx.account)]  # each account's own
     else:
         cal = await which(ctx, args.get("calendar"))
         cals = cal if isinstance(cal, ToolResult) else [cal]
