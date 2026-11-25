@@ -12,7 +12,7 @@ audited and declined the same way (tests check no tool calls `approvals.ask` its
 
 from __future__ import annotations
 
-from ..approvals import Decision, Field
+from ..approvals import KINDS, Decision, Field
 from ..items import Image
 from ..policy import addresses
 from ..policy.browser import open_action, open_form
@@ -31,14 +31,17 @@ def facts(ctx: ToolContext) -> Facts:
         shown=ctx.task.seen_urls,
         opened=ctx.task.opened_sites,
         allow_all_sites=ctx.config.allow_all_sites,
+        granted=ctx.task.grant,
     )
 
 
 def check(ctx: ToolContext, action: Action, tool: str) -> Verdict:
-    """The gate's verdict; a run because of trust is audited (the tool and the site, never the values)."""
+    """The gate's verdict; a run because of trust, or allowed up front, is audited (the tool and the site, never
+    the values)."""
     verdict = decide(action, facts(ctx))
-    if verdict.why == "trusted" and ctx.account is not None:
-        ctx.account.audit({"trusted": action.site, "tool": tool, **({"private": True} if ctx.task.private else {})})
+    if verdict.why in ("trusted", "granted") and ctx.account is not None:
+        private = {"private": True} if ctx.task.private else {}
+        ctx.account.audit({verdict.why: action.site or action.what or action.kind, "tool": tool, **private})
     return verdict
 
 
@@ -80,14 +83,26 @@ async def ask(
 
 
 async def send(
-    ctx: ToolContext, kind: str, title: str, fields: list[Field], then: str = ""
+    ctx: ToolContext, kind: str, title: str, fields: list[Field], then: str = "", to: list[str] | None = None
 ) -> tuple[Decision, ToolResult | None]:
     """Something that goes out in the person's name or changes what they keep (an email, an event, a memory, a
-    background task): a `send` for the gate (SPEC §5.2 rule 1), which shows it on a card, trusted or not."""
-    verdict = check(ctx, Action("send"), kind)
+    background task): a `send` for the gate (SPEC §5.2 rule 2), which shows it on a card, trusted or not, unless
+    the person allowed it up front for who receives it (`to`: the addresses; None when nothing can allow it).
+    Then it runs as it is, and the chat says what went (the person still sees every send)."""
+    verdict = check(ctx, Action("send", what=kind, to=None if to is None else tuple(to)), kind)
     if verdict.outcome == "block":
         return Decision(False, reason="blocked"), blocked(verdict.why)
+    if verdict.outcome == "run":
+        if ctx.send is not None:
+            await ctx.send(allowed_note(kind, title, fields))
+        return Decision(True, [f.value for f in fields]), None
     return await ask(ctx, kind, title, fields, then=then)
+
+
+def allowed_note(kind: str, title: str, fields: list[Field]) -> str:
+    """The chat's line for a send that ran without its card, allowed up front: what it was, and to whom."""
+    shown = "; ".join(f"{f.label}: {f.value}" for f in fields if f.kind in ("text", "info") and f.value)
+    return f"{KINDS.get(kind, KINDS['action']).icon} {title.rstrip('?')}, as you allowed up front. {shown}".strip()
 
 
 async def open_address(ctx: ToolContext, url: str, tool: str) -> tuple[str, Action, ToolResult | None]:

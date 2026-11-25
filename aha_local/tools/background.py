@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 from .. import dates
 from ..accounts import Account
 from ..approvals import Field
+from ..policy.grants import Grant
 from . import guard
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
@@ -123,6 +124,12 @@ def run_now(account: Account, task_id: str) -> bool:
     """The person's Run now (SPEC §3.4): an extra check, as soon as the model is free, without waiting for the
     idle time. The planned next check keeps its time. False if there's no such task."""
     return update(account, task_id, lambda e: {**e, "now": True}) is not None
+
+
+def grant_of(account: Account, task_id: str) -> Grant:
+    """What the person allowed up front when the task was started (SPEC §3.4): its checks run with it."""
+    entry = next((e for e in load(account) if e.get("id") == task_id), None)
+    return Grant.from_dict(entry.get("grant") if entry else None)
 
 
 def update(account: Account, task_id: str, fn) -> dict | None:
@@ -254,6 +261,11 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
         Field("Check every (minutes)", str(minutes)),
         Field("Until", _until_text(end, tz)),
     ]
+    # What the person allowed up front for this request goes on with the task's checks (SPEC §3.4): shown, so
+    # starting it is agreeing to that too.
+    allowed = ctx.task.grant.labels()
+    if allowed:
+        fields.append(Field("Allowed up front", "; ".join(allowed), "info"))
     d, refused = await guard.send(ctx, "task", "Start this background task?", fields)
     if refused:
         return refused
@@ -277,6 +289,7 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
         "next": first,
         "created": int(now),
         "checks": 0,
+        **({"grant": ctx.task.grant.to_dict()} if ctx.task.grant else {}),
     }
     save(ctx.account, [*entries, entry])
     return ToolResult(
@@ -490,6 +503,7 @@ def listing(account: Account) -> list[dict]:
             "updates": e.get("updates", 0),
             "now": bool(e.get("now")),
             "last_how": e.get("last_how", "waiting" if e.get("last") else ""),
+            "allowed": Grant.from_dict(e.get("grant")).labels(),
         }
         for e in rows
     ]

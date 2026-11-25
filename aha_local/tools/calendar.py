@@ -18,6 +18,7 @@ import httpx
 
 from .. import dates, messages
 from ..approvals import Field
+from ..policy import grants
 from . import google, guard
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
@@ -285,7 +286,8 @@ async def calendar_add(args: dict, ctx: ToolContext) -> ToolResult:
     )
     fields += [Field("Calendar", cal.name, "info"), day_field(fields[1].value)]
     invite = " and invite the guests" if fields[5].value else ""
-    decision, refused = await guard.send(ctx, "calendar", f"Add this to {cal.label}{invite}?", fields)
+    guests = grants.emails_in(fields[5].value)
+    decision, refused = await guard.send(ctx, "calendar", f"Add this to {cal.label}{invite}?", fields, to=guests)
     if refused:
         return refused
     body = event_body(decision.values, tz)
@@ -357,7 +359,8 @@ async def calendar_update(args: dict, ctx: ToolContext) -> ToolResult:
         new("guests", current_guests),
     )
     fields += [Field("Calendar", cal.name, "info"), day_field(fields[1].value)]
-    decision, refused = await guard.send(ctx, "calendar", f"Change “{event.get('summary', 'this event')}”?", fields)
+    title = f"Change “{event.get('summary', 'this event')}”?"
+    decision, refused = await guard.send(ctx, "calendar", title, fields, to=grants.emails_in(fields[5].value))
     if refused:
         return refused
     body = event_body(decision.values, tz)

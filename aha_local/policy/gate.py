@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from . import addresses
+from .grants import Grant
 
 Kind = Literal["read", "type", "open", "search", "send", "block", "other"]
 Outcome = Literal["run", "card", "block"]
@@ -24,6 +25,10 @@ class Action:
     site: str = ""  # the destination's registrable domain, from the browser's address or the URL
     url: str = ""  # for open (and a search engine's results page opened in the browser)
     reason: str = ""  # why it's blocked
+    # A send's kind (email, draft, calendar…) and who receives it, when that can be allowed up front (grants);
+    # None: nothing a grant covers (a memory, a background task, a deletion, a message typed on a site)
+    what: str = ""
+    to: tuple[str, ...] | None = None
 
 
 @dataclass
@@ -35,12 +40,13 @@ class Facts:
     shown: set[tuple] = field(default_factory=set)  # addresses shown to the task (addresses.key)
     opened: set[str] = field(default_factory=set)  # sites opened in the task
     allow_all_sites: bool = True
+    granted: Grant = field(default_factory=Grant)  # allowed up front by the person, for this topic (grants)
 
 
 @dataclass(frozen=True)
 class Verdict:
     outcome: Outcome
-    # run: "trusted" (audited); card: which rule asked (WHY, shown on the card's (i)); block: the reason
+    # run: "trusted" or "granted" (audited); card: which rule asked (WHY, shown on the card's (i)); block: the reason
     why: str = ""
 
 
@@ -49,14 +55,18 @@ def decide(a: Action, f: Facts) -> Verdict:
     if a.kind == "block":
         return Verdict("block", a.reason or "this action is disabled")
     if a.kind == "send":
-        return Verdict("card", "send")
+        return Verdict("run", "granted") if f.granted.covers(a.what, a.to) else Verdict("card", "send")
     if a.kind in ("type", "open", "search") and a.site and a.site in f.trusted:
         return Verdict("run", "trusted")
+    if a.kind in ("type", "open") and a.site and a.site in f.granted.sites:
+        return Verdict("run", "granted")
     if a.kind == "read":
         return Verdict("run")
     if a.kind == "type":
         return Verdict("card", "type_private" if f.private else "type")
     if a.kind == "search":
+        if f.private and f.granted.search:
+            return Verdict("run", "granted")
         return Verdict("card", "search_private") if f.private else Verdict("run")
     if a.kind == "open":
         if not f.allow_all_sites and a.site not in f.opened:

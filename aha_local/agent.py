@@ -22,8 +22,9 @@ from .config import Config
 from .items import Image
 from .llm import Model, ModelUnavailable
 from .policy import addresses
-from .tools import background, memory, signins
-from .tools.registry import Registry, TaskState, ToolContext, redacted
+from .policy.grants import Grant
+from .tools import background, memory, permissions, signins
+from .tools.registry import Registry, TaskState, ToolContext, ToolResult, redacted
 
 log = logging.getLogger("aha.agent")
 
@@ -75,12 +76,22 @@ class Session:
     sent: int = 0  # messages sent to them, to know whether they've heard back in a task
     last_prompt: list[dict] | None = None  # the task's latest model request: its title is asked at the end
     background: str = ""  # the background task whose check is running, if that's what runs (SPEC §3.4)
+    # What the person allowed up front (SPEC §5.2 "Allowed up front"), for the topic it was allowed in: a new topic
+    # starts with nothing allowed. Kept here, not on disk: after a restart it's asked again.
+    grant: Grant = field(default_factory=Grant)
+    grant_topic: tuple | None = None
+
+    def grant_for(self, topic: tuple | None) -> Grant:
+        if topic != self.grant_topic:
+            self.grant, self.grant_topic = Grant(), topic
+        return self.grant
 
     def reset(self) -> None:
         """Drop what's waiting (Stop, Clear history, the account deleted)."""
         self.inbox.clear()
         self.photos.clear()
         self.last_prompt = None
+        self.grant, self.grant_topic = Grant(), None
 
 
 LIMIT_TICK = 0.5  # seconds between looks at the task's time limit
@@ -102,6 +113,10 @@ class Job:
     def finish(self, account: Account, answer: str, stopped: bool) -> background.Note | None:
         """The task's note for the chat, or None: nothing is sent and the turn isn't kept."""
         return background.finish(account, self.id, answer, stopped)
+
+    def grant(self, account: Account) -> Grant:
+        """What the person allowed up front when the task was started: its checks keep it (SPEC §3.4)."""
+        return background.grant_of(account, self.id)
 
     def interrupted(self, account: Account) -> None:
         """Stopped before it finished (someone's input, Stop): the next check is told."""
@@ -461,7 +476,9 @@ class Agent:
         await turn.__aenter__()
         try:
             try:
-                answer, checked, text = await self._within_limit(account, self.solve(account, text, quiet))
+                answer, checked, text = await self._within_limit(
+                    account, self.solve(account, text, quiet, job.grant(account) if job else None)
+                )
             except asyncio.CancelledError:
                 account.transcript({"kind": "stopped"})
                 if job:
@@ -547,9 +564,12 @@ class Agent:
         if found and (new or (titled and title)):  # where a new topic starts is said even for a task that stopped
             await self.out.title(account, first[0], title or "", new=new)
 
-    async def solve(self, account: Account, text: str, quiet: bool = False) -> tuple[str, bool, str]:
+    async def solve(
+        self, account: Account, text: str, quiet: bool = False, grant: Grant | None = None
+    ) -> tuple[str, bool, str]:
         """Returns the answer, whether it passed the checks, and everything the person said during the task.
-        `quiet` (a background check): no tool lines, and the person's messages wait for a task of their own."""
+        `quiet` (a background check): no tool lines, and the person's messages wait for a task of their own.
+        `grant`: a background task's own permissions; otherwise the topic's (SPEC §5.2 "Allowed up front")."""
         today = dates.now(self.config).date()
 
         def with_dates(message: str) -> str:
@@ -578,7 +598,12 @@ class Agent:
         # The browser is reached only through this account's own context (SPEC §3.4).
         browser = self.browser.for_account(account.id) if self.browser else None
         approvals = _Pausing(self.approvals, self.llm, account.address)  # a card frees the model meanwhile
-        ctx = ToolContext(account, approvals, self.config, TaskState(), browser, send)
+        topic = folding.segment_start(account.recent_items(), dates.tz(self.config))  # the topic going on (§4)
+        # Permissions up front are the first step of a task the person started (SPEC §3.4); a check runs with its
+        # task's own, already allowed.
+        state = TaskState(grant=grant if grant is not None else self.session(account).grant_for(topic))
+        state.estimated = quiet
+        ctx = ToolContext(account, approvals, self.config, state, browser, send)
 
         def record(entry: dict) -> None:
             """The task's transcript: what the person typed on a sign-in card never shows (SPEC §5.8)."""
@@ -593,7 +618,6 @@ class Agent:
         # Where numbers in the answer may come from: what the person said or saved, earlier answers, and pages
         # opened in this task. Search snippets don't count (SPEC §3.5).
         conv = account.load_context()
-        topic = folding.segment_start(account.recent_items(), dates.tz(self.config))  # the topic going on (§4)
         sources = [
             text,
             *(m["text"] for m in account.load_memory()),
@@ -663,12 +687,22 @@ class Agent:
                     ],
                 }
             )
-            for call in reply.tool_calls:
+            # The permissions come first (SPEC §3.4): asked in the same reply as other calls, they run before
+            # them; without them, the others don't run. The results go back in the order the calls were made.
+            calls = list(reply.tool_calls)
+            order = sorted(range(len(calls)), key=lambda i: calls[i].name != permissions.NAME)
+            answered: dict[int, list[dict]] = {}
+            for i in order:
+                call = calls[i]
+                answered[i] = added = []
                 label = messages.tool_label(call.name)
                 if label and label != shown_tool and not quiet:  # said as it happens (SPEC §7.4 "Tools used")
                     shown_tool = label
                     await self.out.tool(account, label)
-                result = await self.registry.call(call.name, call.arguments, ctx)
+                if ctx.task.estimated or call.name == permissions.NAME:
+                    result = await self.registry.call(call.name, call.arguments, ctx)
+                else:
+                    result = ToolResult(permissions.FIRST, error=True)
                 addresses.remember(ctx.task.seen_urls, result.text)  # links the task was shown (SPEC §5.2)
                 if result.kind == "expired":
                     raise ApprovalExpired
@@ -683,7 +717,7 @@ class Agent:
                 )
                 if call.name not in UNSOURCED_TOOLS and not result.error:
                     sources.append(result.text)
-                task.append(
+                added.append(
                     {
                         "role": "tool",
                         "tool_call_id": call.id,
@@ -693,7 +727,9 @@ class Agent:
                 )
                 for image in result.images:
                     shot = with_images(f"[Screenshot returned by {call.name}]", [image])
-                    task.append({"role": "user", "_kind": "image", "content": shot})
+                    added.append({"role": "user", "_kind": "image", "content": shot})
+            for i in range(len(calls)):
+                task.extend(answered[i])
         return (*finish(f"{messages.TOO_MANY_STEPS}\n{last}".strip(), sources, bool(retried), today), text)
 
 

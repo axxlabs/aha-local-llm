@@ -110,6 +110,15 @@ KINDS = {
         "A background task checks on its own later, while you're not using Aha!, without you there, so it always "
         "asks first. You can change what it checks, how often and until when.",
     ),
+    "permissions": Kind(
+        "🔓",
+        ("Allow", "Edit", "Ask each time"),
+        "Before it starts, Aha! asks for what this request will need, all at once, instead of a card for each "
+        "step. Untick what it shouldn't do without asking: that is asked when it happens. What you allow holds "
+        "until the topic changes, and for a background task started from it. Every email or event it sends "
+        "this way still shows in the chat.",
+        open_inputs=True,
+    ),
     "memory": Kind(
         "🧠",
         ("Save", "Edit", "Don't"),

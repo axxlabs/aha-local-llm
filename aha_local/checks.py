@@ -188,12 +188,24 @@ SITE_ASK = re.compile(
 )
 
 
+# A plan for the person's OK (SPEC §3.5 "Plan first"): numbered steps, ending with a question. Its steps say what
+# will be done ("2. Set up a daily check", "3. Once booked, add it to your calendar"), so the claim checks for
+# work already done or set up don't apply to it.
+PLAN_STEP = re.compile(r"^\s*\d{1,2}[.)]\s+\S", re.M)
+
+
+def is_plan(answer: str) -> bool:
+    lines = [line for line in answer.strip().splitlines() if line.strip()]
+    return len(PLAN_STEP.findall(answer)) >= 2 and bool(lines) and lines[-1].rstrip().endswith("?")
+
+
 def unbacked_site_claim(asked: str, answer: str, tools_called: set[str]) -> bool:
     """The person asked for a change on a site, the answer says it's done, and no browser action ran in this task.
 
     Only for a request: reading the trolley back ("your slot is booked for Tuesday") isn't a claim of an action."""
     return (
-        bool(SITE_ASK.search(asked) and SITE_DONE.search(answer) and SITE_THING.search(answer))
+        not is_plan(answer)
+        and bool(SITE_ASK.search(asked) and SITE_DONE.search(answer) and SITE_THING.search(answer))
         and not tools_called & BROWSER_ACTION_TOOLS
         and not tools_called & MEMORY_WRITE_TOOLS
     )
@@ -239,7 +251,7 @@ SCHEDULE_CLAIM = re.compile(
 
 def unbacked_schedule_claim(answer: str, tools_called: set[str]) -> bool:
     """The answer says something is scheduled or will be done later, but task_create didn't run."""
-    return bool(SCHEDULE_CLAIM.search(answer)) and "task_create" not in tools_called
+    return bool(SCHEDULE_CLAIM.search(answer)) and "task_create" not in tools_called and not is_plan(answer)
 
 
 SCHEDULE_RETRY = retry(

@@ -304,17 +304,17 @@ async def test_a_messages_details_are_its_tasks_model_calls_and_tools(agent, llm
     await settle(agent)
     records = person(accounts).read_transcript()
     model = [r for r in records if r["kind"] == "model"]
-    assert [r["calls"][0]["name"] if r["calls"] else r["text"] for r in model] == ["current_time", "It's noon."]
+    assert [r["calls"][-1]["name"] if r["calls"] else r["text"] for r in model] == ["current_time", "It's noon."]
     assert model[1]["reasoning"] == "The tool said 12:00." and model[1]["ms"] == 850
     task = model[0]["task"]
     assert all(r.get("task") == task for r in records if r["kind"] in ("model", "tool", "out", "answer"))
     assert person(accounts).task is None  # cleared when the task ends
     sent = {"kind": "item", "item": {"t": "msg", "role": "aha", "seq": 7, "text": "It's noon."}, "task": task}
     events = trace([*records, sent], 7)
-    assert [e["kind"] for e in events] == ["model", "tool", "model", "answer", "item"]
+    assert [e["kind"] for e in events] == ["model", "tool", "tool", "model", "answer", "item"]  # permissions first
     assert "task" not in events[0] and events[-1]["text"] == "It's noon."
     assert trace(records, 8) == []  # not a task's message
-    assert len(trace([*records, sent], 7, budget=600)) == 5  # shortened to fit, never dropped
+    assert len(trace([*records, sent], 7, budget=600)) == 6  # shortened to fit, never dropped
 
 
 async def test_whoever_has_a_task_running_hears_when_aha_restarts(accounts):

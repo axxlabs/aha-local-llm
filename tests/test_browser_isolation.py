@@ -93,7 +93,11 @@ async def browsing_agent(config, accounts, llm, registry, chat, pool, tmp_path: 
 
 
 def tool_results(llm) -> list[str]:
-    return [m["content"] for m in llm.requests[-1]["messages"] if m.get("role") == "tool"]
+    return [
+        m["content"]
+        for m in llm.requests[-1]["messages"]
+        if m.get("role") == "tool" and not m["tool_call_id"].startswith("perm-")
+    ]
 
 
 async def test_two_people_never_see_each_others_tabs_or_cookies(

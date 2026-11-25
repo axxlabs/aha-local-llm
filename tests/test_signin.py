@@ -360,7 +360,11 @@ async def test_only_secure_pages_and_fields_on_the_page(setup, llm, chat, accoun
     llm.answer("Couldn't.")
     await agent.inbound(fe, "sign in")
     await settle(agent)
-    results = [m["content"] for m in llm.requests[-1]["messages"] if m.get("role") == "tool"]
+    results = [
+        m["content"]
+        for m in llm.requests[-1]["messages"]
+        if m.get("role") == "tool" and not m["tool_call_id"].startswith("perm-")
+    ]
     assert "only works on secure (https) pages" in results[1]
     assert "no sign-in form on this page" in results[3]
     assert not any(m.card for m in chat.sent)
@@ -398,7 +402,11 @@ async def test_show_screenshot_sends_the_page_to_the_persons_chat(setup, llm, ch
     llm.answer("There you go.")
     await agent.inbound(fe, "show me a screenshot of the search")
     await settle(agent)
-    results = [m["content"] for m in llm.requests[-1]["messages"] if m.get("role") == "tool"]
+    results = [
+        m["content"]
+        for m in llm.requests[-1]["messages"]
+        if m.get("role") == "tool" and not m["tool_call_id"].startswith("perm-")
+    ]
     assert "No page is open" in results[0] and "Sent the screenshot" in results[2]
     shots = [m for m in chat.sent if m.image is not None and m.card is None]
     assert len(shots) == 1 and shots[0].text == "Search results" and shots[0].image.b64 == PNG
@@ -574,7 +582,11 @@ async def test_a_saved_login_signs_in_without_a_card_and_reads_the_same(setup, l
     card = await chat.next()
     await agent.approval_reply(fe, card.card["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD, "true"])
     await settle(agent)
-    with_card = [m["content"] for m in llm.requests[-1]["messages"] if m.get("role") == "tool"][-1]
+    with_card = [
+        m["content"]
+        for m in llm.requests[-1]["messages"]
+        if m.get("role") == "tool" and not m["tool_call_id"].startswith("perm-")
+    ][-1]
     assert logins.get(fe, "www.waitrose.com") == {
         "username": "fe@example.com",
         "password": PASSWORD,
@@ -589,7 +601,11 @@ async def test_a_saved_login_signs_in_without_a_card_and_reads_the_same(setup, l
     await login(agent, llm, chat, fe)
     await settle(agent)
     assert len([m for m in chat.sent if m.card]) == cards  # no card this time
-    without = [m["content"] for m in llm.requests[-1]["messages"] if m.get("role") == "tool"][-1]
+    without = [
+        m["content"]
+        for m in llm.requests[-1]["messages"]
+        if m.get("role") == "tool" and not m["tool_call_id"].startswith("perm-")
+    ][-1]
     assert fake.contexts[-1].url.endswith("/home")
     assert without.split(" The page now")[0] == with_card.split(" The page now")[0] == "Signed in on waitrose.com."
     assert PASSWORD not in everything_recorded(agent, llm, chat, fe)

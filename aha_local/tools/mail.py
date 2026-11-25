@@ -20,6 +20,7 @@ import httpx
 
 from .. import messages
 from ..approvals import Field
+from ..policy import grants
 from . import google, guard
 from .google import NOT_CONNECTED, NotConnected, addresses, connections, pick
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
@@ -243,7 +244,8 @@ def _compose(kind: str):
         if reply:
             fields.append(Field("In reply to", f"{reply.get('from', '')}: {reply.get('subject', '')}", "info"))
         title = "Send this email?" if kind == "email" else "Save this draft in your mailbox?"
-        decision, refused = await guard.send(ctx, kind, title, fields)
+        to = grants.emails_in(" ".join(f.value for f in fields if f.label in ("To", "Cc")))
+        decision, refused = await guard.send(ctx, kind, title, fields, to=to)
         if refused:
             return refused
         values = dict(zip((f.label for f in fields), decision.values, strict=False))
