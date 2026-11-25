@@ -155,7 +155,7 @@ def test_forms_carry_the_real_values_and_edits_land_in_the_arguments():
 
 
 def test_targets_are_normalised_and_labels_come_from_the_page():
-    from aha_local.tools.browser import element_label, normalise_targets
+    from aha_local.tools.browser_page import element_label, normalise_targets
 
     assert normalise_targets({"target": "[ref=e23]", "text": "x"}) == {"target": "e23", "text": "x"}
     assert normalise_targets({"fields": [{"target": "ref=e5", "value": "a"}]})["fields"][0]["target"] == "e5"
@@ -169,7 +169,7 @@ def test_targets_are_normalised_and_labels_come_from_the_page():
 
 
 def test_label_found_in_a_snapshot_cut_to_fit():
-    from aha_local.tools.browser import YAML_BLOCK, element_label
+    from aha_local.tools.browser_page import YAML_BLOCK, element_label
 
     text = '### Snapshot\n```yaml\n- searchbox "Search Wikipedia" [ref=e23]\n- link "x" [ref=e24]\n[… snapshot cut'
     assert element_label(YAML_BLOCK.search(text).group(1), "e23") == "Search Wikipedia"

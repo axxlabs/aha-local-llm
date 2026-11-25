@@ -17,8 +17,8 @@ import pytest
 
 from aha_local import checks
 from aha_local.agent import Agent
-from aha_local.tools import browser, logins, signins
-from aha_local.tools.browser import BrowserPool, BrowserSession
+from aha_local.tools import browser, browser_page, logins, signins
+from aha_local.tools.browser_pool import BrowserPool, BrowserSession
 
 from .conftest import person, settle
 
@@ -517,10 +517,10 @@ async def test_a_cookie_banner_is_closed_with_reject_before_the_sign_in_card(set
 def test_what_counts_as_a_cookie_banner():
     banner = '- dialog "Cookies":\n  - text: We use cookies.\n  - button "Accept all" [ref=e1]\n'
     for name in ("Reject all", "Decline", "Necessary only", "Use necessary cookies only", "Only allow essential"):
-        assert browser.cookie_banner(banner + f'  - button "{name}" [ref=e2] [cursor=pointer]') == ("e2", name)
+        assert browser_page.cookie_banner(banner + f'  - button "{name}" [ref=e2] [cursor=pointer]') == ("e2", name)
     for name in ("Accept all", "Manage cookies"):
-        assert browser.cookie_banner(banner + f'  - button "{name}" [ref=e2]') is None
-    assert browser.cookie_banner('- button "Decline" [ref=e2]') is None  # no cookies around: not a banner
+        assert browser_page.cookie_banner(banner + f'  - button "{name}" [ref=e2]') is None
+    assert browser_page.cookie_banner('- button "Decline" [ref=e2]') is None  # no cookies around: not a banner
 
 
 async def test_a_cookie_banner_past_where_a_long_page_is_cut_is_still_closed(setup, llm, chat, accounts):

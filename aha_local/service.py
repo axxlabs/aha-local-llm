@@ -20,7 +20,7 @@ from .e2e import crypto
 from .e2e.channel import Channel
 from .llm import LLM
 from .models import ModelChoice
-from .tools import browser, calendar, conversation, google, mail, memory, schedule, web
+from .tools import browser, browser_pool, calendar, conversation, google, mail, memory, schedule, web
 from .tools.registry import Registry
 from .tunnel import Tunnel
 from .vault import RestError, Vault, load_or_create_instance_key
@@ -40,7 +40,7 @@ class Service:
         self.registry = Registry()
         for module in (web, memory, mail, calendar, schedule, conversation):
             module.register(self.registry)
-        self.browser = browser.BrowserPool(config.browser_url, config.browser_idle_seconds)
+        self.browser = browser_pool.BrowserPool(config.browser_url, config.browser_idle_seconds)
         self.llm = LLM(config.llm_url, config.llm_model)
         self.models = ModelChoice(self.vault, data, self.llm, config.llm_model)
         self.channel = Channel(

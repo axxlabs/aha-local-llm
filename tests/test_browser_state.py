@@ -200,7 +200,7 @@ async def test_an_approved_form_is_typed_in_its_own_order(setup, llm, chat, acco
 
 
 def test_sign_in_forms_are_spotted_from_the_page():
-    from aha_local.tools.browser import is_sign_in_form
+    from aha_local.tools.browser_page import is_sign_in_form
 
     password = '- textbox "Password" [ref=e2]'
     email_step = (
@@ -251,7 +251,7 @@ async def test_a_human_check_on_the_page_is_said_and_a_card_follows(setup, llm, 
 
 
 def test_human_checks_are_spotted_from_the_page():
-    from aha_local.tools.browser import CHALLENGE
+    from aha_local.tools.browser_page import CHALLENGE
 
     for page in (
         '- checkbox "I\'m not a robot" [ref=f1e2]',
@@ -300,7 +300,7 @@ async def test_on_a_trusted_site_typing_runs_without_a_card(setup, llm, chat, ac
 async def test_a_card_is_never_shown_for_a_call_that_would_fail(setup, llm, chat, accounts):
     """Seen with the real model (2026-11-22): it wrote "ref=f8e31"; the person approved, the browser refused the
     selector, the model retried, and the person was asked the same thing twice."""
-    from aha_local.tools.browser import normalise_targets
+    from aha_local.tools.browser_page import normalise_targets
 
     assert normalise_targets({"target": "ref=f8e31"})["target"] == "f8e31"
     assert normalise_targets({"target": "[ref=e12]"})["target"] == "e12"
@@ -416,7 +416,7 @@ async def test_on_whatsapp_web_the_message_box_is_always_a_card_and_the_page_is_
 
 
 def test_a_whatsapp_web_page_makes_the_task_private(accounts):
-    from aha_local.tools.browser import note_page
+    from aha_local.tools.browser_page import note_page
     from aha_local.tools.registry import ToolContext
 
     ctx = ToolContext(person(accounts), None, None, TaskState())

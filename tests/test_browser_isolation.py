@@ -13,7 +13,7 @@ import pytest
 
 from aha_local.agent import Agent
 from aha_local.tools import browser
-from aha_local.tools.browser import BrowserPool, BrowserSession
+from aha_local.tools.browser_pool import BrowserPool, BrowserSession
 
 from .conftest import person, settle
 

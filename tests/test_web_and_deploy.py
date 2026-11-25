@@ -121,7 +121,7 @@ async def test_a_browser_http_error_is_reported_plainly(ctx, monkeypatch):
 def test_browser_results_flag_http_errors():
     import mcp.types as mt
 
-    from aha_local.tools.browser import to_result
+    from aha_local.tools.browser_page import to_result
 
     page = "### Page\n- Page URL: https://x.example\n- HTTP status: 503\n### Snapshot\n…"
     r = to_result(mt.CallToolResult(content=[mt.TextContent(type="text", text=page)], isError=False))

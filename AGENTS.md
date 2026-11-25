@@ -23,7 +23,7 @@ Rules:
   model's own unchecked text as sources.
 - `aha_local/protocol.py` and `aha_local/certs.py` are identical copies of the files in aha-gateway; change
   both repos together (a test compares them).
-- Sign-in secrets (`aha_local/tools/browser.py` `browser_login`, `signins.py`): what the person types on a
+- Sign-in secrets (`aha_local/tools/browser_signin.py` `browser_login`, `signins.py`): what the person types on a
   sign-in card goes to the page and nowhere else. Never log, return, store or audit it. It's masked in one place
   each: every tool result in `Registry.call`, every transcript record of the task in the agent's `record`
   (`registry.redact`); don't mask it anywhere else, and don't write the transcript around `record`. Each account's browser state (`signins.py`: cookies, site data, signed-in

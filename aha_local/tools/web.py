@@ -94,7 +94,7 @@ async def read_with_browser(url: str, ctx: ToolContext, why: str) -> ToolResult:
     """Many sites block plain HTTP clients but not a real browser. The URL was already checked."""
     if ctx.browser is None:
         return ToolResult(f"Couldn't read {url}: {why}. Try the browser tools.", error=True)
-    from .browser import CANT_TELL, annotate, http_status, to_result
+    from .browser_page import CANT_TELL, annotate, http_status, to_result
 
     result = to_result(await ctx.browser.call("browser_navigate", {"url": url}))
     annotate(ctx, result)  # a sign-in form or a human check on it is said here too (SPEC §3.4)
