@@ -3,8 +3,8 @@
 """Reminders and scheduled tasks, per account (SPEC §3.4 "Reminders and scheduled tasks").
 
 A reminder is a message at a time. A scheduled task is an instruction the agent carries out at a time, as that
-account, once or repeating; one that is told to report only when something happens answers NOTHING_TO_REPORT
-until it does, and that answer isn't sent ("watch for changes"). Times are local to the household's timezone.
+account, once or repeating, and its answer is always sent. Watching for something to happen is a background task
+(background.py), not this. Times are local to the household's timezone.
 """
 
 from __future__ import annotations
@@ -35,14 +35,9 @@ MAX_AHEAD = 366 * 86400
 MAX_LATE = 12 * 3600  # a one-off missed by more than this (computer off) is dropped, with a message
 LATE_NOTE = 5 * 60
 CHECK_EVERY = 30.0
-NOTHING = "NOTHING_TO_REPORT"
 TASK = (
-    "[Scheduled task the user set up earlier{late}; they aren't necessarily looking at the chat]\n{text}\n\n"
-    "{last}Do it now. If it says to tell them only when something happens and it hasn't, answer "
-    "NOTHING_TO_REPORT: followed by one line on what you found. That line is kept for the next run "
-    "automatically (and not sent), so don't save it as a memory."
+    "[Scheduled task the user set up earlier{late}; they aren't necessarily looking at the chat]\n{text}\n\nDo it now."
 )
-LAST_TIME = "Last time you found: {note}\n\n"
 
 
 # ---- time
@@ -219,11 +214,10 @@ def register(reg: Registry) -> None:
         Tool(
             "schedule_add",
             "Set a reminder (a message to the user at a time) or a scheduled task (something you'll do for them "
-            "at a time, once or repeating: a daily email summary, checking a page). `at` is the first time it "
+            "at a time, once or repeating: a daily email summary, a weekly report). `at` is the first time it "
             "happens: for 'every weekday at 8am' asked on a Saturday evening, that's Monday 08:00, not now. "
-            "To watch for a change (rain, a price drop, tickets on sale), write the text as the user asked, "
-            "e.g. 'Check X; tell me only if Y' with no 'otherwise' part: on runs with nothing to tell, nothing is "
-            "sent. Work out times from the time in the <context> block.",
+            "Each run's answer is sent. To watch for something to happen (rain, a price drop, tickets on sale, a "
+            "reply), use task_create instead. Work out times from the time in the <context> block.",
             params(
                 ["kind", "text"],
                 kind={"type": "string", "enum": list(KINDS)},
@@ -253,18 +247,11 @@ def task_prompt(entry: dict, late: bool) -> str:
     return TASK.format(
         text=entry["text"],
         late=", running late: the computer was off" if late else "",
-        last=LAST_TIME.format(note=entry["last"]) if entry.get("last") else "",
     )
 
 
 def finish(account: Account, entry_id: str, answer: str, stopped: bool) -> str | None:
-    """After a run: the message for the chat, or None when it watches for a change and there's none. The run's
-    note (or its news) is kept on the entry for the next run."""
-    quiet = answer.strip().lstrip("*_` ").startswith(NOTHING)
-    note = answer.split(NOTHING, 1)[1].lstrip(" :*_`-") if quiet else answer
-    update(account, entry_id, lambda e: {**e, "last": " ".join(note.split())[:MAX_TEXT]})
-    if quiet:
-        return None
+    """After a run: the message for the chat, always sent ("" when the person already heard from it)."""
     return f"⏰ {answer}" if answer.strip() else ""
 
 

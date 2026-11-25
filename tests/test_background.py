@@ -133,6 +133,22 @@ async def test_a_closure_goes_to_the_chat_and_ends_the_task(runner, agent, llm, 
     assert background.load(fe) == []
 
 
+async def test_notify_tells_the_person_and_the_task_goes_on(runner, agent, llm, chat, accounts):
+    fe = person(accounts)
+    background.save(fe, [task(title="Emails from Sam", last="last email: 'Lunch?'")])
+    idle(agent)
+    llm.answer("NOTIFY: Sam wrote again: 'Running late, start without me.'")
+    await runner.tick()
+    await settle(agent)
+    assert "NOTIFY:" in llm.requests[-1]["messages"][-1]["content"]
+    assert chat.texts() == ["_Task update: Emails from Sam_\n\nSam wrote again: 'Running late, start without me.'"]
+    (left,) = background.load(fe)
+    assert left["updates"] == 1 and left["checks"] == 1
+    assert left["last"] == "Sam wrote again: 'Running late, start without me.'"  # so it isn't reported twice
+    assert left["next"] == pytest.approx(time.time() + 15 * 60, abs=5)
+    assert background.listing(fe)[0]["updates"] == 1
+
+
 async def test_a_check_that_doesnt_finish_keeps_waiting(runner, agent, llm, chat, accounts):
     fe = person(accounts)
     background.save(fe, [task()])
@@ -216,7 +232,7 @@ async def test_the_panel_lists_tasks_and_cancel_is_the_persons(runner, agent, ac
     background.save(fe, [task(), task(id="def456", title="Parcel", created=1)])
     rows = background.listing(fe)
     assert [r["id"] for r in rows] == ["abc123", "def456"] and rows[0]["every"] == 15 * 60
-    assert set(rows[0]) == {"id", "title", "prompt", "every", "until", "next", "last", "checks", "created"}
+    assert set(rows[0]) == {"id", "title", "prompt", "every", "until", "next", "last", "checks", "updates", "created"}
     assert actions.cancel_background(fe, "def456", via="settings")
     assert not actions.cancel_background(fe, "def456", via="settings")
     assert [e["id"] for e in background.load(fe)] == ["abc123"]
@@ -227,3 +243,4 @@ def test_outcomes():
     assert background.outcome("*Done* — here it is") == ("done", "here it is")
     assert background.outcome("failed:\ngone") == ("failed", "gone")
     assert background.outcome("Sam replied.") == ("done", "Sam replied.")
+    assert background.outcome("NOTIFY: again") == ("notify", "again")

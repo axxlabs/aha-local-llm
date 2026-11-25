@@ -5,7 +5,8 @@
 What the model waits for and checks on its own: a reply, a delivery, a page changing. Each task has the prompt a
 check runs, how often to check (at least every 5 minutes) and until when (or never). Checks run only when the
 household is idle (nobody typed or answered a card for 5 minutes, no request running), one at a time, and say
-nothing until one closes the task: DONE or FAILED sends its message and ends it; WAITING keeps a note for next time.
+nothing until there's news: DONE or FAILED sends its message and ends the task; NOTIFY sends it and the task goes
+on; WAITING keeps a note for next time.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ MAX_NOTE = 500
 IDLE_AFTER = 5 * 60  # seconds without input from anyone before a check runs
 CHECK_EVERY = 30.0
 NEVER = "never"
-OUTCOME = re.compile(r"^[\W_]*(WAITING|DONE|FAILED)\b[ \t*_`]*[:\-–—]?[ \t*_`]*", re.I)
+OUTCOME = re.compile(r"^[\W_]*(WAITING|NOTIFY|DONE|FAILED)\b[ \t*_`]*[:\-–—]?[ \t*_`]*", re.I)
 
 CHECK = (
     "[Background task you set up earlier, check {n}{late}; the user isn't looking at the chat]\n"
@@ -45,12 +46,14 @@ CHECK = (
     "Check now. Don't message the user while you check. Start your answer with one of:\n"
     "WAITING: one line on what you found, when it hasn't happened yet. Nothing is sent; you'll check again in "
     "{every}.\n"
+    "NOTIFY: the message for the user, when there's news and the task goes on (it reports each time "
+    "something happens). Only what's new since last time: the message is kept for the next check.\n"
     "DONE: the message for the user, when it has happened (and what was to be done then is done).\n"
     "FAILED: the message for the user, when it can't happen any more or can't be checked.\n"
-    "DONE and FAILED end the task, and the message goes to the chat."
+    "NOTIFY, DONE and FAILED send the message to the chat; DONE and FAILED end the task."
 )
 LAST_TIME = "Last time you found: {note}\n\n"
-CLOSED = {"done": "Task done: {title}", "failed": "Task failed: {title}"}
+HEADS = {"notify": "Task update: {title}", "done": "Task done: {title}", "failed": "Task failed: {title}"}
 EXPIRED = "_Task expired: {title}_\n\nI stopped waiting on {when}.{last}"
 
 
@@ -227,7 +230,9 @@ def register(reg: Registry) -> None:
             "task_create",
             "Start a background task: when something can't be done yet because it waits on something else (a "
             "reply to an email, a parcel's tracking, a page changing, tickets going on sale), check it on your "
-            "own until it happens, then tell the user or do what they asked. Each check runs `prompt` as a new "
+            "own until it happens, then tell the user or do what they asked. Also for watching that goes on "
+            "('tell me whenever Sam emails', with until 'never'): each check reports only what's new. "
+            "Each check runs `prompt` as a new "
             "request, with only your memory: write it so it makes sense on its own later, with what to look at "
             "(addresses, names, tracking codes), how, and what counts as done. Checks run only while nobody is "
             "using Aha!, so timing isn't exact. Not for something at a set time: use schedule_add for that.",
@@ -264,7 +269,7 @@ def register(reg: Registry) -> None:
 
 
 def outcome(answer: str) -> tuple[str, str]:
-    """("waiting" | "done" | "failed", the rest). An answer with no marker closes the task as done."""
+    """("waiting" | "notify" | "done" | "failed", the rest). An answer with no marker closes the task as done."""
     found = OUTCOME.match(answer.strip())
     if found is None:
         return "done", answer.strip()
@@ -272,21 +277,31 @@ def outcome(answer: str) -> tuple[str, str]:
 
 
 def finish(account: Account, task_id: str, answer: str, stopped: bool) -> str | None:
-    """After a check: the message for the chat when it closed the task, else None (it waits, quietly)."""
+    """After a check: the message for the chat when there's news, else None (it waits, quietly). WAITING and
+    NOTIFY keep the task, with what was found (or said) as the note for the next check; DONE and FAILED end it."""
     kind, text = ("waiting", answer) if stopped else outcome(answer)
-    if kind == "waiting":
-        note = _clean(text, MAX_NOTE)
-        update(
-            account,
-            task_id,
-            lambda e: {**e, "last": note, "next": time.time() + e["every"] * 60, "checks": e.get("checks", 0) + 1},
-        )
-        return None
-    entry = update(account, task_id, lambda e: None)
-    if entry is None:
-        return None  # cancelled while it ran
-    account.audit({"background_task_closed": task_id, "outcome": kind})
-    head = CLOSED[kind].format(title=entry["title"])
+    if kind in ("waiting", "notify"):
+        note, told = _clean(text, MAX_NOTE), int(kind == "notify")
+
+        def checked(e: dict) -> dict:
+            later = time.time() + e["every"] * 60
+            return {
+                **e,
+                "last": note,
+                "next": later,
+                "checks": e.get("checks", 0) + 1,
+                "updates": e.get("updates", 0) + told,
+            }
+
+        entry = update(account, task_id, checked)
+        if kind == "waiting" or entry is None:
+            return None  # nothing to tell, or cancelled while it ran
+    else:
+        entry = update(account, task_id, lambda e: None)
+        if entry is None:
+            return None  # cancelled while it ran
+        account.audit({"background_task_closed": task_id, "outcome": kind})
+    head = HEADS[kind].format(title=entry["title"])
     return f"_{head}_\n\n{text}" if text else f"_{head}_"
 
 
@@ -304,9 +319,18 @@ def check_prompt(entry: dict, now: float) -> str:
 
 def listing(account: Account) -> list[dict]:
     """For the app's Tasks panel, newest first (SPEC §6.5)."""
-    keys = ("id", "title", "prompt", "until", "next", "last", "checks", "created")
+    keys = ("id", "title", "prompt", "until", "next", "created")
     rows = sorted(load(account), key=lambda e: e.get("created", 0), reverse=True)
-    return [{**{k: e.get(k) for k in keys}, "every": e["every"] * 60, "last": e.get("last", "")} for e in rows]
+    return [
+        {
+            **{k: e.get(k) for k in keys},
+            "every": e["every"] * 60,
+            "last": e.get("last", ""),
+            "checks": e.get("checks", 0),
+            "updates": e.get("updates", 0),
+        }
+        for e in rows
+    ]
 
 
 # ---- the runner
