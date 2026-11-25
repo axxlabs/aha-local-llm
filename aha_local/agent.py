@@ -372,7 +372,10 @@ class Agent:
                 await self._run(account, text, job)
         finally:
             live = self.session(account)
+            checking = live.background
             live.task, live.background = None, ""
+            if checking:
+                background.changed(account)  # the open Tasks panels: no longer checking
             await self.note_page(account)
 
     # ---- the person's browser (SPEC §3.4 "Browser profiles": it keeps everything in its own profile)

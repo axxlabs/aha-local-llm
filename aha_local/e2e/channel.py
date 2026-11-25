@@ -183,6 +183,7 @@ class Channel:
         self.history_days = history_days
         self.push_preview = push_preview
         self.agent = None  # set by the service once the agent exists (it needs this channel as its output)
+        self.background = None  # the background tasks' runner (tools.background.Runner), set by the service
         self.online: set[str] = set()
         self.pairings: dict[str, PairingState] = {}
         self._cert_waiters: dict[str, asyncio.Future] = {}
@@ -455,9 +456,10 @@ class Channel:
 
     def _tasks_message(self, account: Account) -> dict:
         agent = self.agent
+        checking = {s.background for s in agent.sessions.values()} if agent is not None else set()
         return {
             "t": "tasks",
-            "items": background.listing(account),
+            "items": [{**t, "running": t["id"] in checking} for t in background.listing(account)],
             "idle_since": int(agent.last_input) if agent is not None else 0,
             "idle_after": background.IDLE_AFTER,
             "busy": agent.working() if agent is not None else False,
@@ -467,8 +469,12 @@ class Channel:
         """The Tasks panel (SPEC §3.4 "Background tasks", §7.4): the person's background tasks and the idle time
         the checks wait for. Cancel is the person's own action, so no card; the list then goes to every device
         (tasks_changed)."""
-        task_id = clean_text(r.msg.get("id"), 64) or ""
-        if r.msg.get("t") == "task_cancel" and actions.cancel_background(r.account, task_id, via="settings"):
+        task_id, t = clean_text(r.msg.get("id"), 64) or "", r.msg.get("t")
+        if t == "task_cancel" and actions.cancel_background(r.account, task_id, via="settings"):
+            return
+        if t == "task_run" and actions.run_background_now(r.account, task_id, via="settings"):
+            if self.background is not None:
+                self._spawn(self.background.tick())  # now, not at the next 30-second look
             return
         await r.reply(self._tasks_message(r.account))
 
@@ -674,6 +680,7 @@ HANDLERS: dict[str, Callable[[Channel, Request], Awaitable[None]]] = {
     "memory_forget": Channel._memories,
     "tasks_request": Channel._background,
     "task_cancel": Channel._background,
+    "task_run": Channel._background,
     "browser_request": Channel._browser,
     "browser_forget": Channel._browser,
     "browser_clear": Channel._browser,

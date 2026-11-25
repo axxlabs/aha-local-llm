@@ -104,8 +104,19 @@ def save(account: Account, entries: list[dict]) -> None:
         account.vault.write_json(path, entries)
     else:
         path.unlink(missing_ok=True)
+    changed(account)
+
+
+def changed(account: Account) -> None:
+    """Tell the watchers (the open Tasks panels) the account's tasks changed, or a check started or ended."""
     for watcher in WATCHERS:
         watcher(account)
+
+
+def run_now(account: Account, task_id: str) -> bool:
+    """The person's Run now (SPEC §3.4): the task's next check runs as soon as the model is free, without waiting
+    for the idle time. False if there's no such task."""
+    return update(account, task_id, lambda e: {**e, "now": True, "next": min(e["next"], time.time())}) is not None
 
 
 def update(account: Account, task_id: str, fn) -> dict | None:
@@ -329,7 +340,7 @@ def finish(account: Account, task_id: str, answer: str, stopped: bool) -> Note |
         def checked(e: dict) -> dict:
             later = time.time() + e["every"] * 60
             return {
-                **e,
+                **{k: v for k, v in e.items() if k != "now"},
                 "last": note,
                 "next": later,
                 "checks": e.get("checks", 0) + 1,
@@ -370,6 +381,7 @@ def listing(account: Account) -> list[dict]:
             "last": e.get("last", ""),
             "checks": e.get("checks", 0),
             "updates": e.get("updates", 0),
+            "now": bool(e.get("now")),
         }
         for e in rows
     ]
@@ -411,10 +423,12 @@ class Runner:
                     await self._expire(account, entry)
                 elif entry["next"] <= now and not self.agent.is_running(account):
                     due.append((entry["next"], account, entry))
-        if not due or not self.agent.idle(now) or self.agent.busy():
+        asked = [d for d in due if d[2].get("now")]  # Run now: no idle wait, only a free model
+        if self.agent.busy() or not (asked or (due and self.agent.idle(now))):
             return
-        _, account, entry = min(due, key=lambda d: d[0])
+        _, account, entry = min(asked or due, key=lambda d: d[0])
         self.agent.start_background(account, entry["id"], check_prompt(entry, now))
+        update(account, entry["id"], lambda e: {k: v for k, v in e.items() if k != "now"})  # the panel: checking
 
     async def _expire(self, account: Account, entry: dict) -> None:
         if update(account, entry["id"], lambda e: None) is None:

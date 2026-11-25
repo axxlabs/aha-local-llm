@@ -40,6 +40,9 @@
     "task_cancel": [
       "id"
     ],
+    "task_run": [
+      "id"
+    ],
     "trace_request": [
       "seq"
     ],

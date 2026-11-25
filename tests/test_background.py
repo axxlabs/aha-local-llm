@@ -242,7 +242,7 @@ async def test_the_panel_lists_tasks_and_cancel_is_the_persons(runner, agent, ac
     background.save(fe, [task(), task(id="def456", title="Parcel", created=1)])
     rows = background.listing(fe)
     assert [r["id"] for r in rows] == ["abc123", "def456"] and rows[0]["every"] == 15 * 60
-    assert set(rows[0]) == {"id", "title", "prompt", "every", "until", "next", "last", "checks", "updates", "created"}
+    assert set(rows[0]) == {"id", "title", "prompt", "every", "until", "next", "last", "checks", "updates", "created", "now"}
     assert actions.cancel_background(fe, "def456", via="settings")
     assert not actions.cancel_background(fe, "def456", via="settings")
     assert [e["id"] for e in background.load(fe)] == ["abc123"]
@@ -296,3 +296,24 @@ async def test_an_answer_without_its_word_is_asked_again_and_never_closes_the_ta
     await settle(agent)
     assert chat.texts() == ["Still nothing from Leonard."] and chat.sent[0].task["kind"] == "update"
     assert len(background.load(fe)) == 1
+
+
+async def test_run_now_skips_the_idle_wait_but_not_a_busy_model(runner, agent, llm, chat, accounts):
+    fe = person(accounts)
+    background.save(fe, [task(next=time.time() + 600)])  # not due for 10 minutes
+    agent.last_input = time.time()  # someone just used Aha!: not idle
+    assert actions.run_background_now(fe, "abc123", via="settings")
+    assert background.listing(fe)[0]["now"] is True
+
+    agent.session(fe).task = asyncio.get_running_loop().create_future()  # a request is being worked on
+    await runner.tick()
+    assert not llm.requests  # waits for the model to be free
+    agent.session(fe).task = None
+
+    llm.answer("WAITING: no reply yet")
+    await runner.tick()
+    await settle(agent)
+    assert "check 1" in llm.requests[0]["messages"][-1]["content"]
+    (left,) = background.load(fe)
+    assert "now" not in left and left["checks"] == 1
+    assert not actions.run_background_now(fe, "nope", via="settings")

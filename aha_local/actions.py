@@ -86,6 +86,13 @@ def cancel_background(account: Account, task_id: str, via: str) -> bool:
     return True
 
 
+def run_background_now(account: Account, task_id: str, via: str) -> bool:
+    if not background.run_now(account, task_id):
+        return False
+    account.audit({"background_task_run_now": task_id, "via": via})
+    return True
+
+
 class Browser:
     """The person's own browser (SPEC §3.4 "Browser profiles"): it keeps everything in its own profile."""
 
