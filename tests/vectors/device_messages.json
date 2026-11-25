@@ -45,7 +45,11 @@
     ],
     "task_edit": [
       "id",
-      "prompt"
+      "title?",
+      "prompt?",
+      "every?",
+      "until?",
+      "next?"
     ],
     "trace_request": [
       "seq"

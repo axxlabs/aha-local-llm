@@ -416,10 +416,44 @@ def interrupted(account: Account, task_id: str) -> None:
     )
 
 
-def edit_prompt(account: Account, task_id: str, prompt: str) -> bool:
-    """The person's own edit of what a task checks (the Tasks panel): the next check runs the new text."""
-    text = _prompt(prompt)
-    return bool(text) and update(account, task_id, lambda e: {**e, "prompt": text}) is not None
+EDITABLE = ("title", "prompt", "every", "until", "next")
+
+
+def edit(account: Account, task_id: str, changes: dict) -> str:
+    """The person's own edit of a task, any of its fields (the Tasks panel): "" when done, else why not.
+    `every` in seconds; `until` and `next` epoch seconds (`until` None: no end); a `next` in the past is due now."""
+    entry = next((e for e in load(account) if e["id"] == task_id), None)
+    if entry is None:
+        return "no such task"
+    new, now = dict(entry), time.time()
+    if "title" in changes:
+        new["title"] = _clean(changes["title"], MAX_TITLE)
+        if not new["title"]:
+            return "the title can't be empty"
+    if "prompt" in changes:
+        new["prompt"] = _prompt(changes["prompt"])
+        if not new["prompt"]:
+            return "what it checks can't be empty"
+    if "every" in changes:
+        if not isinstance(changes["every"], int | float):
+            return "how often must be a number"
+        minutes, why = _every(changes["every"] / 60)
+        if minutes is None:
+            return why
+        new["every"] = minutes
+    if "until" in changes:
+        until = changes["until"]
+        if until is not None and (not isinstance(until, int | float) or until <= now + 60 or until > now + MAX_AHEAD):
+            return "until must be in the future, within a year, or no end"
+        new["until"] = until
+    if "next" in changes:
+        if not isinstance(changes["next"], int | float) or changes["next"] > now + MAX_AHEAD:
+            return "the next check must be a time within a year"
+        new["next"] = max(float(changes["next"]), now)
+    if new["until"] is not None and new["next"] >= new["until"]:
+        return "the next check is after until"
+    update(account, task_id, lambda e: {**e, **{k: new[k] for k in EDITABLE}})
+    return ""
 
 
 def _last_line(entry: dict, tz: ZoneInfo) -> str:

@@ -398,12 +398,24 @@ async def test_the_next_check_gets_the_last_result_whatever_it_was(runner, agent
 
 
 async def test_the_person_edits_what_a_task_checks(runner, agent, llm, accounts):
+    """Every field: what it waits for, what it checks, how often, the next check and until when (SPEC §3.4)."""
     fe = person(accounts)
     background.save(fe, [task()])
-    assert actions.edit_background(fe, "abc123", "Check the WhatsApp chat with Sam\nfor a reply.", via="settings")
+    edit = lambda **c: actions.edit_background(fe, "abc123", c, via="settings")  # noqa: E731
+    assert edit(prompt="Check the WhatsApp chat with Sam\nfor a reply.") == ""
     assert background.load(fe)[0]["prompt"] == "Check the WhatsApp chat with Sam\nfor a reply."
-    assert not actions.edit_background(fe, "abc123", "   ", via="settings")  # never empty
-    assert not actions.edit_background(fe, "nope", "x", via="settings")
+    later, end = time.time() + 3600, time.time() + 86400
+    assert edit(title="Sam's reply", every=30 * 60, next=later, until=end) == ""
+    saved = background.load(fe)[0]
+    assert (saved["title"], saved["every"], saved["next"], saved["until"]) == ("Sam's reply", 30, later, end)
+    assert edit(until=None) == "" and background.load(fe)[0]["until"] is None  # no end
+    assert edit(prompt="   ") != ""  # never empty
+    assert "at most every 5 minutes" in edit(every=60)
+    assert edit(until=time.time() - 10) != ""
+    assert edit(next=end + 10, until=end) == "the next check is after until"
+    assert edit(next=time.time() - 3600) == "" and background.load(fe)[0]["next"] <= time.time()  # due now
+    assert actions.edit_background(fe, "nope", {"title": "x"}, via="settings") == "no such task"
+    edit(next=time.time() - 1)
     idle(agent)
     llm.answer("WAITING: nothing yet")
     await runner.tick()

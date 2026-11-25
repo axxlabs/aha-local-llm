@@ -478,9 +478,12 @@ class Channel:
         if t == "task_cancel" and actions.cancel_background(r.account, task_id, via="settings"):
             return
         if t == "task_edit":
-            prompt = clean_text(r.msg.get("prompt"), background.MAX_PROMPT) or ""
-            if actions.edit_background(r.account, task_id, prompt, via="settings"):
-                return
+            changes = {k: r.msg[k] for k in background.EDITABLE if k in r.msg}
+            for k in ("title", "prompt"):
+                if k in changes:
+                    changes[k] = clean_text(changes[k], background.MAX_PROMPT) or ""
+            if not actions.edit_background(r.account, task_id, changes, via="settings"):
+                return  # the computer sends the new list to every device
             await r.reply({"t": "error", "code": "bad_value"})
             return
         if t == "task_run" and actions.run_background_now(r.account, task_id, via="settings"):
