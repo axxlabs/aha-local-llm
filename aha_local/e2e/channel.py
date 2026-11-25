@@ -377,7 +377,7 @@ class Channel:
     async def _approval_reply(self, r: Request) -> None:
         decision = r.msg.get("decision")
         approval_id = clean_text(r.msg.get("id"), 32)
-        if decision not in ("approve", "decline", "edit") or not approval_id or self.agent is None:
+        if decision not in ("approve", "decline", "edit", "replan") or not approval_id or self.agent is None:
             return
         note = clean_text(r.msg.get("note"), 2000) or ""
         await self.agent.approval_reply(r.account, approval_id, decision, r.msg.get("values"), note)

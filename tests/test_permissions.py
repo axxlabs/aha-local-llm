@@ -208,3 +208,31 @@ async def test_a_background_task_keeps_what_was_allowed(agent, llm, chat, accoun
 def test_a_plan_isnt_a_claim_of_work_done(answer, plan):
     assert checks.is_plan(answer) is plan
     assert checks.unbacked_schedule_claim(answer, set()) is (not plan and "remind" in answer)
+
+
+async def test_change_the_plan_allows_nothing_and_sends_it_back_to_its_plan(agent, llm, chat, accounts):
+    fe = person(accounts)
+    llm.permissions_first = False
+    llm.call("permissions_request", sites=["thefork.co.uk"], email=["sam@example.com"])
+    llm.answer("What would you like to change?")
+    await agent.inbound(fe, "book us a table and tell Sam")
+    card = await chat.next()
+    assert card.card["replan"] == "Change the plan" and card.card["buttons"] == ["Allow", "Ask each time"]
+    await agent.approval_reply(fe, card.card["id"], "replan")
+    await settle(agent)
+    assert tool_results(llm)[-1] == permissions.REPLAN
+    assert not agent.session(fe).grant
+    assert chat.sent[-1].text == "What would you like to change?"
+
+
+async def test_only_a_card_that_offers_it_can_be_sent_back_to_its_plan(agent, llm, chat, accounts):
+    fe = person(accounts)
+    llm.call("memory_add", text="Likes tea")
+    llm.answer("OK.")
+    await agent.inbound(fe, "I like tea")
+    card = await chat.next()
+    assert "replan" not in card.card
+    await agent.approval_reply(fe, card.card["id"], "replan")  # ignored: the card still waits
+    assert agent.approvals.pending_for(fe.address) is not None
+    await agent.approval_reply(fe, card.card["id"], "decline")
+    await settle(agent)

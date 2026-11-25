@@ -43,7 +43,7 @@ class Decision:
     approved: bool
     values: list[str] = field(default_factory=list)
     note: str = ""
-    reason: str = ""  # declined | expired | stopped
+    reason: str = ""  # declined | expired | stopped | replan (the person wants a new plan, SPEC §3.4)
 
 
 @dataclass
@@ -78,6 +78,7 @@ class Kind:
     buttons: tuple[str, str, str]
     why: str = ""
     open_inputs: bool = False
+    replan: str = ""  # a third button that sends the task back to its plan (the permissions card, SPEC §3.4)
 
 
 KINDS = {
@@ -116,8 +117,10 @@ KINDS = {
         "Before it starts, Aha! asks for what this request will need, all at once, instead of a card for each "
         "step. Untick what it shouldn't do without asking: that is asked when it happens. What you allow holds "
         "until the topic changes, and for a background task started from it. Every email or event it sends "
-        "this way still shows in the chat.",
+        "this way still shows in the chat. If this isn't what you had in mind, Change the plan: nothing is "
+        "allowed, and Aha! asks what to change before doing anything.",
         open_inputs=True,
+        replan="Change the plan",
     ),
     "memory": Kind(
         "🧠",
@@ -168,6 +171,7 @@ def card(p: Pending) -> dict:
             for f in p.fields
         ],
         "buttons": [yes, edit, no] if editable and not kind.open_inputs else [yes, no],
+        **({"replan": kind.replan} if kind.replan else {}),
     }
     if p.image is not None:
         out["image"] = p.image.to_dict()
@@ -289,6 +293,8 @@ class Approvals:
             self._resolve(p, Decision(True, final))
         elif decision == "decline":
             self._resolve(p, Decision(False, note=str(note)[:MAX_VALUE].strip(), reason="declined"))
+        elif decision == "replan" and KINDS.get(p.kind, KINDS["action"]).replan:
+            self._resolve(p, Decision(False, reason="replan"))
         elif decision == "edit":
             if KINDS.get(p.kind, KINDS["action"]).open_inputs or not any(f.kind in TYPED for f in p.fields):
                 await self.out.text(account, messages.EDIT_IN_CARD)

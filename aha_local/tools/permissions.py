@@ -25,6 +25,11 @@ FIRST = (
 )
 NOTHING = "Nothing needs allowing up front. Go ahead."
 DECLINED = "Not allowed up front: each of these is asked of the user when it happens. Go ahead."
+REPLAN = (
+    "Nothing was allowed and nothing should be done yet: the user wants to change the plan. Don't call any other "
+    "tool. Ask them in one short line what they'd like to change, and stop; when they answer, write the new "
+    'numbered plan and ask "Shall I go ahead?" again.'
+)
 
 DESCRIPTION = (
     "The first step of every task, before any other tool (or in the same reply as your first other tool calls): "
@@ -86,6 +91,8 @@ async def permissions_request(args: dict, ctx: ToolContext) -> ToolResult:
     decision, refused = await guard.ask(
         ctx, "permissions", "Allow these up front, for this request?", fields, declined=DECLINED
     )
+    if decision.reason == "replan":
+        return ToolResult(REPLAN)
     if refused:
         return refused
     allowed = [(label, g) for (label, g), v in zip(items, decision.values, strict=False) if v == "true"]
