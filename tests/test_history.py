@@ -172,3 +172,21 @@ async def test_settings_and_clear_reach_every_device(tmp_path):
     await phone.send({"t": "sync_request", "after": 0})
     sync = by_device(rig, phone, laptop)[phone.dev][0]
     assert [x["seq"] for x in sync["items"]] == [seq + 1] and sync["start"] == seq + 1  # numbers carry on
+
+
+def test_all_of_the_memory_is_always_in_view_and_there_is_no_memory_search(tmp_path):
+    """SPEC §5.4: every fact and every topic's entry, however many; the model searches the history instead."""
+    from aha_local.tools import memory
+    from aha_local.tools.registry import Registry
+
+    accounts = Accounts(Vault(tmp_path, os.urandom(32)))
+    acct = accounts.create("Ana")
+    for i in range(80):
+        context.save_topic(acct, 100 + i, time.time() - (80 - i) * 60, f"Topic {i}", f"Tracking CODE{i:03d}")
+        memory.add_fact(acct, f"Fact {i}")
+    block = context.build(acct, [], "Europe/London", "Home", 100_000)[1]["content"]
+    assert all(f"CODE{i:03d}" in block and f"Fact {i}" in block for i in range(80))
+    assert block.index("CODE000") < block.index("CODE079")  # oldest first: a new entry goes at the end
+    reg = Registry()
+    memory.register(reg)
+    assert "memory_search" not in reg.names() and "memory_list" not in reg.names()

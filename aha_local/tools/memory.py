@@ -13,26 +13,20 @@ from . import guard
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
 MAX_FACT_CHARS = 300
-MAX_CONTEXT_CHARS = 7000  # about 2k tokens (SPEC §4.1, layer 3)
 CARRY_ON = " Carry on with what you were doing; don't mention it unless the user asks."
 NOT_AGAIN = "Don't propose it again in this conversation."
 
 
-def render(items: list[dict], limit_chars: int | None = None) -> str:
-    lines, total = [], 0
-    for m in sorted(items, key=lambda m: m.get("updated", ""), reverse=True):
-        line = f"- [{m['id']}] {m['text']}"
-        total += len(line) + 1
-        if limit_chars and total > limit_chars:
-            lines.append(f"- … {len(items) - len(lines)} older memories not shown; use memory_search.")
-            break
-        lines.append(line)
-    return "\n".join(lines)
+def render(items: list[dict]) -> str:
+    return "\n".join(
+        f"- [{m['id']}] {m['text']}" for m in sorted(items, key=lambda m: m.get("updated", ""), reverse=True)
+    )
 
 
 def for_context(account: Account) -> str:
+    """Every fact, always (SPEC §5.4): the model searches the history, never its memory."""
     items = account.load_memory()
-    return render(items, MAX_CONTEXT_CHARS) if items else "(nothing saved yet)"
+    return render(items) if items else "(nothing saved yet)"
 
 
 def add_fact(account: Account, text: str) -> dict:
@@ -42,26 +36,6 @@ def add_fact(account: Account, text: str) -> dict:
     items.append(item)
     account.save_memory(items)
     return item
-
-
-async def memory_list(args: dict, ctx: ToolContext) -> ToolResult:
-    items = ctx.account.load_memory()
-    return ToolResult(render(items) if items else "Nothing is remembered about the user yet.")
-
-
-async def memory_search(args: dict, ctx: ToolContext) -> ToolResult:
-    """The person's facts and the topic memory (SPEC §5.4), older topics included."""
-    from ..context import render_topics
-
-    words = [w for w in str(args.get("query", "")).lower().split() if len(w) > 1]
-    match = lambda text: any(w in text.lower() for w in words)  # noqa: E731
-    facts = [m for m in ctx.account.load_memory() if match(m["text"])]
-    topics = [e for e in ctx.account.load_context()["topics"] if match(f"{e.get('title', '')} {e['text']}")]
-    if not facts and not topics:
-        return ToolResult("Nothing remembered matches. conversation_search looks through everything said before.")
-    parts = [f"Facts about them:\n{render(facts)}"] if facts else []
-    parts += [f"Earlier topics:\n{render_topics(topics)}"] if topics else []
-    return ToolResult("\n\n".join(parts))
 
 
 async def memory_add(args: dict, ctx: ToolContext) -> ToolResult:
@@ -129,15 +103,5 @@ def register(reg: Registry) -> None:
             "Forget a remembered fact that is wrong or no longer true.",
             params(["id"], id=string("The fact's id")),
             memory_delete,
-        )
-    )
-    reg.add(Tool("memory_list", "List everything remembered about the user.", params(), memory_list))
-    reg.add(
-        Tool(
-            "memory_search",
-            "Search what you remember by keywords: facts about the user, and your memory of earlier topics (also "
-            "older ones not shown in the context).",
-            params(["query"], query=string("Keywords")),
-            memory_search,
         )
     )

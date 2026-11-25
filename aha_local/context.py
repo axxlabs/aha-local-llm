@@ -9,7 +9,7 @@ Layers, in this order:
   4. the current task: its tool calls and results
 
 Older chat isn't in the context: each topic leaves its memory entry (SPEC §5.4), and the model searches the
-rest when it needs it (conversation_search, memory_search, email, calendar).
+rest of the history when it needs it (conversation_search, email, calendar). All of the memory is always in view.
 
 llama.cpp reuses its work for the longest prefix shared with an earlier request, so everything that changes
 comes after everything that doesn't. The tool traffic of a task is dropped when the task ends; only the
@@ -31,7 +31,6 @@ PROMPTS = Path(__file__).parent / "prompts"
 CHARS_PER_TOKEN = 3.2
 IMAGE_TOKENS = 1200
 TURNS_BUDGET = 20_000  # tokens of the topic's turns; a longer topic keeps its newest
-TOPICS_CHARS = 19_000  # about 6k tokens of topic memory, newest first; older entries: memory_search
 TOPIC_CHARS = 1_200  # one topic's entry
 TASK_SHARE = 0.6  # past this share of the context, older page snapshots in the task are shortened
 KEEP_PAGES = 2  # the newest page results always stay whole
@@ -64,16 +63,12 @@ def days_ahead(now: dt.datetime, count: int = 14) -> str:
     return ", ".join((now + dt.timedelta(days=i)).strftime("%a %d/%m/%Y") for i in range(1, count + 1))
 
 
-def render_topics(entries: list[dict], limit_chars: int | None = None) -> str:
-    lines, total = [], 0
-    for e in sorted(entries, key=lambda e: e.get("ts", 0), reverse=True):
+def render_topics(entries: list[dict]) -> str:
+    """Every topic's entry, oldest first: a new one goes at the end, so the start of the block stays cached."""
+    lines = []
+    for e in sorted(entries, key=lambda e: e.get("ts", 0)):
         day = dates.say(dt.date.fromtimestamp(e["ts"])) if e.get("ts") else "earlier"
-        block = f"- [{e['id']}] {day}, {e.get('title') or 'Untitled'}:\n  " + e["text"].replace("\n", "\n  ")
-        total += len(block) + 1
-        if limit_chars and total > limit_chars:
-            lines.append(f"- … {len(entries) - len(lines)} older topics not shown; use memory_search.")
-            break
-        lines.append(block)
+        lines.append(f"- [{e['id']}] {day}, {e.get('title') or 'Untitled'}:\n  " + e["text"].replace("\n", "\n  "))
     return "\n".join(lines)
 
 
@@ -92,7 +87,7 @@ def context_block(
         "What you remember about them (each fact approved by them):\n"
         f"{memory.for_context(account)}\n\n"
         "Your memory of earlier topics (what you wrote at the end of each; the messages themselves are gone):\n"
-        f"{render_topics(topics, TOPICS_CHARS) if topics else '(no earlier topics yet)'}\n"
+        f"{render_topics(topics) if topics else '(no earlier topics yet)'}\n"
         "</context>"
     )
 
