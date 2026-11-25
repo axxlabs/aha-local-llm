@@ -318,7 +318,8 @@ async def test_an_answer_without_its_word_is_asked_again_and_never_closes_the_ta
 
 async def test_run_now_skips_the_idle_wait_but_not_a_busy_model(runner, agent, llm, chat, accounts):
     fe = person(accounts)
-    background.save(fe, [task(next=time.time() + 600)])  # not due for 10 minutes
+    planned = time.time() + 600
+    background.save(fe, [task(next=planned)])  # not due for 10 minutes
     agent.last_input = time.time()  # someone just used Aha!: not idle
     assert actions.run_background_now(fe, "abc123", via="settings")
     assert background.listing(fe)[0]["now"] is True
@@ -333,7 +334,8 @@ async def test_run_now_skips_the_idle_wait_but_not_a_busy_model(runner, agent, l
     await settle(agent)
     assert "check 1" in llm.requests[0]["messages"][-1]["content"]
     (left,) = background.load(fe)
-    assert "now" not in left and left["checks"] == 1
+    assert "now" not in left and "manual" not in left and left["checks"] == 1
+    assert left["next"] == planned  # an extra check: the planned one keeps its time
     assert not actions.run_background_now(fe, "nope", via="settings")
 
 

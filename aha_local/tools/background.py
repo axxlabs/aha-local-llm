@@ -120,9 +120,9 @@ def changed(account: Account) -> None:
 
 
 def run_now(account: Account, task_id: str) -> bool:
-    """The person's Run now (SPEC §3.4): the task's next check runs as soon as the model is free, without waiting
-    for the idle time. False if there's no such task."""
-    return update(account, task_id, lambda e: {**e, "now": True, "next": min(e["next"], time.time())}) is not None
+    """The person's Run now (SPEC §3.4): an extra check, as soon as the model is free, without waiting for the
+    idle time. The planned next check keeps its time. False if there's no such task."""
+    return update(account, task_id, lambda e: {**e, "now": True}) is not None
 
 
 def update(account: Account, task_id: str, fn) -> dict | None:
@@ -379,12 +379,14 @@ def finish(account: Account, task_id: str, answer: str, stopped: bool) -> Note |
 
         def checked(e: dict) -> dict:
             now = time.time()
+            # A Run now check is an extra one: the planned next check keeps its time.
+            later = e["next"] if e.get("manual") else now + e["every"] * 60
             return {
-                **{k: v for k, v in e.items() if k != "now"},
+                **{k: v for k, v in e.items() if k not in ("now", "manual")},
                 "last": _last(text),
                 "last_how": how,
                 "last_at": now,
-                "next": now + e["every"] * 60,
+                "next": later,
                 "checks": e.get("checks", 0) + 1,
                 "updates": e.get("updates", 0) + told,
             }
@@ -403,7 +405,14 @@ def finish(account: Account, task_id: str, answer: str, stopped: bool) -> Note |
 def interrupted(account: Account, task_id: str) -> None:
     """A check stopped by someone's input: the next one is told so (its result, whatever it was)."""
     update(
-        account, task_id, lambda e: {**e, "last": e.get("last", ""), "last_how": "interrupted", "last_at": time.time()}
+        account,
+        task_id,
+        lambda e: {
+            **{k: v for k, v in e.items() if k != "manual"},
+            "last": e.get("last", ""),
+            "last_how": "interrupted",
+            "last_at": time.time(),
+        },
     )
 
 
@@ -486,14 +495,15 @@ class Runner:
             for entry in load(account):
                 if entry.get("until") is not None and entry["until"] <= now:
                     await self._expire(account, entry)
-                elif entry["next"] <= now and not self.agent.is_running(account):
+                elif (entry["next"] <= now or entry.get("now")) and not self.agent.is_running(account):
                     due.append((entry["next"], account, entry))
         asked = [d for d in due if d[2].get("now")]  # Run now: no idle wait, only a free model
         if self.agent.busy() or not (asked or (due and self.agent.idle(now))):
             return
         _, account, entry = min(asked or due, key=lambda d: d[0])
+        manual = bool(entry.get("now"))  # an extra check: it leaves the planned next one where it is
         await self.agent.start_background(account, entry["id"], check_prompt(entry, now, self.tz))
-        update(account, entry["id"], lambda e: {k: v for k, v in e.items() if k != "now"})  # the panel: checking
+        update(account, entry["id"], lambda e: {**{k: v for k, v in e.items() if k != "now"}, "manual": manual})
 
     async def _expire(self, account: Account, entry: dict) -> None:
         if update(account, entry["id"], lambda e: None) is None:
