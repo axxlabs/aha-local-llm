@@ -18,8 +18,8 @@ from __future__ import annotations
 import datetime as dt
 from functools import cache
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
+from . import dates
 from .accounts import Account
 from .tools import memory
 
@@ -66,7 +66,7 @@ def days_ahead(now: dt.datetime, count: int = 14) -> str:
 
 
 def context_block(account: Account, timezone: str, household: str, now: dt.datetime | None = None) -> str:
-    now = now or dt.datetime.now(ZoneInfo(timezone))
+    now = now or dates.now(timezone)
     conv = account.load_context()
     summary = conv.get("summary") or "(no earlier conversation yet)"
     return (

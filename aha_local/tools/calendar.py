@@ -16,10 +16,10 @@ from urllib.parse import quote
 
 import httpx
 
+from .. import dates
 from ..approvals import Field
 from . import google, guard
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
-from .schedule import parse_local, tz_of
 
 API = "https://www.googleapis.com/calendar/v3"
 OWN = {"", "primary", "main", "my calendar", "my own", "mine", "default", "your calendar", "personal"}
@@ -147,17 +147,6 @@ CALENDAR_ARG = string(
 # ---- times
 
 
-def when_of(value, tz) -> dt.datetime | dt.date | None:
-    """'2026-11-24 19:00' → a local time; '2026-11-24' → a whole day."""
-    text = str(value or "").strip()
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
-        try:
-            return dt.date.fromisoformat(text)
-        except ValueError:
-            return None
-    return parse_local(text, tz)
-
-
 def to_api(when: dt.datetime | dt.date, tz) -> dict:
     if isinstance(when, dt.datetime):
         return {"dateTime": when.isoformat(), "timeZone": str(tz.key)}
@@ -170,19 +159,12 @@ def from_api(value: dict, tz) -> str:
     if not value.get("dateTime"):
         return "?"
     when = dt.datetime.fromisoformat(value.get("dateTime", "").replace("Z", "+00:00"))
-    return when.astimezone(tz).strftime("%Y-%m-%d %H:%M")
-
-
-def shown(value: dt.datetime | dt.date) -> str:
-    return value.strftime("%Y-%m-%d %H:%M") if isinstance(value, dt.datetime) else value.isoformat()
+    return dates.editable(when.astimezone(tz))
 
 
 def day_field(start: str) -> Field:
     """Which day it is, on the card, in words: the person sees at once if it's the wrong one."""
-    try:
-        return Field("Day", dt.date.fromisoformat(start.strip()[:10]).strftime("%A %d %B %Y"), "info")
-    except ValueError:
-        return Field("Day", "?", "info")
+    return Field("Day", dates.in_words(start), "info")
 
 
 CREATED_BY = "Created by Aha! (A Private AI Assistant)"
@@ -218,11 +200,11 @@ def guests_of(text: str) -> list[str] | None:
 
 
 async def calendar_list(args: dict, ctx: ToolContext) -> ToolResult:
-    tz = tz_of(ctx)
-    start = when_of(args.get("start"), tz)
+    tz = dates.tz(ctx)
+    start = dates.when_of(args.get("start"), tz)
     if start is None:
         return ToolResult("Give start as 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' (local time).", error=True)
-    end = when_of(args.get("end"), tz) if args.get("end") else None
+    end = dates.when_of(args.get("end"), tz) if args.get("end") else None
     if isinstance(start, dt.date) and not isinstance(start, dt.datetime):
         start = dt.datetime.combine(start, dt.time(), tz)
     if end is None:
@@ -248,7 +230,7 @@ async def calendar_list(args: dict, ctx: ToolContext) -> ToolResult:
         events = found.get("items", [])
         where = f" in {cal.label}"  # always: the answer says which account (SPEC §3.4)
         if not events:
-            out.append(f"No events{where} from {shown(start)} to {shown(end)}.")
+            out.append(f"No events{where} from {dates.editable(start)} to {dates.editable(end)}.")
         else:
             out.append((f"Events{where}:\n" if where else "") + "\n".join(describe(e, tz) for e in events))
     return ToolResult("\n\n".join(out))
@@ -271,7 +253,7 @@ def event_fields(title, start, end, where, notes, guests) -> list[Field]:
 def event_body(values: list[str], tz) -> dict | str:
     """The event from the card's values, or what's wrong with them."""
     title, start_s, end_s, where, notes, guests_s = (v.strip() for v in values[:6])
-    start, end = when_of(start_s, tz), when_of(end_s, tz) if end_s else None
+    start, end = dates.when_of(start_s, tz), dates.when_of(end_s, tz) if end_s else None
     if not title or start is None:
         return "the event needs a title and a start ('YYYY-MM-DD HH:MM', or 'YYYY-MM-DD' for a whole day)"
     if end is None:
@@ -288,11 +270,11 @@ def event_body(values: list[str], tz) -> dict | str:
 
 
 async def calendar_add(args: dict, ctx: ToolContext) -> ToolResult:
-    tz = tz_of(ctx)
-    start = when_of(args.get("start"), tz)
+    tz = dates.tz(ctx)
+    start = dates.when_of(args.get("start"), tz)
     if start is None:
         return ToolResult("Give start as 'YYYY-MM-DD HH:MM' (local time), or 'YYYY-MM-DD' for a whole day.", error=True)
-    end = when_of(args.get("end"), tz) if args.get("end") else None
+    end = dates.when_of(args.get("end"), tz) if args.get("end") else None
     cal = await which(ctx, args.get("calendar"))
     if isinstance(cal, ToolResult):
         return cal
@@ -300,8 +282,8 @@ async def calendar_add(args: dict, ctx: ToolContext) -> ToolResult:
         return read_only(cal)
     fields = event_fields(
         " ".join(str(args.get("title", "")).split()),
-        shown(start),
-        shown(end) if end else "",
+        dates.editable(start),
+        dates.editable(end) if end else "",
         " ".join(str(args.get("location", "") or "").split()),
         signed(str(args.get("notes", "") or "")),
         ", ".join(guests_of(str(args.get("guests", "") or "")) or []),
@@ -356,7 +338,7 @@ async def _event(ctx: ToolContext, args: dict) -> tuple[Cal, dict] | ToolResult:
 
 
 async def calendar_update(args: dict, ctx: ToolContext) -> ToolResult:
-    tz = tz_of(ctx)
+    tz = dates.tz(ctx)
     found = await _event(ctx, args)
     if isinstance(found, ToolResult):
         return found
@@ -367,14 +349,14 @@ async def calendar_update(args: dict, ctx: ToolContext) -> ToolResult:
         return current if value in (None, "") else " ".join(str(value).split())
 
     current_guests = ", ".join(a.get("email", "") for a in event.get("attendees", []) if not a.get("self"))
-    start = when_of(args.get("start"), tz) if args.get("start") else None
-    end = when_of(args.get("end"), tz) if args.get("end") else None
+    start = dates.when_of(args.get("start"), tz) if args.get("start") else None
+    end = dates.when_of(args.get("end"), tz) if args.get("end") else None
     if (args.get("start") and start is None) or (args.get("end") and end is None):
         return ToolResult("Give times as 'YYYY-MM-DD HH:MM' (local time), or 'YYYY-MM-DD' for a whole day.", error=True)
     fields = event_fields(
         new("title", event.get("summary", "")),
-        shown(start) if start else from_api(event.get("start", {}), tz),
-        shown(end) if end else from_api(event.get("end", {}), tz),
+        dates.editable(start) if start else from_api(event.get("start", {}), tz),
+        dates.editable(end) if end else from_api(event.get("end", {}), tz),
         new("location", event.get("location", "")),
         str(args.get("notes") or event.get("description", "") or "").strip()[:MAX_TEXT],
         new("guests", current_guests),
@@ -394,7 +376,7 @@ async def calendar_update(args: dict, ctx: ToolContext) -> ToolResult:
 
 
 async def calendar_delete(args: dict, ctx: ToolContext) -> ToolResult:
-    tz = tz_of(ctx)
+    tz = dates.tz(ctx)
     found = await _event(ctx, args)
     if isinstance(found, ToolResult):
         return found

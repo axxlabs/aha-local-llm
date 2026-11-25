@@ -4,9 +4,7 @@
 
 from __future__ import annotations
 
-import datetime as dt
-from zoneinfo import ZoneInfo
-
+from .. import dates
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
 MAX_HITS = 8
@@ -47,7 +45,7 @@ async def message_user(args: dict, ctx: ToolContext) -> ToolResult:
 
 
 async def current_time(args: dict, ctx: ToolContext) -> ToolResult:
-    now = dt.datetime.now(ZoneInfo(ctx.config.timezone))
+    now = dates.now(ctx)
     return ToolResult(now.strftime(f"%d/%m/%Y %H:%M, a %A ({ctx.config.timezone}, UTC%z)"))
 
 

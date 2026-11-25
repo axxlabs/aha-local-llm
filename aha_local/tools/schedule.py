@@ -17,6 +17,7 @@ import secrets
 import time
 from zoneinfo import ZoneInfo
 
+from .. import dates
 from ..accounts import Account
 from ..approvals import Field
 from . import guard
@@ -40,30 +41,13 @@ NOTHING = "NOTHING_TO_REPORT"
 # ---- time
 
 
-def tz_of(ctx_or_name) -> ZoneInfo:
-    return ZoneInfo(ctx_or_name if isinstance(ctx_or_name, str) else ctx_or_name.config.timezone)
-
-
-def parse_local(text: str, tz: ZoneInfo) -> dt.datetime | None:
-    """'2026-11-22 09:00' (or with a T, or an offset) → an aware local datetime."""
-    try:
-        when = dt.datetime.fromisoformat(str(text).strip().replace("/", "-"))
-    except ValueError:
-        return None
-    return when.replace(tzinfo=tz) if when.tzinfo is None else when.astimezone(tz)
-
-
-def show(when: dt.datetime) -> str:
-    return when.strftime("%d/%m/%Y %H:%M")  # no weekday: the app labels the date with its own
-
-
 def _at(day: dt.date, clock: dt.time, tz: ZoneInfo) -> dt.datetime:
     return dt.datetime.combine(day, clock, tzinfo=tz)
 
 
 def next_time(entry: dict, tz: ZoneInfo, after: float) -> float | None:
     """The first time strictly after `after` (epoch seconds) this entry is due; None for a one-off."""
-    anchor = parse_local(entry["anchor"], tz)
+    anchor = dates.parse_local(entry["anchor"], tz)
     repeat = entry.get("repeat", "none")
     if anchor is None or repeat == "none":
         return None
@@ -87,7 +71,7 @@ def next_time(entry: dict, tz: ZoneInfo, after: float) -> float | None:
 
 
 def describe(entry: dict, tz: ZoneInfo) -> str:
-    when = show(dt.datetime.fromtimestamp(entry["next"], tz))
+    when = dates.for_model(dt.datetime.fromtimestamp(entry["next"], tz))
     rep = "" if entry.get("repeat", "none") == "none" else f", repeats {entry['repeat']}"
     what = "Reminder" if entry["kind"] == "reminder" else "Task"
     return f"`{entry['id']}` {what}, next {when}{rep}: {entry['text']}"
@@ -137,11 +121,11 @@ def _when(args: dict, tz: ZoneInfo, now: float) -> tuple[dt.datetime | None, str
         if minutes * 60 < 30:
             return None, "the time must be at least a minute from now"
     else:
-        when = parse_local(args.get("at", ""), tz)
+        when = dates.parse_local(args.get("at", ""), tz)
         if when is None:
             return None, "give `at` as a local date and time like 2026-11-22 09:00, or `in_minutes`"
     if when.timestamp() <= now + 20:
-        return None, f"{show(when)} has already passed: check the current time in the <context> block"
+        return None, f"{dates.for_model(when)} has already passed: check the current time in the <context> block"
     if when.timestamp() > now + MAX_AHEAD:
         return None, "that's more than a year away"
     return when, ""
@@ -166,7 +150,7 @@ async def schedule_add(args: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult(f"repeat must be one of {', '.join(REPEATS)}.", error=True)
     if not text:
         return ToolResult("Give the text: what to remind them, or what to do.", error=True)
-    tz, now = tz_of(ctx), time.time()
+    tz, now = dates.tz(ctx), time.time()
     when, why = _when(args, tz, now)
     if when is None:
         return ToolResult(f"Not scheduled: {why}.", error=True)
@@ -176,14 +160,14 @@ async def schedule_add(args: dict, ctx: ToolContext) -> ToolResult:
         # It will act later without the person watching, so they approve it (SPEC §3.4).
         fields = [
             Field("What", text, "longtext"),
-            Field("When", when.strftime("%Y-%m-%d %H:%M")),
+            Field("When", dates.editable(when)),
             Field("Repeats", repeat),
         ]
         d, refused = await guard.send(ctx, "schedule", "Schedule this task?", fields)
         if refused:
             return refused
         text, repeat = _clean(d.values[0]), d.values[2].strip().lower()
-        when = parse_local(d.values[1], tz)
+        when = dates.parse_local(d.values[1], tz)
         if not text or repeat not in REPEATS or when is None or when.timestamp() <= time.time():
             return ToolResult(
                 "The edited details weren't valid (a future 'YYYY-MM-DD HH:MM', a known repeat), so "
@@ -210,7 +194,7 @@ async def schedule_list(args: dict, ctx: ToolContext) -> ToolResult:
     entries = sorted(load(ctx.account), key=lambda e: e["next"])
     if not entries:
         return ToolResult("No reminders or scheduled tasks.")
-    tz = tz_of(ctx)
+    tz = dates.tz(ctx)
     return ToolResult("\n".join(describe(e, tz) for e in entries))
 
 
@@ -264,7 +248,7 @@ class Scheduler:
     def __init__(self, accounts, agent, timezone: str) -> None:
         self.accounts = accounts
         self.agent = agent
-        self.tz = ZoneInfo(timezone)
+        self.tz = dates.tz(timezone)
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
@@ -293,7 +277,7 @@ class Scheduler:
         once = entry.get("repeat", "none") == "none"
         if entry["kind"] == "task" and late <= MAX_LATE and self.agent.is_running(account):
             return  # its turn comes at the next check
-        when = show(dt.datetime.fromtimestamp(entry["next"], self.tz))
+        when = dates.for_model(dt.datetime.fromtimestamp(entry["next"], self.tz))
         if late > MAX_LATE:
             if once:
                 what = "reminder" if entry["kind"] == "reminder" else "scheduled task"
