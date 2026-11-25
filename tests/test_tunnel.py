@@ -12,8 +12,8 @@ import websockets
 from aha_local.accounts import Accounts, Device
 from aha_local.certs import handshake_message, issue_cert, new_key, public_b64, sign, verify
 from aha_local.protocol import E2E, FROM_COMPUTER, DeviceStatus, Hello, Ready, b64
-from aha_local.rest import Vault
 from aha_local.tunnel import PinMismatch, Tunnel
+from aha_local.vault import Vault
 
 
 def accounts_in(path: Path) -> Accounts:

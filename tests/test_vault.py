@@ -14,7 +14,7 @@ import pytest
 from aha_local.accounts import Accounts
 from aha_local.e2e import crypto
 from aha_local.e2e.channel import load_or_create_identity
-from aha_local.rest import LOG, RestError, Vault, load_or_create_instance_key, parse_recovery_code, recovery_code
+from aha_local.vault import LOG, RestError, Vault, load_or_create_instance_key, parse_recovery_code, recovery_code
 
 from .conftest import person, say, settle
 

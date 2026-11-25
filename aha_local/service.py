@@ -20,10 +20,10 @@ from .e2e import crypto
 from .e2e.channel import Channel
 from .llm import LLM
 from .models import ModelChoice
-from .rest import RestError, Vault, load_or_create_instance_key
 from .tools import browser, calendar, conversation, google, mail, memory, schedule, web
 from .tools.registry import Registry
 from .tunnel import Tunnel
+from .vault import RestError, Vault, load_or_create_instance_key
 
 log = logging.getLogger("aha")
 ANNOUNCE_SECONDS = 4  # telling everyone aha is restarting, before it stops

@@ -130,7 +130,7 @@ def unseal_data_key(cred: Path) -> bytes | None:
 
 
 def show_recovery_code(key: bytes) -> None:
-    from .rest import recovery_code
+    from .vault import recovery_code
 
     print("\nRecovery code for your Aha! data (shown once; `aha recovery-key --show` shows it again):\n")
     print(f"    {recovery_code(key)}\n")
@@ -176,14 +176,14 @@ def cmd_recovery_key(a) -> None:
     key = unseal_data_key(DATA_KEY_CRED) if DATA_KEY_CRED.exists() else None
     if key is None:
         die(f"Can't unseal {DATA_KEY_CRED} on this computer.")
-    from .rest import recovery_code
+    from .vault import recovery_code
 
     print(recovery_code(key))
 
 
 def cmd_restore(a) -> None:
     """Seal a recovery code (read from stdin, never from the command line) to this computer."""
-    from .rest import parse_recovery_code
+    from .vault import parse_recovery_code
 
     if DATA_KEY_CRED.exists() and unseal_data_key(DATA_KEY_CRED) is not None and not a.force:
         die(

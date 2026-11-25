@@ -14,7 +14,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .tools.registry import TaskState
 
@@ -104,6 +104,13 @@ class Draft:
     answer: str
     task: TaskState
     can_sign_in: bool = False  # the browser is there, so browser_login is
+    sources: list[str] = field(default_factory=list)  # where numbers may come from (SPEC §3.5)
+    photo: bool = False  # the task has the person's photo: its numbers can't be matched as text
+
+    @property
+    def missing(self) -> list[str]:
+        """Numbers in the answer no source supports; none are checked in a task with a photo (SPEC §3.5.1)."""
+        return [] if self.photo else unverified(chat_format(self.answer), self.sources)
 
     @property
     def called(self) -> set[str]:
@@ -117,6 +124,7 @@ class Check:
     failed: Callable[[Draft], bool]
     retry: str | Callable[[Draft], str]  # what the model is told; a function when it depends on the draft
     log: str
+    details: Callable[[Draft], dict] = lambda d: {}  # more for the message's details (SPEC §3.8)
 
     def retry_for(self, d: Draft) -> str:
         return self.retry(d) if callable(self.retry) else self.retry
@@ -470,12 +478,20 @@ CLAIM_CHECKS = (
         WEEKDAY_RETRY,
         "draft answer wrote weekdays; asking for full dates (DD/MM/YYYY) instead",
     ),
-    # Last: the specific checks above say better what's missing ("Scheduled… I'll check" is a schedule claim).
+    # After the specific checks above, which say better what's missing ("Scheduled… I'll check" is a schedule claim).
     Check(
         "promise",
         lambda d: only_promises(d.answer),
         PROMISE_RETRY,
         "draft answer only announced work it didn't do; asking the model to do it",
+    ),
+    # Last: one more go to confirm the numbers on a page, or drop them (SPEC §3.5).
+    Check(
+        "numbers",
+        lambda d: bool(d.missing),
+        lambda d: retry_prompt(d.missing),
+        "draft answer had unconfirmed numbers; asking the model to check",
+        details=lambda d: {"missing": d.missing[:20]},
     ),
 )
 

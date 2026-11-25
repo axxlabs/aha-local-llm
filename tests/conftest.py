@@ -18,9 +18,9 @@ from aha_local.accounts import Accounts
 from aha_local.agent import Agent
 from aha_local.config import Config
 from aha_local.llm import Reply, ToolCall
-from aha_local.rest import Vault
 from aha_local.tools import conversation, mail, memory
 from aha_local.tools.registry import Registry
+from aha_local.vault import Vault
 
 
 class FakeLLM:

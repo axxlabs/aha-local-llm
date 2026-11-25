@@ -18,8 +18,8 @@ from aha_local.certs import issue_cert, new_key, public_b64
 from aha_local.e2e import crypto as c
 from aha_local.e2e.channel import Channel
 from aha_local.protocol import E2E, CertIssued, CertRequest, DeviceStatus, Pair, Push
-from aha_local.rest import Vault
 from aha_local.tools import google as gapi
+from aha_local.vault import Vault
 
 
 class FakeAgent:

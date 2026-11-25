@@ -15,7 +15,7 @@ from pathlib import Path
 
 import httpx
 
-from .rest import Vault
+from .vault import Vault
 
 log = logging.getLogger("aha.models")
 

@@ -219,9 +219,7 @@ class Channel:
 
     async def typing(self, account: Account, on: bool, queued: bool = False) -> None:
         """ "Aha! is working…", or, while it waits for another person's request to finish, that it's queued."""
-        for device in list(account.devices.values()):
-            if device.dev in self.online:
-                await self._send(account, device, {"t": "typing", "on": on, **({"queued": True} if queued else {})})
+        await self.to_devices(account, {"t": "typing", "on": on, **({"queued": True} if queued else {})})
 
     async def publish(self, account: Account, item: dict, notify: bool = False) -> dict:
         """Number the item, keep it in the transcript, send it to every device of the account."""
@@ -229,16 +227,19 @@ class Channel:
         account.transcript({"kind": "item", "item": item})
         live = {**item, "item": True}  # a chat item, whatever its type: the app keeps and draws it (SPEC §6.5)
         for device in list(account.devices.values()):
-            if device.dev in self.online:
+            if self.is_online(device):
                 await self._send(account, device, live)
             elif notify:
                 await self._push(account, device, item)
         return item
 
+    def is_online(self, device: Device) -> bool:
+        return device.dev in self.online
+
     async def to_devices(self, account: Account, message: dict) -> None:
         """To every connected device of the account, outside the transcript (settings, not chat)."""
         for device in list(account.devices.values()):
-            if device.dev in self.online:
+            if self.is_online(device):
                 await self._send(account, device, message)
 
     async def history_changed(self, account: Account) -> None:

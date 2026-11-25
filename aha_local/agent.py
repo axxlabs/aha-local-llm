@@ -451,11 +451,7 @@ class Agent:
             return
         tz = dates.tz(self.config)
         since = dt.datetime.fromtimestamp(start[1], tz).strftime("%H:%M")
-        request = [
-            *prompt,
-            {"role": "assistant", "content": answer},
-            {"role": "user", "content": folding.ask(since, asked)},
-        ]
+        request = after_task(prompt, answer, folding.ask(since, asked))
         try:
             reply = await self.llm.chat(
                 request, self.registry.specs(), max_tokens=60, who=account.address, tool_choice="none", thinking=False
@@ -489,9 +485,7 @@ class Agent:
                 return
             has_photo = True
             text = text + " [photo]" * len(photos)
-            parts = [{"type": "text", "text": message["content"]}]
-            parts += [{"type": "image_url", "image_url": {"url": f"data:{i.mime};base64,{i.b64}"}} for i in photos]
-            message["content"] = parts
+            message["content"] = with_images(message["content"], photos)
 
         take_photos(task[0])
 
@@ -536,29 +530,19 @@ class Agent:
             log.info("model call: %d prompt tokens, %d cached", reply.prompt_tokens, reply.cached_tokens)
             record(model_record(self.llm.model, reply))
             if not reply.tool_calls:
-                draft = checks.Draft(text, reply.content or "", ctx.task, can_sign_in)
+                draft = checks.Draft(text, reply.content or "", ctx.task, can_sign_in, sources, has_photo)
                 failed = next((c for c in checks.CLAIM_CHECKS if c.name not in retried and c.failed(draft)), None)
                 if failed:
                     retried.add(failed.name)
                     log.info(failed.log)
-                    record({"kind": "check", "name": failed.name})
+                    record({"kind": "check", "name": failed.name, **failed.details(draft)})
                     task.append({"role": "assistant", "content": draft.answer})
-                    retry = failed.retry_for(draft)
-                    task.append({"role": "user", "content": retry})
+                    task.append({"role": "user", "content": failed.retry_for(draft)})
                     continue
                 if has_photo:
-                    # Numbers in the person's photo can't be matched as text: no retry, no warning, and the
-                    # answer isn't a source later (SPEC §3.5.1).
+                    # Numbers in the person's photo can't be matched as text: no warning, and the answer isn't a
+                    # source later (SPEC §3.5.1).
                     return checks.chat_format(reply.content or ""), False, text
-                missing = checks.unverified(checks.chat_format(reply.content or ""), sources)
-                if missing and "numbers" not in retried:
-                    # One more go: ask the model to confirm the numbers on a page, or drop them (SPEC §3.5).
-                    retried.add("numbers")
-                    record({"kind": "check", "name": "numbers", "missing": missing[:20]})
-                    log.info("draft answer had %d unconfirmed number(s); asking the model to check", len(missing))
-                    task.append({"role": "assistant", "content": reply.content or ""})
-                    task.append({"role": "user", "content": checks.retry_prompt(missing)})
-                    continue
                 return (*finish(reply.content or "", sources, bool(retried), today), text)
             last = reply.content or last
             task.append(
@@ -596,16 +580,8 @@ class Agent:
                     }
                 )
                 for image in result.images:
-                    task.append(
-                        {
-                            "role": "user",
-                            "_kind": "image",
-                            "content": [
-                                {"type": "text", "text": f"[Screenshot returned by {call.name}]"},
-                                {"type": "image_url", "image_url": {"url": f"data:{image.mime};base64,{image.b64}"}},
-                            ],
-                        }
-                    )
+                    shot = with_images(f"[Screenshot returned by {call.name}]", [image])
+                    task.append({"role": "user", "_kind": "image", "content": shot})
         return (*finish(f"{messages.TOO_MANY_STEPS}\n{last}".strip(), sources, bool(retried), today), text)
 
     async def _fold(self, account: Account, conv: dict, prompt: list[dict] | None = None, answer: str = "") -> None:
@@ -616,11 +592,7 @@ class Agent:
         if not folded:
             return
         if prompt is not None:
-            request = [
-                *prompt,
-                {"role": "assistant", "content": answer},
-                {"role": "user", "content": context.fold_ask(folded)},
-            ]
+            request = after_task(prompt, answer, context.fold_ask(folded))
             tools, choice = self.registry.specs(), "none"  # the same tools, so the cached prompt still matches
         else:
             request, tools, choice = context.fold_request(conv, folded), None, "auto"
@@ -632,6 +604,18 @@ class Agent:
             return
         if reply.content:
             context.apply_fold(account, folded, reply.content)
+
+
+def with_images(text: str, images: list[Image]) -> list[dict]:
+    """A message's content with pictures for the vision model: the person's photos, or a tool's screenshot."""
+    parts = [{"type": "text", "text": text}]
+    return parts + [{"type": "image_url", "image_url": {"url": f"data:{i.mime};base64,{i.b64}"}} for i in images]
+
+
+def after_task(prompt: list[dict], answer: str, question: str) -> list[dict]:
+    """A question asked at the end of the task's own last request (its title, a summary): the model server's
+    cached prompt still matches, so it costs only the new words (SPEC §3.2 "Cache slots")."""
+    return [*prompt, {"role": "assistant", "content": answer}, {"role": "user", "content": question}]
 
 
 UNSOURCED_TOOLS = {"web_search"}  # snippets are leads, not sources

@@ -25,7 +25,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .protocol import Cert
-from .rest import Vault
+from .vault import Vault
 
 VERSION = 2
 

@@ -13,7 +13,7 @@ from aha_local import context
 from aha_local.accounts import Accounts
 from aha_local.e2e import crypto as c
 from aha_local.protocol import E2E
-from aha_local.rest import Vault
+from aha_local.vault import Vault
 
 from .test_channel import Rig
 

@@ -15,7 +15,7 @@ import time
 
 import httpx
 
-from ..rest import Vault
+from ..vault import Vault
 from .registry import ToolContext
 
 log = logging.getLogger("aha.google")
