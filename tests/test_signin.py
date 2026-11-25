@@ -420,17 +420,17 @@ async def test_an_answer_left_on_a_sign_in_page_goes_back_once(setup, llm, chat,
 
 
 async def test_claims_without_the_tool_go_back_once(setup, llm, chat, accounts):
-    """Seen with the real model: 'Scheduled…' with no schedule_add; 'Here is the page' with no screenshot sent."""
-    from aha_local.tools import schedule
+    """Seen with the real model: 'Scheduled…' with nothing set up; 'Here is the page' with no screenshot sent."""
+    from aha_local.tools import background
 
     agent, _, _ = setup
-    schedule.register(agent.registry)
+    background.register(agent.registry)
     fe = person(accounts)
     llm.answer("Scheduled. Every weekday at 08:00 I'll check the forecast.")
     llm.answer("I can't run things on a schedule yet.")
     await agent.inbound(fe, "every weekday at 8am tell me if it will rain")
     await settle(agent)
-    assert "haven't called schedule_add" in json.dumps(llm.requests[1]["messages"])
+    assert "haven't called task_create" in json.dumps(llm.requests[1]["messages"])
     assert chat.texts()[-1] == "I can't run things on a schedule yet."
 
     llm.call("browser_navigate", url="https://news.example.com/")

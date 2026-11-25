@@ -3,7 +3,7 @@
 """The person's own actions on what Aha! keeps for them (SPEC §3.4, §3.8, §5.4, §5.7, §5.8).
 
 Forgetting a memory, a site or a saved login, trusting a site, clearing the browser, disconnecting an account,
-cancelling a scheduled task: each is one function here, whether the person did it in Settings or with a chat
+cancelling a background task: each is one function here, whether the person did it in Settings or with a chat
 command, so both do the same thing and write the same audit line (`via`: "settings" or "chat"). These are the
 person's own actions, never the model's: no card, and no tool reaches them.
 """
@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from . import context
 from .accounts import Account
-from .tools import background, google, logins, schedule, signins, trusted
+from .tools import background, google, logins, signins, trusted
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -68,14 +68,6 @@ async def disconnect_email(account: Account, email: str, via: str) -> bool:
         return False
     await google.disconnect(account, email)
     account.audit({"email_disconnected": email or "all", "via": via})
-    return True
-
-
-def cancel_scheduled(account: Account, entry_id: str, via: str) -> bool:
-    if not any(e["id"] == entry_id for e in schedule.load(account)):
-        return False
-    schedule.update(account, entry_id, lambda e: None)
-    account.audit({"scheduled_cancelled": entry_id, "via": via})
     return True
 
 

@@ -22,7 +22,7 @@ from .config import Config
 from .items import Image
 from .llm import Model, ModelUnavailable
 from .policy import addresses
-from .tools import background, memory, schedule, signins
+from .tools import background, memory, signins
 from .tools.registry import Registry, TaskState, ToolContext, redacted
 
 log = logging.getLogger("aha.agent")
@@ -92,27 +92,19 @@ PHOTO_ONLY = "(sent a photo)"
 
 @dataclass(frozen=True)
 class Job:
-    """A run the person didn't start (SPEC §3.4): a scheduled task ("scheduled") or a background task's check
-    ("background"). Its module decides what of the answer reaches the chat."""
+    """A run the person didn't start (SPEC §3.4): a background task's check. It shows nothing while it works, and
+    its module decides what of the answer reaches the chat."""
 
-    kind: str
     id: str
+    quiet: bool = True  # no "typing…", no tool lines
 
-    @property
-    def quiet(self) -> bool:
-        """Shows nothing while it works: no "typing…", no tool lines (a background check)."""
-        return self.kind == "background"
-
-    def finish(self, account: Account, answer: str, stopped: bool) -> str | background.Note | None:
-        """The message for the chat (a background task's note), or None: nothing is sent and the turn isn't
-        kept."""
-        done = background.finish if self.kind == "background" else schedule.finish
-        return done(account, self.id, answer, stopped)
+    def finish(self, account: Account, answer: str, stopped: bool) -> background.Note | None:
+        """The task's note for the chat, or None: nothing is sent and the turn isn't kept."""
+        return background.finish(account, self.id, answer, stopped)
 
     def interrupted(self, account: Account) -> None:
-        """Stopped before it finished (someone's input, Stop): a background check tells the next one."""
-        if self.kind == "background":
-            background.interrupted(account, self.id)
+        """Stopped before it finished (someone's input, Stop): the next check is told."""
+        background.interrupted(account, self.id)
 
 
 class _Counted:
@@ -284,21 +276,6 @@ class Agent:
             await self.browser_actions.clear(account, via="chat")
             await self.send(account, messages.BROWSER_CLEARED)
             return
-        if command in ("reminders", "schedule", "scheduled", "scheduled tasks"):
-            tz = dates.tz(self.config)
-            entries = sorted(schedule.load(account), key=lambda e: e["next"])
-            await self.send(
-                account,
-                messages.REMINDERS.format(items="\n".join(f"- {schedule.describe(e, tz)}" for e in entries))
-                if entries
-                else messages.NO_REMINDERS,
-            )
-            return
-        if command.startswith(("cancel reminder ", "cancel task ")):
-            entry_id = command.split(" ", 2)[2].strip().strip("`")
-            found = actions.cancel_scheduled(account, entry_id, via="chat")
-            await self.send(account, messages.REMINDER_CANCELLED if found else messages.REMINDER_UNKNOWN)
-            return
         if command == "forget last":
             context.forget_last(account)
             await self.send(account, messages.FORGOT_LAST)
@@ -357,18 +334,12 @@ class Agent:
         except Exception as e:
             log.warning("warming the model failed: %s", e)
 
-    def start_scheduled(self, account: Account, entry: dict, late: bool = False) -> None:
-        """A scheduled task is due (SPEC §3.4): run it as this account, like a message from them."""
-        account.transcript({"kind": "scheduled", "text": entry["text"]})
-        text = schedule.task_prompt(entry, late)
-        self.session(account).task = asyncio.create_task(self.run(account, text, Job("scheduled", entry["id"])))
-
     def start_background(self, account: Account, task_id: str, text: str) -> None:
         """A background task's check, while the household is idle (SPEC §3.4): run as this account, quietly."""
         account.transcript({"kind": "background", "id": task_id})
         live = self.session(account)
         live.background = task_id
-        live.task = asyncio.create_task(self.run(account, text, Job("background", task_id)))
+        live.task = asyncio.create_task(self.run(account, text, Job(task_id)))
 
     async def run(self, account: Account, text: str, job: Job | None = None) -> None:
         held = self.browser.hold(account.id) if self.browser else contextlib.nullcontext()
@@ -499,13 +470,10 @@ class Agent:
             if job:
                 result = job.finish(account, answer, stopped)
                 if result is None:
-                    account.transcript({"kind": "answer", "text": "", "job": job.kind, "quiet": True})
+                    account.transcript({"kind": "answer", "text": "", "job": "background", "quiet": True})
                     return  # nothing to tell yet: say nothing, keep the chat clean
-                if isinstance(result, background.Note):
-                    await self.task_note(account, result)
-                    answer, noted = result.as_text(), True
-                else:
-                    answer = result
+                await self.task_note(account, result)
+                answer, noted = result.as_text(), True
             if answer and not noted:
                 # Unfinished stays unfolded after a break (SPEC §7.4 "Folding"): a task that stopped, or a question.
                 await self.send(account, answer, open="stopped" if stopped else "asks" if folding.asks(answer) else "")
@@ -643,7 +611,9 @@ class Agent:
             record(model_record(self.llm.model, reply))
             if not reply.tool_calls:
                 draft = checks.Draft(text, reply.content or "", ctx.task, can_sign_in, sources, has_photo)
-                failed = next((c for c in checks.CLAIM_CHECKS if c.name not in retried and c.failed(draft)), None)
+                # A check's own "I'll check again in 15 minutes" isn't a promise to set something up (SPEC §3.4).
+                skip = retried | ({"schedule"} if quiet else set())
+                failed = next((c for c in checks.CLAIM_CHECKS if c.name not in skip and c.failed(draft)), None)
                 if failed:
                     retried.add(failed.name)
                     log.info(failed.log)

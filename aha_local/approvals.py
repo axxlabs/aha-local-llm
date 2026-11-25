@@ -104,11 +104,6 @@ KINDS = {
         ("Delete it", "Edit", "Keep it"),
         "Deleting a calendar event always asks first: it can't be undone, and the people invited may be told.",
     ),
-    "schedule": Kind(
-        "⏰",
-        ("Schedule", "Edit", "Don't"),
-        "A scheduled task runs later on its own, without you there, so it always asks first.",
-    ),
     "task": Kind(
         "⏳",
         ("Start", "Edit", "Don't"),

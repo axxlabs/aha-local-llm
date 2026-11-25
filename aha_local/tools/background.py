@@ -200,7 +200,24 @@ def _until_text(until: float | None, tz: ZoneInfo) -> str:
     return NEVER if until is None else dates.editable(dt.datetime.fromtimestamp(until, tz))
 
 
-def _validate(title, prompt, every, until, tz: ZoneInfo, now: float):
+def _start(value, minutes: int, end: float | None, tz: ZoneInfo, now: float) -> tuple[float | None, str]:
+    """The first check: a local time, or `every` from now when none is given."""
+    text = str(value or "").strip()
+    if not text:
+        return now + minutes * 60, ""
+    when = dates.parse_local(text, tz)
+    if when is None:
+        return None, "give `start` as a local date and time like 2026-11-30 08:00, or leave it out"
+    if when.timestamp() < now - 60:
+        return None, f"{dates.for_model(when)} has already passed: check the current time in the <context> block"
+    if when.timestamp() > now + MAX_AHEAD:
+        return None, "the first check is more than a year away"
+    if end is not None and when.timestamp() >= end:
+        return None, "the first check is after `until`"
+    return max(when.timestamp(), now), ""
+
+
+def _validate(title, prompt, every, until, tz: ZoneInfo, now: float, start=None):
     title, prompt = _clean(title, MAX_TITLE), _prompt(prompt)
     if not title:
         return None, "give a short title: what you're waiting for"
@@ -212,35 +229,41 @@ def _validate(title, prompt, every, until, tz: ZoneInfo, now: float):
     end, why = _until(until, tz, now)
     if why:
         return None, why
-    return (title, prompt, minutes, end), ""
+    first, why = _start(start, minutes, end, tz, now)
+    if first is None:
+        return None, why
+    return (title, prompt, minutes, end, first), ""
 
 
 async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
     tz, now = dates.tz(ctx), time.time()
-    got, why = _validate(args.get("title"), args.get("prompt"), args.get("every_minutes"), args.get("until"), tz, now)
+    args_ = (args.get("title"), args.get("prompt"), args.get("every_minutes"), args.get("until"))
+    got, why = _validate(*args_, tz, now, args.get("start"))
     if got is None:
         return ToolResult(f"Not created: {why}.", error=True)
     if len(load(ctx.account)) >= MAX_TASKS:
         return ToolResult(
             f"Not created: there are already {MAX_TASKS} background tasks: cancel some first.", error=True
         )
-    title, prompt, minutes, end = got
+    title, prompt, minutes, end, first = got
     # It checks later on its own, without the person watching, so they approve it (SPEC §3.4).
     fields = [
         Field("Waiting for", title),
         Field("How to check", prompt, "longtext"),
+        Field("First check", dates.editable(dt.datetime.fromtimestamp(first, tz))),
         Field("Check every (minutes)", str(minutes)),
         Field("Until", _until_text(end, tz)),
     ]
     d, refused = await guard.send(ctx, "task", "Start this background task?", fields)
     if refused:
         return refused
-    got, why = _validate(*d.values[:4], tz, time.time())
+    v = d.values
+    got, why = _validate(v[0], v[1], v[3], v[4], tz, time.time(), v[2])
     if got is None:
         return ToolResult(
             f"The edited details weren't valid ({why}), so nothing was started. Ask the person.", error=True
         )
-    title, prompt, minutes, end = got
+    title, prompt, minutes, end, first = got
     entries = load(ctx.account)
     if len(entries) >= MAX_TASKS:
         return ToolResult(f"Not created: there are already {MAX_TASKS} background tasks.", error=True)
@@ -251,7 +274,7 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
         "prompt": prompt,
         "every": minutes,
         "until": end,
-        "next": now + minutes * 60,
+        "next": first,
         "created": int(now),
         "checks": 0,
     }
@@ -281,15 +304,16 @@ def register(reg: Registry) -> None:
     reg.add(
         Tool(
             "task_create",
-            "Start a background task: when something can't be done yet because it waits on something else (a "
-            "reply to an email, a parcel's tracking, a page changing, tickets going on sale), check it on your "
-            "own until it happens, then tell the user or do what they asked. Also for watching that goes on "
-            "('tell me whenever Sam emails', with until 'never'): each check reports only what's new. "
-            "Each check runs `prompt` as a new "
+            "Start a background task: the only way to do anything later. For something that waits on something "
+            "else (a reply to an email, a parcel's tracking, a page changing, tickets going on sale): check it until "
+            "it happens, then tell the user or do what they asked. For watching that goes on ('tell me whenever "
+            "Sam emails', until 'never'): each check reports only what's new. For something at a time, once or "
+            "repeating ('remind me at 6 to call Sam', 'in 5 minutes google my name', 'every morning at 8 "
+            "summarise my email'): `start` at that time, `every_minutes` for the repeat (1440 for daily), and the "
+            "check does it and answers DONE (once) or NOTIFY (repeating). Each check runs `prompt` as a new "
             "request, with only your memory: write it so it makes sense on its own later, with what to look at "
             "(addresses, names, tracking codes), how, and what counts as done. Don't say in it what to answer: "
-            "each check is told how to answer. Checks run only while nobody is "
-            "using Aha!, so timing isn't exact. Not for something at a set time: use schedule_add for that.",
+            "each check is told how to answer. Checks run only while nobody is using Aha!, so timing isn't exact.",
             params(
                 ["title", "prompt", "every_minutes", "until"],
                 title=string("What you're waiting for, short, e.g. 'Reply from Sam about Saturday'"),
@@ -303,6 +327,10 @@ def register(reg: Registry) -> None:
                 until=string(
                     f"When to stop waiting, local YYYY-MM-DD HH:MM (work it out from the <context> block), or "
                     f"'{NEVER}' for no end"
+                ),
+                start=string(
+                    "The first check, local YYYY-MM-DD HH:MM, for something at a time; leave it out to start "
+                    "`every_minutes` from now. 'Every weekday at 8' asked on a Saturday evening starts Monday 08:00"
                 ),
             ),
             task_create,

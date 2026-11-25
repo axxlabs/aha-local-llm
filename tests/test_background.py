@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import time
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -16,6 +18,7 @@ from aha_local.tools.background import Runner
 from .conftest import person, settle
 
 IDLE = background.IDLE_AFTER
+LONDON = ZoneInfo("Europe/London")
 
 
 @pytest.fixture
@@ -55,11 +58,13 @@ async def test_creating_one_needs_a_card_with_every_detail(runner, agent, llm, c
     llm.answer("I'll watch for Sam's reply.")
     await agent.inbound(fe, "tell me when Sam answers")
     card = await chat.next()
+    first = time.strftime("%Y-%m-%d %H:%M", time.localtime(time.time() + 15 * 60))  # no start: every from now
     assert card.card["kind"] == "task" and card.card["icon"] == "⏳"
     assert card.card["buttons"] == ["Start", "Edit", "Don't"]
     assert [(f["label"], f["value"]) for f in card.card["fields"]] == [
         ("Waiting for", "Reply from Sam about Saturday"),
         ("How to check", "Search the email for a reply from sam@example.com about Saturday."),
+        ("First check", first),
         ("Check every (minutes)", "15"),
         ("Until", "never"),
     ]
@@ -404,20 +409,41 @@ async def test_the_person_edits_what_a_task_checks(runner, agent, llm, accounts)
     assert "Check the WhatsApp chat with Sam\nfor a reply." in llm.requests[-1]["messages"][-1]["content"]
 
 
-async def test_the_panel_lists_reminders_and_scheduled_tasks_too(runner, agent, accounts, monkeypatch):
-    """Seen: a task at a set time (a scheduled task) wasn't in the Tasks panel, so it looked like it was never
-    made, and asking again added a second one."""
-    from aha_local.tools import schedule
-
+async def test_something_at_a_time_starts_then(runner, agent, llm, chat, accounts):
+    """With only background tasks, 'remind me at 6' or 'every morning at 8' is a task whose first check is then."""
     fe = person(accounts)
-    told: list[str] = []
-    monkeypatch.setattr(background, "WATCHERS", [lambda account: told.append(account.id)])
-    later = time.time() + 300
-    schedule.save(
-        fe, [{"id": "ac251e", "kind": "task", "text": "Google my name", "repeat": "none", "anchor": "x", "next": later}]
+    tomorrow = (dt.datetime.now(LONDON) + dt.timedelta(days=1)).strftime("%Y-%m-%d 18:00")
+    llm.call(
+        "task_create",
+        title="Call Sam",
+        prompt="Remind them to call Sam.",
+        every_minutes=1440,
+        until="never",
+        start=tomorrow,
     )
-    assert told == [fe.id]  # an open panel hears of it at once
-    assert schedule.listing(fe) == [
-        {"id": "ac251e", "kind": "task", "text": "Google my name", "next": later, "repeat": "none"}
-    ]
-    assert actions.cancel_scheduled(fe, "ac251e", via="settings") and schedule.listing(fe) == []
+    llm.answer("OK.")
+    await agent.inbound(fe, "remind me to call Sam at 6 every day")
+    card = await chat.next()
+    assert ("First check", tomorrow) in [(f["label"], f["value"]) for f in card.card["fields"]]
+    await agent.approval_reply(fe, card.card["id"], "approve")
+    await settle(agent)
+    (saved,) = background.load(fe)
+    assert saved["next"] == dt.datetime.fromisoformat(tomorrow).replace(tzinfo=LONDON).timestamp()
+
+    llm.call("task_create", title="X", prompt="Do x", every_minutes=5, until="never", start="2001-01-01 08:00")
+    llm.answer("OK.")
+    await agent.inbound(fe, "do x in the past")
+    await settle(agent)
+    assert "has already passed" in str(llm.requests[-1]["messages"][-1])
+
+
+async def test_a_check_saying_it_will_check_again_isnt_a_schedule_claim(runner, agent, llm, chat, accounts):
+    """A check's "I'll check again every 15 minutes" mustn't send it back to call task_create."""
+    fe = person(accounts)
+    background.save(fe, [task()])
+    idle(agent)
+    llm.answer("WAITING: no reply yet; I'll check again every 15 minutes.")
+    await runner.tick()
+    await settle(agent)
+    sent_back = [str(r["messages"][-1].get("content")) for r in llm.requests[1:]]
+    assert not any("task_create" in m for m in sent_back), sent_back

@@ -110,7 +110,7 @@ def test_the_gate(call, facts, outcome):
 
 
 def test_send_is_always_a_card():
-    """SPEC §5.2 rule 2: email, memories, schedules, MCP writes; trust doesn't apply."""
+    """SPEC §5.2 rule 2: email, memories, background tasks, MCP writes; trust doesn't apply."""
     for facts in ({}, {"trusted": {"gmail.com", ""}}, {"private": True}):
         assert decide(Action("send"), Facts(**facts)).outcome == "card"
     assert decide(Action("search"), Facts()).outcome == "run"
@@ -187,11 +187,11 @@ def test_the_model_never_hears_about_cards_or_trust():
     for f in prompts.glob("*.md"):
         found = AUDIT_WORDS.findall(f.read_text())
         assert not found, (f.name, found)
-    from aha_local.tools import background, calendar, guard, mail, memory, registry, schedule, web
+    from aha_local.tools import background, calendar, guard, mail, memory, registry, web
     from aha_local.tools.browser import HARNESS_TOOLS
 
     reg = registry.Registry()
-    for m in (background, calendar, mail, memory, schedule, web):
+    for m in (background, calendar, mail, memory, web):
         m.register(reg)
     for t in HARNESS_TOOLS:
         reg.add(t)

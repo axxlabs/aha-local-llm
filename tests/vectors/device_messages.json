@@ -47,9 +47,6 @@
       "id",
       "prompt"
     ],
-    "scheduled_cancel": [
-      "id"
-    ],
     "trace_request": [
       "seq"
     ],
@@ -152,7 +149,6 @@
     ],
     "tasks": [
       "items",
-      "scheduled?",
       "idle_since",
       "idle_after",
       "busy"

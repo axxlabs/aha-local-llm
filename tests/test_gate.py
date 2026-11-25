@@ -33,7 +33,6 @@ def test_every_card_says_why_in_code():
         "draft",
         "calendar",
         "calendar_delete",
-        "schedule",
         "task",
         "memory",
         "forget",

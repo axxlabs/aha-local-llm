@@ -83,7 +83,7 @@ async def send(
     ctx: ToolContext, kind: str, title: str, fields: list[Field], then: str = ""
 ) -> tuple[Decision, ToolResult | None]:
     """Something that goes out in the person's name or changes what they keep (an email, an event, a memory, a
-    scheduled task): a `send` for the gate (SPEC §5.2 rule 1), which shows it on a card, trusted or not."""
+    background task): a `send` for the gate (SPEC §5.2 rule 1), which shows it on a card, trusted or not."""
     verdict = check(ctx, Action("send"), kind)
     if verdict.outcome == "block":
         return Decision(False, reason="blocked"), blocked(verdict.why)

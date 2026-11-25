@@ -238,13 +238,13 @@ SCHEDULE_CLAIM = re.compile(
 
 
 def unbacked_schedule_claim(answer: str, tools_called: set[str]) -> bool:
-    """The answer says something is scheduled or will be done later, but schedule_add didn't run."""
-    return bool(SCHEDULE_CLAIM.search(answer)) and "schedule_add" not in tools_called
+    """The answer says something is scheduled or will be done later, but task_create didn't run."""
+    return bool(SCHEDULE_CLAIM.search(answer)) and "task_create" not in tools_called
 
 
 SCHEDULE_RETRY = retry(
-    "Your draft says a reminder or task is scheduled, but you haven't called schedule_add in this task, so nothing "
-    "is: you can't act later on your own. Call schedule_add now, or correct your answer."
+    "Your draft says a reminder or task is set up, but you haven't called task_create in this task, so nothing "
+    "is: you can't act later on your own. Call task_create now, or correct your answer."
 )
 
 SECRET = r"(?:password|passcode|one-time code|verification code|2fa code|security code|pin)"
@@ -451,7 +451,7 @@ CLAIM_CHECKS = (
         "schedule",
         lambda d: unbacked_schedule_claim(d.answer, d.called),
         SCHEDULE_RETRY,
-        "draft answer claimed something was scheduled; no schedule_add ran",
+        "draft answer claimed something was scheduled; no task_create ran",
     ),
     Check(
         "check",

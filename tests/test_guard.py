@@ -24,8 +24,8 @@ def test_only_the_guard_shows_cards():
 
 
 def test_sends_are_decided_by_the_gate():
-    """An email, an event, a memory or a scheduled task is a `send` for the gate, never a card a tool chose."""
-    for name in ("mail.py", "calendar.py", "memory.py", "schedule.py", "background.py"):
+    """An email, an event, a memory or a background task is a `send` for the gate, never a card a tool chose."""
+    for name in ("mail.py", "calendar.py", "memory.py", "background.py"):
         text = (SRC / "tools" / name).read_text()
         assert "guard.send(" in text and "guard.ask(" not in text, name
 
