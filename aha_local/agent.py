@@ -621,6 +621,14 @@ class Agent:
                     task.append({"role": "assistant", "content": draft.answer})
                     task.append({"role": "user", "content": failed.retry_for(draft)})
                     continue
+                if quiet and "outcome" not in retried and not background.marked(draft.answer):
+                    # A check's answer must say what it found (SPEC §3.4): seen, one that followed its own prompt's
+                    # wording ("No reply yet") with no WAITING closed the task.
+                    retried.add("outcome")
+                    record({"kind": "check", "name": "outcome"})
+                    task.append({"role": "assistant", "content": draft.answer})
+                    task.append({"role": "user", "content": background.OUTCOME_RETRY})
+                    continue
                 if has_photo:
                     # Numbers in the person's photo can't be matched as text: no warning, and the answer isn't a
                     # source later (SPEC §3.5.1).

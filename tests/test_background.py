@@ -242,7 +242,7 @@ def test_outcomes():
     assert background.outcome("WAITING: nope") == ("waiting", "nope")
     assert background.outcome("*Done* — here it is") == ("done", "here it is")
     assert background.outcome("failed:\ngone") == ("failed", "gone")
-    assert background.outcome("Sam replied.") == ("done", "Sam replied.")
+    assert background.outcome("Sam replied.") == ("notify", "Sam replied.")
     assert background.outcome("NOTIFY: again") == ("notify", "again")
 
 
@@ -260,3 +260,29 @@ async def test_every_change_tells_the_open_panels(runner, agent, llm, chat, acco
     assert told == [fe.id]
     actions.cancel_background(fe, background.load(fe)[0]["id"], via="settings")
     assert told == [fe.id, fe.id]
+
+
+async def test_an_answer_without_its_word_is_asked_again_and_never_closes_the_task(runner, agent, llm, chat, accounts):
+    """Seen: the task's own prompt said 'If he hasn't replied yet, say "No reply from Leonard yet"'; the check
+    answered just that, with no WAITING, and it counted as DONE: the task ended with "Task done: … No reply"."""
+    fe = person(accounts)
+    background.save(fe, [task(title="Leonard's WhatsApp reply")])
+    idle(agent)
+    llm.answer("No reply from Leonard yet.")
+    llm.answer("WAITING: no reply from Leonard yet")
+    await runner.tick()
+    await settle(agent)
+    assert "doesn't start with WAITING:" in llm.requests[-1]["messages"][-1]["content"]
+    assert not chat.sent
+    (left,) = background.load(fe)
+    assert left["last"] == "no reply from Leonard yet" and left["checks"] == 1
+
+    # Asked again and still without one: sent as news, and the task goes on.
+    left["next"] = time.time() - 1
+    background.save(fe, [left])
+    llm.answer("No reply from Leonard yet.")
+    llm.answer("Still nothing from Leonard.")
+    await runner.tick()
+    await settle(agent)
+    assert chat.texts() == ["_Task update: Leonard's WhatsApp reply_\n\nStill nothing from Leonard."]
+    assert len(background.load(fe)) == 1

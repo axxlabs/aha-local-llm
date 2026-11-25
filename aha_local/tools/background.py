@@ -44,7 +44,8 @@ OUTCOME = re.compile(r"^[\W_]*(WAITING|NOTIFY|DONE|FAILED)\b[ \t*_`]*[:\-–—]
 CHECK = (
     "[Background task you set up earlier, check {n}{late}; the user isn't looking at the chat]\n"
     "Waiting for: {title}\n\n{prompt}\n\n{last}"
-    "Check now. Don't message the user while you check. Start your answer with one of:\n"
+    "Check now: open and read what you're checking before you answer, never answer from memory. Don't message "
+    "the user while you check. Whatever the text above says to answer, start your answer with one of:\n"
     "WAITING: one line on what you found, when it hasn't happened yet. Nothing is sent; you'll check again in "
     "{every}.\n"
     "NOTIFY: the message for the user, when there's news and the task goes on (it reports each time "
@@ -56,6 +57,11 @@ CHECK = (
 # Told whenever an account's tasks change (created, checked, cancelled, ended): the channel sends the Tasks panel
 # its new list at once (SPEC §7.4), rather than at its next 30-second refresh.
 WATCHERS: list[Callable[[Account], None]] = []
+OUTCOME_RETRY = (
+    "[aha check] Your answer doesn't start with WAITING:, NOTIFY:, DONE: or FAILED:. Answer again, starting with "
+    "the one that fits what you found (WAITING: when what you wait for hasn't happened yet), and never mention "
+    "this check."
+)
 LAST_TIME = "Last time you found: {note}\n\n"
 HEADS = {"notify": "Task update: {title}", "done": "Task done: {title}", "failed": "Task failed: {title}"}
 EXPIRED = "_Task expired: {title}_\n\nI stopped waiting on {when}.{last}"
@@ -240,7 +246,8 @@ def register(reg: Registry) -> None:
             "('tell me whenever Sam emails', with until 'never'): each check reports only what's new. "
             "Each check runs `prompt` as a new "
             "request, with only your memory: write it so it makes sense on its own later, with what to look at "
-            "(addresses, names, tracking codes), how, and what counts as done. Checks run only while nobody is "
+            "(addresses, names, tracking codes), how, and what counts as done. Don't say in it what to answer: "
+            "each check is told how to answer. Checks run only while nobody is "
             "using Aha!, so timing isn't exact. Not for something at a set time: use schedule_add for that.",
             params(
                 ["title", "prompt", "every_minutes", "until"],
@@ -275,11 +282,17 @@ def register(reg: Registry) -> None:
 
 
 def outcome(answer: str) -> tuple[str, str]:
-    """("waiting" | "notify" | "done" | "failed", the rest). An answer with no marker closes the task as done."""
+    """("waiting" | "notify" | "done" | "failed", the rest). An answer with no marker (after it was asked again) is
+    sent as news and the task goes on: never closed, and never silently dropped."""
     found = OUTCOME.match(answer.strip())
     if found is None:
-        return "done", answer.strip()
+        return "notify", answer.strip()
     return found.group(1).lower(), answer.strip()[found.end() :].strip()
+
+
+def marked(answer: str) -> bool:
+    """Whether a check's answer starts with WAITING, NOTIFY, DONE or FAILED."""
+    return OUTCOME.match(answer.strip()) is not None
 
 
 def finish(account: Account, task_id: str, answer: str, stopped: bool) -> str | None:
