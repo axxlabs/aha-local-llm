@@ -441,21 +441,28 @@ class Channel:
             actions.forget_memory(r.account, clean_text(r.msg.get("id"), 64) or "", via="settings")
         await r.reply({"t": "memories", "items": actions.memories(r.account), "topics": actions.topics(r.account)})
 
-    async def _tasks(self, r: Request) -> None:
-        """The Tasks panel (SPEC §3.4 "Background tasks", §7.4): the person's background tasks and the idle time
-        the checks wait for. Cancel is the person's own action, so no card."""
-        if r.msg.get("t") == "task_cancel":
-            actions.cancel_background(r.account, clean_text(r.msg.get("id"), 64) or "", via="settings")
+    def _tasks_message(self, account: Account) -> dict:
         agent = self.agent
-        await r.reply(
-            {
-                "t": "tasks",
-                "items": background.listing(r.account),
-                "idle_since": int(agent.last_input) if agent is not None else 0,
-                "idle_after": background.IDLE_AFTER,
-                "busy": agent.working() if agent is not None else False,
-            }
-        )
+        return {
+            "t": "tasks",
+            "items": background.listing(account),
+            "idle_since": int(agent.last_input) if agent is not None else 0,
+            "idle_after": background.IDLE_AFTER,
+            "busy": agent.working() if agent is not None else False,
+        }
+
+    async def _background(self, r: Request) -> None:
+        """The Tasks panel (SPEC §3.4 "Background tasks", §7.4): the person's background tasks and the idle time
+        the checks wait for. Cancel is the person's own action, so no card; the list then goes to every device
+        (tasks_changed)."""
+        task_id = clean_text(r.msg.get("id"), 64) or ""
+        if r.msg.get("t") == "task_cancel" and actions.cancel_background(r.account, task_id, via="settings"):
+            return
+        await r.reply(self._tasks_message(r.account))
+
+    def tasks_changed(self, account: Account) -> None:
+        """An account's tasks changed: their open Tasks panels get the new list now (background.WATCHERS)."""
+        self._spawn(self.to_devices(account, self._tasks_message(account)))
 
     async def _browser(self, r: Request) -> None:
         """Settings → Your browser (SPEC §3.4, §5.7, §5.8, §7.4): what it remembers, trust, saved logins."""
@@ -653,8 +660,8 @@ HANDLERS: dict[str, Callable[[Channel, Request], Awaitable[None]]] = {
     "trace_request": Channel._trace,
     "memories_request": Channel._memories,
     "memory_forget": Channel._memories,
-    "tasks_request": Channel._tasks,
-    "task_cancel": Channel._tasks,
+    "tasks_request": Channel._background,
+    "task_cancel": Channel._background,
     "browser_request": Channel._browser,
     "browser_forget": Channel._browser,
     "browser_clear": Channel._browser,

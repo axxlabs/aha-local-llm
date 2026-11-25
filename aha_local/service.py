@@ -61,6 +61,7 @@ class Service:
         self.channel.agent = self.agent
         self.scheduler = schedule.Scheduler(self.accounts, self.agent, config.timezone)
         self.background = background.Runner(self.accounts, self.agent, config.timezone)
+        background.WATCHERS.append(self.channel.tasks_changed)
         self.started = time.time()
 
     async def _prune_history(self) -> None:

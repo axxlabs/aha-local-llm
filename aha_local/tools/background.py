@@ -17,6 +17,7 @@ import logging
 import re
 import secrets
 import time
+from collections.abc import Callable
 from zoneinfo import ZoneInfo
 
 from .. import dates
@@ -52,6 +53,9 @@ CHECK = (
     "FAILED: the message for the user, when it can't happen any more or can't be checked.\n"
     "NOTIFY, DONE and FAILED send the message to the chat; DONE and FAILED end the task."
 )
+# Told whenever an account's tasks change (created, checked, cancelled, ended): the channel sends the Tasks panel
+# its new list at once (SPEC §7.4), rather than at its next 30-second refresh.
+WATCHERS: list[Callable[[Account], None]] = []
 LAST_TIME = "Last time you found: {note}\n\n"
 HEADS = {"notify": "Task update: {title}", "done": "Task done: {title}", "failed": "Task failed: {title}"}
 EXPIRED = "_Task expired: {title}_\n\nI stopped waiting on {when}.{last}"
@@ -70,6 +74,8 @@ def save(account: Account, entries: list[dict]) -> None:
         account.vault.write_json(path, entries)
     else:
         path.unlink(missing_ok=True)
+    for watcher in WATCHERS:
+        watcher(account)
 
 
 def update(account: Account, task_id: str, fn) -> dict | None:

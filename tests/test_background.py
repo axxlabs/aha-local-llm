@@ -244,3 +244,19 @@ def test_outcomes():
     assert background.outcome("failed:\ngone") == ("failed", "gone")
     assert background.outcome("Sam replied.") == ("done", "Sam replied.")
     assert background.outcome("NOTIFY: again") == ("notify", "again")
+
+
+async def test_every_change_tells_the_open_panels(runner, agent, llm, chat, accounts, monkeypatch):
+    """Seen: a task created while the Tasks panel was open showed only after a refresh."""
+    fe = person(accounts)
+    told: list[str] = []
+    monkeypatch.setattr(background, "WATCHERS", [lambda account: told.append(account.id)])
+    llm.call("task_create", title="X", prompt="Check x", every_minutes=5, until="never")
+    llm.answer("OK.")
+    await agent.inbound(fe, "watch x")
+    card = await chat.next()
+    await agent.approval_reply(fe, card.card["id"], "approve")
+    await settle(agent)
+    assert told == [fe.id]
+    actions.cancel_background(fe, background.load(fe)[0]["id"], via="settings")
+    assert told == [fe.id, fe.id]
