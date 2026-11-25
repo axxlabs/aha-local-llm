@@ -122,14 +122,22 @@ async def test_a_closure_goes_to_the_chat_and_ends_the_task(runner, agent, llm, 
     await settle(agent)
     assert "Last time you found: no reply yet" in llm.requests[-1]["messages"][-1]["content"]
     assert "check 4" in llm.requests[-1]["messages"][-1]["content"]
-    assert chat.texts() == ["_Task done: Reply from Sam about Saturday_\n\nSam replied: yes, see you there."]
+    assert chat.texts() == ["Sam replied: yes, see you there."]
+    assert chat.sent[0].task == {
+        "kind": "done",
+        "title": "Reply from Sam about Saturday",
+        "prompt": task()["prompt"],  # the box's (i): the full description
+        "every": 15 * 60,
+    }
+    # Its own topic: what was going on folded first, and the part is titled with the task's title.
+    assert chat.cuts == [0] and chat.titles[0][1] == "Reply from Sam about Saturday"
     assert background.load(fe) == []
 
     background.save(fe, [task()])
     llm.answer("**FAILED:** the email account isn't connected any more.")
     await runner.tick()
     await settle(agent)
-    assert chat.texts()[-1].startswith("_Task failed: Reply from Sam about Saturday_\n\nthe email account")
+    assert chat.texts()[-1].startswith("the email account") and chat.sent[-1].task["kind"] == "failed"
     assert background.load(fe) == []
 
 
@@ -141,7 +149,8 @@ async def test_notify_tells_the_person_and_the_task_goes_on(runner, agent, llm, 
     await runner.tick()
     await settle(agent)
     assert "NOTIFY:" in llm.requests[-1]["messages"][-1]["content"]
-    assert chat.texts() == ["_Task update: Emails from Sam_\n\nSam wrote again: 'Running late, start without me.'"]
+    assert chat.texts() == ["Sam wrote again: 'Running late, start without me.'"]
+    assert chat.sent[0].task["kind"] == "update" and chat.sent[0].task["title"] == "Emails from Sam"
     (left,) = background.load(fe)
     assert left["updates"] == 1 and left["checks"] == 1
     assert left["last"] == "Sam wrote again: 'Running late, start without me.'"  # so it isn't reported twice
@@ -166,7 +175,8 @@ async def test_an_expired_task_ends_with_a_message_and_no_model_call(runner, age
     agent.last_input = time.time()  # not idle: expiry doesn't wait for idle
     await runner.tick()
     assert not llm.requests and background.load(fe) == []
-    assert chat.texts()[0].startswith("_Task expired: Reply from Sam about Saturday_\n\nI stopped waiting on ")
+    assert chat.texts()[0].startswith("I stopped waiting on ") and chat.sent[0].task["kind"] == "expired"
+    assert chat.cuts == [0]
     assert chat.texts()[0].endswith("The last check found: still 'In transit'")
 
 
@@ -284,5 +294,5 @@ async def test_an_answer_without_its_word_is_asked_again_and_never_closes_the_ta
     llm.answer("Still nothing from Leonard.")
     await runner.tick()
     await settle(agent)
-    assert chat.texts() == ["_Task update: Leonard's WhatsApp reply_\n\nStill nothing from Leonard."]
+    assert chat.texts() == ["Still nothing from Leonard."] and chat.sent[0].task["kind"] == "update"
     assert len(background.load(fe)) == 1

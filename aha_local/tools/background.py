@@ -18,6 +18,7 @@ import re
 import secrets
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
 from .. import dates
@@ -63,8 +64,31 @@ OUTCOME_RETRY = (
     "this check."
 )
 LAST_TIME = "Last time you found: {note}\n\n"
-HEADS = {"notify": "Task update: {title}", "done": "Task done: {title}", "failed": "Task failed: {title}"}
-EXPIRED = "_Task expired: {title}_\n\nI stopped waiting on {when}.{last}"
+EXPIRED = "I stopped waiting on {when}.{last}"
+HEADS = {"update": "Task update", "done": "Task done", "failed": "Task failed", "expired": "Task expired"}
+
+
+@dataclass(frozen=True)
+class Note:
+    """A background task's news for the chat (SPEC §3.4, §7.4 "Task notes"): its own topic, drawn as a box with
+    its kind and the task's title above the message."""
+
+    kind: str  # update | done | failed | expired
+    title: str
+    text: str
+    prompt: str = ""  # the task's full instruction: the box's (i)
+    every: int = 0  # minutes between checks
+
+    def for_app(self) -> dict:
+        return {"kind": self.kind, "title": self.title, "prompt": self.prompt, "every": self.every * 60}
+
+    @property
+    def head(self) -> str:
+        return f"{HEADS[self.kind]}: {self.title}"
+
+    def as_text(self) -> str:
+        """The note as words (the recent turns, a push's preview, an older app)."""
+        return f"{self.head}\n\n{self.text}" if self.text else self.head
 
 
 # ---- storage
@@ -295,8 +319,8 @@ def marked(answer: str) -> bool:
     return OUTCOME.match(answer.strip()) is not None
 
 
-def finish(account: Account, task_id: str, answer: str, stopped: bool) -> str | None:
-    """After a check: the message for the chat when there's news, else None (it waits, quietly). WAITING and
+def finish(account: Account, task_id: str, answer: str, stopped: bool) -> Note | None:
+    """After a check: its note for the chat when there's news, else None (it waits, quietly). WAITING and
     NOTIFY keep the task, with what was found (or said) as the note for the next check; DONE and FAILED end it."""
     kind, text = ("waiting", answer) if stopped else outcome(answer)
     if kind in ("waiting", "notify"):
@@ -320,8 +344,7 @@ def finish(account: Account, task_id: str, answer: str, stopped: bool) -> str | 
         if entry is None:
             return None  # cancelled while it ran
         account.audit({"background_task_closed": task_id, "outcome": kind})
-    head = HEADS[kind].format(title=entry["title"])
-    return f"_{head}_\n\n{text}" if text else f"_{head}_"
+    return Note("update" if kind == "notify" else kind, entry["title"], text, entry["prompt"], entry["every"])
 
 
 def check_prompt(entry: dict, now: float) -> str:
@@ -399,4 +422,5 @@ class Runner:
         account.audit({"background_task_closed": entry["id"], "outcome": "expired"})
         when = dates.for_model(dt.datetime.fromtimestamp(entry["until"], self.tz))
         last = f" The last check found: {entry['last']}" if entry.get("last") else ""
-        await self.agent.send(account, EXPIRED.format(title=entry["title"], when=when, last=last))
+        text = EXPIRED.format(when=when, last=last)
+        await self.agent.task_note(account, Note("expired", entry["title"], text, entry["prompt"], entry["every"]))

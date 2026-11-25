@@ -195,13 +195,21 @@ class Channel:
 
     # ---- output for the agent (agent.AgentOut, approvals.Out)
 
-    async def message(self, account: Account, text: str, image: Image | None = None, open: str = "") -> None:
+    async def message(
+        self, account: Account, text: str, image: Image | None = None, open: str = "", task: dict | None = None
+    ) -> None:
         item: dict = {"t": "msg", "role": "aha", "text": text}
         if image is not None:
             item["image"] = image.to_dict()
         if open:  # "asks" or "stopped": the app keeps it unfolded after a break (SPEC §7.4 "Folding")
             item["open"] = open
+        if task:  # a background task's note: {"kind","title","prompt","every"}, a box (SPEC §7.4 "Task notes")
+            item["task"] = task
         await self.publish(account, item, notify=True)
+
+    async def cut(self, account: Account) -> None:
+        """What's going on folds now, on every device, as with the person's [collapse] (SPEC §7.4 "Folding")."""
+        await self.publish(account, {"t": "cut"})
 
     async def title(self, account: Account, start: int, text: str, new: bool = False) -> None:
         """The title of the conversation since item `start`, shown when the app folds it (SPEC §7.4); `new`: a new
@@ -270,7 +278,11 @@ class Channel:
             return
         payload: dict = {"seq": item["seq"]}
         if self.push_preview and item.get("t") == "msg":
-            payload["preview"] = (item.get("text") or "").splitlines()[0][:120] if item.get("text") else ""
+            first = (item.get("text") or "").splitlines()[0] if item.get("text") else ""
+            task = item.get("task")
+            if isinstance(task, dict):  # a task's note: its title says what it's about
+                first = f"{task.get('title', '')}: {first}" if first else str(task.get("title", ""))
+            payload["preview"] = first[:120]
         sealed = crypto.push_seal(crypto.b64d(device.push_key, 32), payload)
         body = webpush.encrypt(device.push, json.dumps(sealed).encode())
         urgency = "high" if item.get("t") == "approval" else "normal"
@@ -370,7 +382,7 @@ class Channel:
 
     async def _cut(self, r: Request) -> None:
         """[collapse]: the part going on folds now, on every device (SPEC §7.4 "Folding")."""
-        await self.publish(r.account, {"t": "cut"})
+        await self.cut(r.account)
 
     async def _sync(self, r: Request) -> None:
         after = r.msg.get("after")

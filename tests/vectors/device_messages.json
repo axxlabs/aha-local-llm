@@ -85,7 +85,8 @@
       "text",
       "cid?",
       "image?",
-      "open?"
+      "open?",
+      "task?"
     ],
     "title": [
       "seq",

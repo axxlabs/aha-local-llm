@@ -50,7 +50,10 @@ def model_record(model: str, reply) -> dict:
 class AgentOut(Protocol):
     """Where the agent's output goes: the end-to-end channel to the person's devices (e2e/channel.py)."""
 
-    async def message(self, account: Account, text: str, image: Image | None = None, open: str = "") -> None: ...
+    async def message(
+        self, account: Account, text: str, image: Image | None = None, open: str = "", task: dict | None = None
+    ) -> None: ...
+    async def cut(self, account: Account) -> None: ...
     async def title(self, account: Account, start: int, text: str, new: bool = False) -> None: ...
     async def tool(self, account: Account, label: str) -> None: ...
     async def typing(self, account: Account, on: bool, queued: bool = False) -> None: ...
@@ -100,8 +103,9 @@ class Job:
         """Shows nothing while it works: no "typing…", no tool lines (a background check)."""
         return self.kind == "background"
 
-    def finish(self, account: Account, answer: str, stopped: bool) -> str | None:
-        """The message for the chat, or None: nothing is sent and the turn isn't kept."""
+    def finish(self, account: Account, answer: str, stopped: bool) -> str | background.Note | None:
+        """The message for the chat (a background task's note), or None: nothing is sent and the turn isn't
+        kept."""
         done = background.finish if self.kind == "background" else schedule.finish
         return done(account, self.id, answer, stopped)
 
@@ -207,11 +211,20 @@ class Agent:
 
     # ---- outbound
 
-    async def send(self, account: Account, text: str, image: Image | None = None, open: str = "") -> None:
+    async def send(
+        self, account: Account, text: str, image: Image | None = None, open: str = "", task: dict | None = None
+    ) -> None:
         self.last_activity = time.monotonic()
         self.session(account).sent += 1
         account.transcript({"kind": "out", "text": text, "image": bool(image)})
-        await self.out.message(account, text[:20_000], image, open)
+        await self.out.message(account, text[:20_000], image, open, task)
+
+    async def task_note(self, account: Account, note: background.Note) -> None:
+        """A background task's news (SPEC §3.4, §7.4 "Task notes"): always a topic of its own. What was going on
+        folds now (a cut), and the note starts the new part, titled with the task's title."""
+        await self.out.cut(account)
+        await self.send(account, note.text, task=note.for_app())
+        await self.out.title(account, account.seq, note.title)
 
     # ---- inbound
 
@@ -472,12 +485,18 @@ class Agent:
                 # After "✅ Save" there may be nothing to add; if they've heard nothing at all, say something.
                 answer = "" if self.session(account).sent > sent_before else "…"
             await self._stop_typing(account, typing, quiet)  # before the answer, so no refresh can land after it
+            noted = False  # a background task's note: its own topic, already sent and titled
             if job:
-                answer = job.finish(account, answer, stopped)
-                if answer is None:
+                result = job.finish(account, answer, stopped)
+                if result is None:
                     account.transcript({"kind": "answer", "text": "", "job": job.kind, "quiet": True})
                     return  # nothing to tell yet: say nothing, keep the chat clean
-            if answer:
+                if isinstance(result, background.Note):
+                    await self.task_note(account, result)
+                    answer, noted = result.as_text(), True
+                else:
+                    answer = result
+            if answer and not noted:
                 # Unfinished stays unfolded after a break (SPEC §7.4 "Folding"): a task that stopped, or a question.
                 await self.send(account, answer, open="stopped" if stopped else "asks" if folding.asks(answer) else "")
             account.transcript({"kind": "answer", "text": answer})
@@ -486,7 +505,8 @@ class Agent:
             # asked at its end, so they cost only their own words (SPEC §3.2 "Cache slots", §5.4, §7.4).
             prompt, self.session(account).last_prompt = self.session(account).last_prompt, None
             if answer:
-                await self._topic(account, answer, prompt, asked_at, text, titled=not stopped, began=began)
+                titled = not stopped and not noted  # a note keeps the task's title; its memory entry is still asked
+                await self._topic(account, answer, prompt, asked_at, text, titled=titled, began=began)
         finally:
             await turn.__aexit__(None, None, None)
 

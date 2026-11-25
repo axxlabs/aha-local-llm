@@ -78,9 +78,13 @@ class Chat:
         self.states: list[tuple[str, str]] = []
         self.titles: list[tuple[int, str]] = []
         self.tools: list[str] = []  # tool lines, as they happened (SPEC §7.4 "Tools used")
+        self.cuts: list[int] = []  # the folds Aha! made (a background task's note starts a topic)
 
-    async def message(self, account, text, image=None, open="") -> None:
-        self.sent.append(SimpleNamespace(text=text, buttons=[], image=image, card=None, open=open))
+    async def message(self, account, text, image=None, open="", task=None) -> None:
+        self.sent.append(SimpleNamespace(text=text, buttons=[], image=image, card=None, open=open, task=task))
+
+    async def cut(self, account) -> None:
+        self.cuts.append(len(self.sent))  # where it folded: before the next message
 
     async def tool(self, account, label) -> None:
         self.tools.append(label)
