@@ -80,15 +80,16 @@ def context_block(
     now = now or dates.now(timezone)
     topics = [e for e in account.load_context()["topics"] if current is None or e.get("from") != current]
     return (
-        # What changes daily (the date) comes last: the memory before it stays cached from one day to the next.
+        # The date comes before the memory, so the model reads every entry knowing what day it is. The cost: a new
+        # day changes the block from the date on, so the memory is read again once a day (SPEC §4).
         "<context>\n"
-        f"You are talking with: {account.label} ({account.address.split(':', 1)[0]} chat). Household: {household}.\n\n"
+        f"You are talking with: {account.label} ({account.address.split(':', 1)[0]} chat). Household: {household}.\n"
+        f"Today: {now.strftime('%d/%m/%Y')}, a {now.strftime('%A')} ({timezone}).\n"
+        f"The next 14 days: {days_ahead(now)}.\n\n"
         "What you remember about them (each fact approved by them):\n"
         f"{memory.for_context(account)}\n\n"
         "Your memory of earlier topics (what you wrote at the end of each; the messages themselves are gone):\n"
-        f"{render_topics(topics) if topics else '(no earlier topics yet)'}\n\n"
-        f"Today: {now.strftime('%d/%m/%Y')}, a {now.strftime('%A')} ({timezone}).\n"
-        f"The next 14 days: {days_ahead(now)}.\n"
+        f"{render_topics(topics) if topics else '(no earlier topics yet)'}\n"
         "</context>"
     )
 

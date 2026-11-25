@@ -192,15 +192,12 @@ def test_all_of_the_memory_is_always_in_view_and_there_is_no_memory_search(tmp_p
     assert "memory_search" not in reg.names() and "memory_list" not in reg.names()
 
 
-def test_the_memory_stays_cached_from_one_day_to_the_next(tmp_path):
-    """SPEC §4: the date comes after the memory, so a new day changes only the end of the context block."""
+def test_the_date_comes_before_the_memory(tmp_path):
+    """SPEC §4: the model reads every entry knowing what day it is."""
     import datetime as dt
 
     accounts = Accounts(Vault(tmp_path, os.urandom(32)))
     acct = accounts.create("Ana")
     context.save_topic(acct, 3, time.time() - 3600, "Evri parcel", "Tracking H01ABC123")
-    day = dt.datetime(2026, 11, 25, 9, 0)
-    today = context.context_block(acct, "Europe/London", "Home", day)
-    tomorrow = context.context_block(acct, "Europe/London", "Home", day + dt.timedelta(days=1))
-    shared = os.path.commonprefix([today, tomorrow])  # noqa: RUF071 (character by character, as the cache)
-    assert len(shared) >= today.index("Today:")  # everything up to the date is the same text, memory included
+    block = context.context_block(acct, "Europe/London", "Home", dt.datetime(2026, 11, 25, 9, 0))
+    assert block.index("Today: 25/11/2026") < block.index("What you remember") < block.index("H01ABC123")
