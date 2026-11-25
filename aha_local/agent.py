@@ -109,6 +109,11 @@ class Job:
         done = background.finish if self.kind == "background" else schedule.finish
         return done(account, self.id, answer, stopped)
 
+    def interrupted(self, account: Account) -> None:
+        """Stopped before it finished (someone's input, Stop): a background check tells the next one."""
+        if self.kind == "background":
+            background.interrupted(account, self.id)
+
 
 class _Counted:
     """The approvals' output, counted as "the person heard from this task" (so no stray "…" follows)."""
@@ -470,6 +475,8 @@ class Agent:
                 answer, checked, text = await self._within_limit(account, self.solve(account, text, quiet))
             except asyncio.CancelledError:
                 account.transcript({"kind": "stopped"})
+                if job:
+                    job.interrupted(account)
                 await self._stop_typing(account, typing, quiet)
                 raise
             except TimeoutError:

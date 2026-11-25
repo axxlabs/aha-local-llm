@@ -36,7 +36,7 @@ MAX_EVERY = 7 * 24 * 60
 MAX_AHEAD = 366 * 86400
 MAX_TITLE = 120
 MAX_PROMPT = 2000
-MAX_NOTE = 500
+MAX_LAST = 4000  # the previous check's whole answer, given to the next one
 IDLE_AFTER = 5 * 60  # seconds without input from anyone before a check runs
 CHECK_EVERY = 30.0
 NEVER = "never"
@@ -63,7 +63,13 @@ OUTCOME_RETRY = (
     "the one that fits what you found (WAITING: when what you wait for hasn't happened yet), and never mention "
     "this check."
 )
-LAST_TIME = "Last time you found: {note}\n\n"
+LAST_TIME = "The last check ({when}) {how}:\n{note}\n\n"
+LAST_HOW = {
+    "waiting": "answered WAITING",
+    "notify": "answered NOTIFY, and this was sent to the user",
+    "unfinished": "didn't finish; what it had",
+    "interrupted": "was stopped before it finished (someone started using Aha!)",
+}
 EXPIRED = "I stopped waiting on {when}.{last}"
 HEADS = {"update": "Task update", "done": "Task done", "failed": "Task failed", "expired": "Task expired"}
 
@@ -330,19 +336,27 @@ def marked(answer: str) -> bool:
     return OUTCOME.match(answer.strip()) is not None
 
 
+def _last(text: str) -> str:
+    return "\n".join(line.rstrip() for line in text.strip().splitlines())[:MAX_LAST]
+
+
 def finish(account: Account, task_id: str, answer: str, stopped: bool) -> Note | None:
     """After a check: its note for the chat when there's news, else None (it waits, quietly). WAITING and
-    NOTIFY keep the task, with what was found (or said) as the note for the next check; DONE and FAILED end it."""
+    NOTIFY keep the task; DONE and FAILED end it. Whatever it was, the check's answer goes, whole, to the next
+    check (SPEC §3.4): a WAITING line, a NOTIFY message, or what a check that didn't finish had."""
     kind, text = ("waiting", answer) if stopped else outcome(answer)
     if kind in ("waiting", "notify"):
-        note, told = _clean(text, MAX_NOTE), int(kind == "notify")
+        told = int(kind == "notify")
+        how = "unfinished" if stopped else kind
 
         def checked(e: dict) -> dict:
-            later = time.time() + e["every"] * 60
+            now = time.time()
             return {
                 **{k: v for k, v in e.items() if k != "now"},
-                "last": note,
-                "next": later,
+                "last": _last(text),
+                "last_how": how,
+                "last_at": now,
+                "next": now + e["every"] * 60,
                 "checks": e.get("checks", 0) + 1,
                 "updates": e.get("updates", 0) + told,
             }
@@ -358,14 +372,36 @@ def finish(account: Account, task_id: str, answer: str, stopped: bool) -> Note |
     return Note("update" if kind == "notify" else kind, entry["title"], text, entry["prompt"], entry["every"])
 
 
-def check_prompt(entry: dict, now: float) -> str:
+def interrupted(account: Account, task_id: str) -> None:
+    """A check stopped by someone's input: the next one is told so (its result, whatever it was)."""
+    update(
+        account, task_id, lambda e: {**e, "last": e.get("last", ""), "last_how": "interrupted", "last_at": time.time()}
+    )
+
+
+def edit_prompt(account: Account, task_id: str, prompt: str) -> bool:
+    """The person's own edit of what a task checks (the Tasks panel): the next check runs the new text."""
+    text = _prompt(prompt)
+    return bool(text) and update(account, task_id, lambda e: {**e, "prompt": text}) is not None
+
+
+def _last_line(entry: dict, tz: ZoneInfo) -> str:
+    how = entry.get("last_how", "waiting" if entry.get("last") else "")
+    if not how:
+        return ""
+    when = dates.for_model(dt.datetime.fromtimestamp(entry.get("last_at") or entry["next"], tz))
+    note = entry.get("last") or "(nothing)"
+    return LAST_TIME.format(when=when, how=LAST_HOW.get(how, LAST_HOW["waiting"]), note=note)
+
+
+def check_prompt(entry: dict, now: float, tz: ZoneInfo) -> str:
     late = now - entry["next"] > entry["every"] * 60
     return CHECK.format(
         n=entry.get("checks", 0) + 1,
         late=", later than planned: Aha! was busy" if late else "",
         title=entry["title"],
         prompt=entry["prompt"],
-        last=LAST_TIME.format(note=entry["last"]) if entry.get("last") else "",
+        last=_last_line(entry, tz),
         every=every_words(entry["every"]),
     )
 
@@ -382,6 +418,7 @@ def listing(account: Account) -> list[dict]:
             "checks": e.get("checks", 0),
             "updates": e.get("updates", 0),
             "now": bool(e.get("now")),
+            "last_how": e.get("last_how", "waiting" if e.get("last") else ""),
         }
         for e in rows
     ]
@@ -427,7 +464,7 @@ class Runner:
         if self.agent.busy() or not (asked or (due and self.agent.idle(now))):
             return
         _, account, entry = min(asked or due, key=lambda d: d[0])
-        self.agent.start_background(account, entry["id"], check_prompt(entry, now))
+        self.agent.start_background(account, entry["id"], check_prompt(entry, now, self.tz))
         update(account, entry["id"], lambda e: {k: v for k, v in e.items() if k != "now"})  # the panel: checking
 
     async def _expire(self, account: Account, entry: dict) -> None:

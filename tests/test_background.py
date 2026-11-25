@@ -120,7 +120,7 @@ async def test_a_closure_goes_to_the_chat_and_ends_the_task(runner, agent, llm, 
     llm.answer("DONE: Sam replied: yes, see you there.")
     await runner.tick()
     await settle(agent)
-    assert "Last time you found: no reply yet" in llm.requests[-1]["messages"][-1]["content"]
+    assert "answered WAITING:\nno reply yet" in llm.requests[-1]["messages"][-1]["content"]
     assert "check 4" in llm.requests[-1]["messages"][-1]["content"]
     assert chat.texts() == ["Sam replied: yes, see you there."]
     assert chat.sent[0].task == {
@@ -242,7 +242,20 @@ async def test_the_panel_lists_tasks_and_cancel_is_the_persons(runner, agent, ac
     background.save(fe, [task(), task(id="def456", title="Parcel", created=1)])
     rows = background.listing(fe)
     assert [r["id"] for r in rows] == ["abc123", "def456"] and rows[0]["every"] == 15 * 60
-    assert set(rows[0]) == {"id", "title", "prompt", "every", "until", "next", "last", "checks", "updates", "created", "now"}
+    assert set(rows[0]) == {
+        "id",
+        "title",
+        "prompt",
+        "every",
+        "until",
+        "next",
+        "last",
+        "checks",
+        "updates",
+        "created",
+        "now",
+        "last_how",
+    }
     assert actions.cancel_background(fe, "def456", via="settings")
     assert not actions.cancel_background(fe, "def456", via="settings")
     assert [e["id"] for e in background.load(fe)] == ["abc123"]
@@ -317,3 +330,75 @@ async def test_run_now_skips_the_idle_wait_but_not_a_busy_model(runner, agent, l
     (left,) = background.load(fe)
     assert "now" not in left and left["checks"] == 1
     assert not actions.run_background_now(fe, "nope", via="settings")
+
+
+async def test_the_next_check_gets_the_last_result_whatever_it_was(runner, agent, llm, chat, accounts):
+    """Each check is told, whole, what the one before it ended with: WAITING, NOTIFY, or a check that didn't
+    finish or was stopped."""
+    fe = person(accounts)
+    background.save(fe, [task()])
+    idle(agent)
+    long = "WAITING: " + "the inbox shows 3 new emails, none from Sam. " * 20
+    llm.answer(long)
+    await runner.tick()
+    await settle(agent)
+    assert background.load(fe)[0]["last"] == long.removeprefix("WAITING: ").strip()  # whole, not cut to a line
+
+    def again() -> None:
+        e = background.load(fe)[0]
+        e["next"] = time.time() - 1
+        background.save(fe, [e])
+
+    again()
+    llm.answer("NOTIFY: Sam wrote: 'Lunch is off.'")
+    await runner.tick()
+    await settle(agent)
+    assert "answered WAITING:\nthe inbox shows 3 new emails" in llm.requests[-1]["messages"][-1]["content"]
+
+    again()
+    start = len(llm.requests)
+    for _ in range(agent.config.max_model_calls):
+        llm.call("task_list")
+    await runner.tick()
+    await settle(agent)
+    first = llm.requests[start]["messages"][-1]["content"]
+    assert "answered NOTIFY, and this was sent to the user:\nSam wrote: 'Lunch is off.'" in first
+    assert background.load(fe)[0]["last_how"] == "unfinished"
+
+    # Stopped by someone's message: the next check is told so.
+    again()
+    gate = asyncio.Event()
+    real = llm.chat
+
+    async def slow(messages, *a, **kw):
+        if "Background task" in str(messages[-1].get("content")):
+            await gate.wait()
+        return await real(messages, *a, **kw)
+
+    llm.chat = slow
+    await runner.tick()
+    await asyncio.sleep(0.05)
+    llm.answer("Hi!")
+    await agent.inbound(fe, "hello")
+    await settle(agent)
+    assert background.load(fe)[0]["last_how"] == "interrupted"
+    llm.chat = real
+    idle(agent)
+    llm.answer("WAITING: nothing")
+    await runner.tick()
+    await settle(agent)
+    assert "was stopped before it finished" in llm.requests[-1]["messages"][-1]["content"]
+
+
+async def test_the_person_edits_what_a_task_checks(runner, agent, llm, accounts):
+    fe = person(accounts)
+    background.save(fe, [task()])
+    assert actions.edit_background(fe, "abc123", "Check the WhatsApp chat with Sam\nfor a reply.", via="settings")
+    assert background.load(fe)[0]["prompt"] == "Check the WhatsApp chat with Sam\nfor a reply."
+    assert not actions.edit_background(fe, "abc123", "   ", via="settings")  # never empty
+    assert not actions.edit_background(fe, "nope", "x", via="settings")
+    idle(agent)
+    llm.answer("WAITING: nothing yet")
+    await runner.tick()
+    await settle(agent)
+    assert "Check the WhatsApp chat with Sam\nfor a reply." in llm.requests[-1]["messages"][-1]["content"]

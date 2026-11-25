@@ -472,6 +472,12 @@ class Channel:
         task_id, t = clean_text(r.msg.get("id"), 64) or "", r.msg.get("t")
         if t == "task_cancel" and actions.cancel_background(r.account, task_id, via="settings"):
             return
+        if t == "task_edit":
+            prompt = clean_text(r.msg.get("prompt"), background.MAX_PROMPT) or ""
+            if actions.edit_background(r.account, task_id, prompt, via="settings"):
+                return
+            await r.reply({"t": "error", "code": "bad_value"})
+            return
         if t == "task_run" and actions.run_background_now(r.account, task_id, via="settings"):
             if self.background is not None:
                 self._spawn(self.background.tick())  # now, not at the next 30-second look
@@ -681,6 +687,7 @@ HANDLERS: dict[str, Callable[[Channel, Request], Awaitable[None]]] = {
     "tasks_request": Channel._background,
     "task_cancel": Channel._background,
     "task_run": Channel._background,
+    "task_edit": Channel._background,
     "browser_request": Channel._browser,
     "browser_forget": Channel._browser,
     "browser_clear": Channel._browser,

@@ -43,6 +43,10 @@
     "task_run": [
       "id"
     ],
+    "task_edit": [
+      "id",
+      "prompt"
+    ],
     "trace_request": [
       "seq"
     ],

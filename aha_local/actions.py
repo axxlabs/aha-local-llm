@@ -86,6 +86,13 @@ def cancel_background(account: Account, task_id: str, via: str) -> bool:
     return True
 
 
+def edit_background(account: Account, task_id: str, prompt: str, via: str) -> bool:
+    if not background.edit_prompt(account, task_id, prompt):
+        return False
+    account.audit({"background_task_edited": task_id, "via": via})
+    return True
+
+
 def run_background_now(account: Account, task_id: str, via: str) -> bool:
     if not background.run_now(account, task_id):
         return False
