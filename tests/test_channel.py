@@ -515,3 +515,18 @@ def test_collapse_publishes_a_cut_and_the_next_part_starts_after_it():
     assert folding.segment_start(items, ZoneInfo("UTC")) is None  # nothing going on after the cut
     items.append({"t": "msg", "seq": 4, "ts": 1200})
     assert folding.segment_start(items, ZoneInfo("UTC")) == (4, 1200)
+
+
+async def test_a_fold_with_nothing_open_since_the_last_one_is_skipped(tmp_path):
+    """A background check folds before each run (SPEC §3.4 "Task notes"): quiet checks mustn't pile up cuts."""
+    rig = Rig(tmp_path)
+    await rig.pair()
+    acct = rig.accounts.find("Ana")
+    await rig.channel.message(acct, "hello")
+    await rig.channel.cut(acct)
+    await rig.channel.cut(acct)  # nothing shown since: no second cut
+    cuts = [it for it in acct.recent_items() if it.get("t") == "cut"]
+    assert len(cuts) == 1
+    await rig.channel.message(acct, "again")
+    await rig.channel.cut(acct)
+    assert len([it for it in acct.recent_items() if it.get("t") == "cut"]) == 2

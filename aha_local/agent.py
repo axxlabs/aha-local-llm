@@ -96,6 +96,7 @@ class Job:
     its module decides what of the answer reaches the chat."""
 
     id: str
+    start: int = 0  # the first item after the fold the check made before it started: its note's part
     quiet: bool = True  # no "typing…", no tool lines
 
     def finish(self, account: Account, answer: str, stopped: bool) -> background.Note | None:
@@ -121,7 +122,11 @@ class _Counted:
 
     async def state(self, account: Account, approval_id: str, state: str) -> None:
         await self.agent.out.state(account, approval_id, state)
-        if self.agent.is_running(account):  # answered: working again, said now rather than at the next tick
+        # Answered: working again, said now rather than at the next tick. Not for a background check, which
+        # shows nothing while it works and never turns it off (seen: "Aha! is working…" stayed after a check's
+        # note, once a card in it was answered).
+        live = self.agent.session(account)
+        if self.agent.is_running(account) and not live.background:
             await self.agent._typing_frame(account, True, self.agent.queued(account))
 
     async def text(self, account: Account, text: str) -> None:
@@ -216,12 +221,19 @@ class Agent:
         account.transcript({"kind": "out", "text": text, "image": bool(image)})
         await self.out.message(account, text[:20_000], image, open, task)
 
-    async def task_note(self, account: Account, note: background.Note) -> None:
-        """A background task's news (SPEC §3.4, §7.4 "Task notes"): always a topic of its own. What was going on
-        folds now (a cut), and the note starts the new part, titled with the task's title."""
-        await self.out.cut(account)
+    async def task_note(self, account: Account, note: background.Note, start: int = 0) -> None:
+        """A background task's news (SPEC §3.4, §7.4 "Task notes"): always in a topic of its own. A check folded
+        what was going on before it started (`start`: the first item after that fold); with no check (it
+        expired), it folds now. The part is titled with the task's title."""
+        if not start:
+            start = await self._fold(account)
         await self.send(account, note.text, task=note.for_app())
-        await self.out.title(account, account.seq, note.title)
+        await self.out.title(account, start, note.title)
+
+    async def _fold(self, account: Account) -> int:
+        """Fold what's going on (a cut; the channel skips it when nothing is open): the seq the next part starts at."""
+        await self.out.cut(account)
+        return account.seq + 1
 
     # ---- inbound
 
@@ -334,12 +346,18 @@ class Agent:
         except Exception as e:
             log.warning("warming the model failed: %s", e)
 
-    def start_background(self, account: Account, task_id: str, text: str) -> None:
-        """A background task's check, while the household is idle (SPEC §3.4): run as this account, quietly."""
-        account.transcript({"kind": "background", "id": task_id})
+    async def start_background(self, account: Account, task_id: str, text: str) -> None:
+        """A background task's check, while the household is idle or on Run now (SPEC §3.4): run as this account,
+        quietly. What was going on folds first, so all the check shows (a card, its note) is a topic of its own."""
         live = self.session(account)
-        live.background = task_id
-        live.task = asyncio.create_task(self.run(account, text, Job(task_id)))
+        live.background = task_id  # set before the fold's await: the runner sees it busy
+        held = live.task = asyncio.get_running_loop().create_future()  # held while folding: nothing else starts
+        start = await self._fold(account)
+        if held.cancelled():  # someone wrote while it folded: the check waits for the next idle time
+            live.task, live.background = None, ""
+            return
+        account.transcript({"kind": "background", "id": task_id})
+        live.task = asyncio.create_task(self.run(account, text, Job(task_id, start)))
 
     async def run(self, account: Account, text: str, job: Job | None = None) -> None:
         held = self.browser.hold(account.id) if self.browser else contextlib.nullcontext()
@@ -385,9 +403,9 @@ class Agent:
             await asyncio.sleep(self.typing_every)
 
     async def _stop_typing(self, account: Account, typing: asyncio.Task, quiet: bool = False) -> None:
+        """Said off at the end of every run, a quiet check's too: harmless when it was never on."""
         typing.cancel()
-        if not quiet:
-            await self._typing_frame(account, False)
+        await self._typing_frame(account, False)
 
     def queued(self, account: Account) -> bool:
         """Its task waits for the model while another person's runs (SPEC §3.3): the app says so."""
@@ -472,7 +490,7 @@ class Agent:
                 if result is None:
                     account.transcript({"kind": "answer", "text": "", "job": "background", "quiet": True})
                     return  # nothing to tell yet: say nothing, keep the chat clean
-                await self.task_note(account, result)
+                await self.task_note(account, result, job.start)
                 answer, noted = result.as_text(), True
             if answer and not noted:
                 # Unfinished stays unfolded after a break (SPEC §7.4 "Folding"): a task that stopped, or a question.

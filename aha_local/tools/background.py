@@ -492,7 +492,7 @@ class Runner:
         if self.agent.busy() or not (asked or (due and self.agent.idle(now))):
             return
         _, account, entry = min(asked or due, key=lambda d: d[0])
-        self.agent.start_background(account, entry["id"], check_prompt(entry, now, self.tz))
+        await self.agent.start_background(account, entry["id"], check_prompt(entry, now, self.tz))
         update(account, entry["id"], lambda e: {k: v for k, v in e.items() if k != "now"})  # the panel: checking
 
     async def _expire(self, account: Account, entry: dict) -> None:

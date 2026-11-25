@@ -447,3 +447,21 @@ async def test_a_check_saying_it_will_check_again_isnt_a_schedule_claim(runner, 
     await settle(agent)
     sent_back = [str(r["messages"][-1].get("content")) for r in llm.requests[1:]]
     assert not any("task_create" in m for m in sent_back), sent_back
+
+
+async def test_a_check_folds_first_and_a_card_in_it_leaves_no_working(runner, agent, llm, chat, accounts):
+    """Seen: after a check's note, "Aha! is working…" stayed: a card in the check was answered, which said
+    "working" again, and a check never says it stopped. And the check folds what was going on before it starts,
+    so its card and its note are one topic of their own."""
+    fe = person(accounts)
+    background.save(fe, [task()])
+    idle(agent)
+    llm.call("task_create", title="Y", prompt="Check y", every_minutes=60, until="never")  # any card will do
+    llm.answer("DONE: Sam replied.")
+    await runner.tick()
+    card = await chat.next()
+    assert card.card is not None and chat.cuts == [0]  # folded before the check showed anything
+    await agent.approval_reply(fe, card.card["id"], "approve")
+    await settle(agent)
+    assert True not in chat.typed and chat.typed[-1] is False
+    assert chat.texts()[-1] == "Sam replied." and chat.cuts == [0]  # one fold: the card and the note together

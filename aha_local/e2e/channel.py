@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import __version__, actions, messages, reports
+from .. import __version__, actions, folding, messages, reports
 from ..accounts import Account, Accounts, Device
 from ..certs import needs_renewal
 from ..items import Image
@@ -209,8 +209,13 @@ class Channel:
         await self.publish(account, item, notify=True)
 
     async def cut(self, account: Account) -> None:
-        """What's going on folds now, on every device, as with the person's [collapse] (SPEC §7.4 "Folding")."""
-        await self.publish(account, {"t": "cut"})
+        """What's going on folds now, on every device, as with the person's [collapse] (SPEC §7.4 "Folding"). Not
+        when nothing is open since the last cut: a background check folds before each run, and quiet ones would
+        pile up cuts."""
+        items = account.recent_items()
+        last_cut = max((it["seq"] for it in items if it.get("t") == "cut"), default=0)
+        if any(it.get("t") in folding.SHOWN and it["seq"] > last_cut for it in items):
+            await self.publish(account, {"t": "cut"})
 
     async def title(self, account: Account, start: int, text: str, new: bool = False) -> None:
         """The title of the conversation since item `start`, shown when the app folds it (SPEC §7.4); `new`: a new
