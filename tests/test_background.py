@@ -402,3 +402,22 @@ async def test_the_person_edits_what_a_task_checks(runner, agent, llm, accounts)
     await runner.tick()
     await settle(agent)
     assert "Check the WhatsApp chat with Sam\nfor a reply." in llm.requests[-1]["messages"][-1]["content"]
+
+
+async def test_the_panel_lists_reminders_and_scheduled_tasks_too(runner, agent, accounts, monkeypatch):
+    """Seen: a task at a set time (a scheduled task) wasn't in the Tasks panel, so it looked like it was never
+    made, and asking again added a second one."""
+    from aha_local.tools import schedule
+
+    fe = person(accounts)
+    told: list[str] = []
+    monkeypatch.setattr(background, "WATCHERS", [lambda account: told.append(account.id)])
+    later = time.time() + 300
+    schedule.save(
+        fe, [{"id": "ac251e", "kind": "task", "text": "Google my name", "repeat": "none", "anchor": "x", "next": later}]
+    )
+    assert told == [fe.id]  # an open panel hears of it at once
+    assert schedule.listing(fe) == [
+        {"id": "ac251e", "kind": "task", "text": "Google my name", "next": later, "repeat": "none"}
+    ]
+    assert actions.cancel_scheduled(fe, "ac251e", via="settings") and schedule.listing(fe) == []

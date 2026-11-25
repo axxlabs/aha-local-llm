@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 from .. import dates
 from ..accounts import Account
 from ..approvals import Field
-from . import guard
+from . import background, guard
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
 log = logging.getLogger("aha.schedule")
@@ -92,6 +92,13 @@ def save(account: Account, entries: list[dict]) -> None:
         account.vault.write_json(path, entries)
     else:
         path.unlink(missing_ok=True)
+    background.changed(account)  # the Tasks panel lists these too (SPEC §7.4)
+
+
+def listing(account: Account) -> list[dict]:
+    """For the app's Tasks panel: reminders and scheduled tasks, soonest first (SPEC §6.5)."""
+    rows = sorted(load(account), key=lambda e: e["next"])
+    return [{k: e.get(k) for k in ("id", "kind", "text", "next", "repeat")} for e in rows]
 
 
 def update(account: Account, entry_id: str, fn) -> None:

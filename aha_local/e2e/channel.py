@@ -33,7 +33,7 @@ from ..accounts import Account, Accounts, Device
 from ..certs import needs_renewal
 from ..items import Image
 from ..protocol import E2E, Cert, CertIssued, CertRequest, DeviceStatus, Pair, Push, Report, ReportResult, Revoke, b64
-from ..tools import background, google
+from ..tools import background, google, schedule
 from . import crypto, webpush
 
 log = logging.getLogger("aha.channel")
@@ -460,6 +460,7 @@ class Channel:
         return {
             "t": "tasks",
             "items": [{**t, "running": t["id"] in checking} for t in background.listing(account)],
+            "scheduled": schedule.listing(account),
             "idle_since": int(agent.last_input) if agent is not None else 0,
             "idle_after": background.IDLE_AFTER,
             "busy": agent.working() if agent is not None else False,
@@ -471,6 +472,8 @@ class Channel:
         (tasks_changed)."""
         task_id, t = clean_text(r.msg.get("id"), 64) or "", r.msg.get("t")
         if t == "task_cancel" and actions.cancel_background(r.account, task_id, via="settings"):
+            return
+        if t == "scheduled_cancel" and actions.cancel_scheduled(r.account, task_id, via="settings"):
             return
         if t == "task_edit":
             prompt = clean_text(r.msg.get("prompt"), background.MAX_PROMPT) or ""
@@ -688,6 +691,7 @@ HANDLERS: dict[str, Callable[[Channel, Request], Awaitable[None]]] = {
     "task_cancel": Channel._background,
     "task_run": Channel._background,
     "task_edit": Channel._background,
+    "scheduled_cancel": Channel._background,
     "browser_request": Channel._browser,
     "browser_forget": Channel._browser,
     "browser_clear": Channel._browser,
