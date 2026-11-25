@@ -366,7 +366,7 @@ async def test_a_new_windows_blank_page_is_said_and_the_last_page_given(setup, l
     assert retry.startswith("[aha check]") and "blank page of a new browser window" in retry
     assert chat.texts()[-1] == "Your trolley has the rice in it."
 
-    assert await agent.forget_site(fe, "shop.example") and signins.last_page(fe) == ""
+    assert await agent.browser_actions.forget_site(fe, "shop.example", via="chat") and signins.last_page(fe) == ""
 
 
 def test_a_site_action_claimed_without_a_browser_action_is_caught():

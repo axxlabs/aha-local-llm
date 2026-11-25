@@ -28,12 +28,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import __version__, messages, reports
+from .. import __version__, actions, messages, reports
 from ..accounts import Account, Accounts, Device
 from ..certs import needs_renewal
 from ..items import Image
 from ..protocol import E2E, Cert, CertIssued, CertRequest, DeviceStatus, Pair, Push, Report, ReportResult, Revoke, b64
-from ..tools import logins, mail, signins, trusted
+from ..tools import mail
 from . import crypto, webpush
 
 log = logging.getLogger("aha.channel")
@@ -127,16 +127,6 @@ def photo(value: object) -> Image | None:
     return Image(mime=value["mime"], b64=b64)
 
 
-def browser_list(account: Account, known: list[dict]) -> list[dict]:
-    """Settings → Your browser: the sites it remembers (`known`, read from the person's browser), the trusted ones,
-    and saved logins (SPEC §3.4, §5.7, §5.8)."""
-    trust, saved = set(trusted.sites(account)), logins.sites(account)
-    listed = {s["site"]: {**s, "trusted": s["site"] in trust} for s in known}
-    for site in (trust | saved) - set(listed):
-        listed[site] = {"site": site, "signed_in": False, "trusted": site in trust}
-    return [{**listed[s], "login_saved": s in saved} for s in sorted(listed)]
-
-
 def clean_text(value: object, limit: int) -> str | None:
     if not isinstance(value, str):
         return None
@@ -151,6 +141,16 @@ def load_or_create_identity(vault, path: Path) -> crypto.ComputerIdentity:
     identity = crypto.ComputerIdentity.generate()
     vault.create(path, json.dumps(identity.to_dict()).encode())
     return identity
+
+
+@dataclass
+class Request:
+    """A message from one of the person's devices, and how to answer that device."""
+
+    account: Account
+    device: Device
+    msg: dict
+    reply: Callable[[dict], Awaitable[bool]]
 
 
 @dataclass
@@ -317,175 +317,177 @@ class Channel:
     # ---- what devices ask for
 
     async def _dispatch(self, account: Account, device: Device, msg: dict) -> None:
-        t = msg.get("t")
-        reply = lambda m: self._send(account, device, m)  # noqa: E731
-        if t == "hello":
-            first = device.name == "New device"
-            name = clean_text(msg.get("name"), 60)
-            if name:
-                device.name = name.strip() or device.name
-            if "push" in msg:
-                device.push = msg["push"] if webpush.valid_subscription(msg["push"]) else None
-            account.save_device(device)
-            if first and account.seq == 0:
-                await self.message(account, messages.WELCOME)
-        elif t == "say":
-            text = clean_text(msg.get("text"), MAX_TEXT) or ""
-            cid = clean_text(msg.get("cid"), 64) or ""
-            image = photo(msg.get("image"))
-            if msg.get("image") is not None and image is None:
-                await reply({"t": "error", "code": "bad_image"})
+        handler = HANDLERS.get(msg.get("t"))  # type: ignore[arg-type]
+        req = Request(account, device, msg, lambda m: self._send(account, device, m))
+        if handler is None:
+            await req.reply({"t": "error", "code": "unknown_type"})
+            return
+        await handler(self, req)
+
+    async def _hello(self, r: Request) -> None:
+        first = r.device.name == "New device"
+        name = clean_text(r.msg.get("name"), 60)
+        if name:
+            r.device.name = name.strip() or r.device.name
+        if "push" in r.msg:
+            r.device.push = r.msg["push"] if webpush.valid_subscription(r.msg["push"]) else None
+        r.account.save_device(r.device)
+        if first and r.account.seq == 0:
+            await self.message(r.account, messages.WELCOME)
+
+    async def _say(self, r: Request) -> None:
+        text = clean_text(r.msg.get("text"), MAX_TEXT) or ""
+        cid = clean_text(r.msg.get("cid"), 64) or ""
+        image = photo(r.msg.get("image"))
+        if r.msg.get("image") is not None and image is None:
+            await r.reply({"t": "error", "code": "bad_image"})
+            return
+        if not text.strip() and image is None:
+            return
+        echo = {"t": "msg", "role": "me", "text": text, "cid": cid}
+        if image is not None:
+            echo["image"] = image.to_dict()
+        await self.publish(r.account, echo)
+        if self.agent is not None:
+            await self.agent.inbound(r.account, text, image)
+
+    async def _approval_reply(self, r: Request) -> None:
+        decision = r.msg.get("decision")
+        approval_id = clean_text(r.msg.get("id"), 32)
+        if decision not in ("approve", "decline", "edit") or not approval_id or self.agent is None:
+            return
+        note = clean_text(r.msg.get("note"), 2000) or ""
+        await self.agent.approval_reply(r.account, approval_id, decision, r.msg.get("values"), note)
+
+    async def _stop(self, r: Request) -> None:
+        if self.agent is not None:
+            await self.agent.stop(r.account)
+
+    async def _cut(self, r: Request) -> None:
+        """[collapse]: the part going on folds now, on every device (SPEC §7.4 "Folding")."""
+        await self.publish(r.account, {"t": "cut"})
+
+    async def _sync(self, r: Request) -> None:
+        after = r.msg.get("after")
+        after = after if isinstance(after, int) and after >= 0 else 0
+        since = time.time() - self.history_days * 86400 if after == 0 else 0
+        days = r.msg.get("days")
+        if after == 0 and isinstance(days, int) and 0 <= days < self.history_days:
+            since = time.time() - days * 86400
+        items = fit(r.account.items(after=after, since=since, limit=SYNC_LIMIT))
+        working = self.agent is not None and self.agent.owes_reply(r.account)  # it may have missed `typing`
+        start = r.account.history_start()
+        await r.reply({"t": "sync", "items": items, "last": r.account.seq, "start": start, "working": working})
+
+    async def _history(self, r: Request) -> None:
+        before, limit = r.msg.get("before"), r.msg.get("limit")
+        if not isinstance(before, int) or before < 1:
+            return
+        limit = limit if isinstance(limit, int) and 1 <= limit <= HISTORY_LIMIT else HISTORY_LIMIT
+        await r.reply({"t": "history", "items": fit(r.account.items(before=before, limit=limit))})
+
+    async def _history_settings(self, r: Request) -> None:
+        await r.reply({"t": "history_settings", "days": r.account.history_days})
+
+    async def _history_settings_set(self, r: Request) -> None:
+        days = r.msg.get("days")
+        if days not in HISTORY_DAYS:
+            await r.reply({"t": "error", "code": "bad_value"})
+            return
+        r.account.history_days = days
+        r.account.save()
+        await self.to_devices(r.account, {"t": "history_settings", "days": days})
+        if r.account.prune_history():
+            await self.history_changed(r.account)
+
+    async def _history_clear(self, r: Request) -> None:
+        if self.agent is not None:
+            await self.agent.stop(r.account, quiet=True)
+        r.account.clear_history()
+        log.info("history cleared for an account")
+        await self.history_changed(r.account)
+
+    async def _model(self, r: Request) -> None:
+        """Settings → Model (SPEC §3.2): one choice for the household; the new model loads at once."""
+        if self.models is None:
+            await r.reply({"t": "error", "code": "unknown_type"})
+            return
+        setting = r.msg.get("t") == "model_set"
+        if setting:
+            model = clean_text(r.msg.get("model"), 64) or ""
+            if not await self.models.set(model):
+                await r.reply({"t": "error", "code": "bad_model"})
                 return
-            if not text.strip() and image is None:
-                return
-            echo = {"t": "msg", "role": "me", "text": text, "cid": cid}
-            if image is not None:
-                echo["image"] = image.to_dict()
-            await self.publish(account, echo)
+            r.account.audit({"model_set": model, "via": "settings"})
             if self.agent is not None:
-                await self.agent.inbound(account, text, image)
-        elif t == "approval_reply":
-            decision = msg.get("decision")
-            approval_id = clean_text(msg.get("id"), 32)
-            if decision not in ("approve", "decline", "edit") or not approval_id or self.agent is None:
-                return
-            values = msg.get("values")
-            note = clean_text(msg.get("note"), 2000) or ""
-            await self.agent.approval_reply(account, approval_id, decision, values, note)
-        elif t == "stop":
-            if self.agent is not None:
-                await self.agent.stop(account)
-        elif t == "cut":  # [collapse]: the part going on folds now, on every device (SPEC §7.4 "Folding")
-            await self.publish(account, {"t": "cut"})
-        elif t == "sync_request":
-            after = msg.get("after")
-            after = after if isinstance(after, int) and after >= 0 else 0
-            since = time.time() - self.history_days * 86400 if after == 0 else 0
-            days = msg.get("days")
-            if after == 0 and isinstance(days, int) and 0 <= days < self.history_days:
-                since = time.time() - days * 86400
-            items = fit(account.items(after=after, since=since, limit=SYNC_LIMIT))
-            working = self.agent is not None and self.agent.owes_reply(account)  # it may have missed `typing`
-            await reply(
-                {"t": "sync", "items": items, "last": account.seq, "start": account.history_start(), "working": working}
-            )
-        elif t == "history_request":
-            before = msg.get("before")
-            limit = msg.get("limit")
-            if not isinstance(before, int) or before < 1:
-                return
-            limit = limit if isinstance(limit, int) and 1 <= limit <= HISTORY_LIMIT else HISTORY_LIMIT
-            await reply({"t": "history", "items": fit(account.items(before=before, limit=limit))})
-        elif t == "history_settings_request":
-            await reply({"t": "history_settings", "days": account.history_days})
-        elif t == "history_settings_set":
-            days = msg.get("days")
-            if days not in HISTORY_DAYS:
-                await reply({"t": "error", "code": "bad_value"})
-                return
-            account.history_days = days
-            account.save()
-            await self.to_devices(account, {"t": "history_settings", "days": days})
-            if account.prune_history():
-                await self.history_changed(account)
-        elif t == "history_clear":
-            if self.agent is not None:
-                await self.agent.stop(account, quiet=True)
-            account.clear_history()
-            log.info("history cleared for an account")
-            await self.history_changed(account)
-        elif t in ("model_request", "model_set"):
-            # Settings → Model (SPEC §3.2): one choice for the household; the new model loads at once.
-            if self.models is None:
-                await reply({"t": "error", "code": "unknown_type"})
-                return
-            if t == "model_set":
-                model = clean_text(msg.get("model"), 64) or ""
-                if not await self.models.set(model):
-                    await reply({"t": "error", "code": "bad_model"})
-                    return
-                account.audit({"model_set": model})
-                if self.agent is not None:
-                    self._spawn(self.agent.warm())
-            listing = await self.models.listing()
-            await (self.to_devices(account, listing) if t == "model_set" else reply(listing))
-        elif t == "trace_request":
-            # A message's ⋯ → Details (SPEC §3.8): what the model wrote, thought and called, with times.
-            seq = msg.get("seq")
-            if isinstance(seq, int) and seq > 0:
-                await reply({"t": "trace", "seq": seq, "events": trace(account.read_transcript(), seq)})
-        elif t == "memories_request":
-            items = [{"id": m.get("id"), "text": m.get("text")} for m in account.load_memory()]
-            await reply({"t": "memories", "items": items})
-        elif t in ("browser_request", "browser_forget", "browser_clear", "browser_trust", "login_forget"):
-            # Settings → Your browser (SPEC §3.4, §5.7, §7.4): what the person's browser remembers, and trust.
-            site = clean_text(msg.get("site"), 255) or ""
-            if t == "login_forget" and site:  # the person's own action: no card (SPEC §5.8)
-                if logins.forget(account, signins.site_name(site) or site):
-                    account.audit({"login_forgotten_in_settings": signins.site_name(site) or site})
-            elif t == "browser_trust" and isinstance(msg.get("trusted"), bool):
-                if not trusted.set_trusted(account, site, msg["trusted"]):
-                    await reply({"t": "error", "code": "bad_site"})
-            elif self.agent is not None:
-                if t == "browser_forget" and site:
-                    await self.agent.forget_site(account, site)
-                elif t == "browser_clear":
-                    await self.agent.clear_browser(account)
-            known = await self.agent.browser_sites(account) if self.agent is not None else []
-            await reply({"t": "browser", "sites": browser_list(account, known)})
-        elif t in ("connections_request", "email_disconnect"):
-            # Settings → Connections (SPEC §7.4): what this person connected Aha! to. The address only, never a token.
-            email = clean_text(msg.get("email"), 320) or ""
-            if t == "email_disconnect" and mail.address(account):
-                await mail.disconnect(account, email)  # one address; every one when none is given (older apps)
-                account.audit({"email_disconnected_in_settings": email or "all"})
-            await reply({"t": "connections", "email": mail.address(account), "emails": mail.addresses(account)})
-        elif t == "memory_forget":
-            # Settings → What Aha! remembers: the person's own action, so no card (SPEC §5.4).
-            memory_id = clean_text(msg.get("id"), 64)
-            items = account.load_memory()
-            if memory_id and any(m.get("id") == memory_id for m in items):
-                account.save_memory([m for m in items if m.get("id") != memory_id])
-                account.audit({"memory_forgotten_in_settings": memory_id})
-            items = [{"id": m.get("id"), "text": m.get("text")} for m in account.load_memory()]
-            await reply({"t": "memories", "items": items})
-        elif t == "devices_request":
-            await reply({"t": "devices", "items": self._device_list(account, device)})
-        elif t == "revoke_device":
-            dev = msg.get("device")
-            if isinstance(dev, str) and dev in account.devices:
-                if dev != device.dev:
-                    await self.revoke(account, dev)
-                    await reply({"t": "devices", "items": self._device_list(account, device)})
-                else:
-                    await self.revoke(account, dev)
-        elif t == "report_preview":
-            note = clean_text(msg.get("note"), reports.MAX_NOTE) or ""
-            app = clean_text(msg.get("app"), 20) or ""
-            versions = reports.versions(app, __version__, self.models.current if self.models else "")
-            draft = reports.build(
-                account.read_transcript(),
-                reports.parse_count(msg.get("count")),
-                note,
-                msg.get("details") is True,
-                versions,
-            )
-            self.drafts[account.id] = draft
-            await reply({"t": "report_draft", "id": draft.id, "text": draft.text})
-        elif t == "report_send":
-            draft = self.drafts.get(account.id)
-            if draft is None or draft.id != msg.get("id") or draft.expires < time.time():
-                await reply(
-                    {"t": "report_sent", "id": clean_text(msg.get("id"), 32) or "", "ok": False, "code": "expired"}
-                )
-                return
-            del self.drafts[account.id]
-            if "report" not in self.gateway_features:  # an older or self-hosted gateway without reports
-                await reply({"t": "report_sent", "id": draft.id, "ok": False, "code": "reports_off"})
-                return
-            self._spawn(self._send_report(account, device, draft))
-        else:
-            await reply({"t": "error", "code": "unknown_type"})
+                self._spawn(self.agent.warm())
+        listing = await self.models.listing()
+        await (self.to_devices(r.account, listing) if setting else r.reply(listing))
+
+    async def _trace(self, r: Request) -> None:
+        """A message's ⋯ → Details (SPEC §3.8): what the model wrote, thought and called, with times."""
+        seq = r.msg.get("seq")
+        if isinstance(seq, int) and seq > 0:
+            await r.reply({"t": "trace", "seq": seq, "events": trace(r.account.read_transcript(), seq)})
+
+    async def _memories(self, r: Request) -> None:
+        """Settings → What Aha! remembers; Forget is the person's own action, so no card (SPEC §5.4)."""
+        if r.msg.get("t") == "memory_forget":
+            actions.forget_memory(r.account, clean_text(r.msg.get("id"), 64) or "", via="settings")
+        await r.reply({"t": "memories", "items": actions.memories(r.account)})
+
+    async def _browser(self, r: Request) -> None:
+        """Settings → Your browser (SPEC §3.4, §5.7, §5.8, §7.4): what it remembers, trust, saved logins."""
+        t, site = r.msg.get("t"), clean_text(r.msg.get("site"), 255) or ""
+        browser = self.agent.browser_actions if self.agent is not None else None
+        if t == "login_forget" and site:
+            actions.forget_login(r.account, site, via="settings")
+        elif t == "browser_trust" and isinstance(r.msg.get("trusted"), bool):
+            if not actions.set_trust(r.account, site, r.msg["trusted"], via="settings"):
+                await r.reply({"t": "error", "code": "bad_site"})
+        elif t == "browser_forget" and site and browser is not None:
+            await browser.forget_site(r.account, site, via="settings")
+        elif t == "browser_clear" and browser is not None:
+            await browser.clear(r.account, via="settings")
+        await r.reply({"t": "browser", "sites": await browser.listing(r.account) if browser is not None else []})
+
+    async def _connections(self, r: Request) -> None:
+        """Settings → Connections (SPEC §7.4): what this person connected Aha! to. Addresses only, never a token."""
+        if r.msg.get("t") == "email_disconnect":
+            await actions.disconnect_email(r.account, clean_text(r.msg.get("email"), 320) or "", via="settings")
+        await r.reply({"t": "connections", "email": mail.address(r.account), "emails": mail.addresses(r.account)})
+
+    async def _devices(self, r: Request) -> None:
+        await r.reply({"t": "devices", "items": self._device_list(r.account, r.device)})
+
+    async def _revoke_device(self, r: Request) -> None:
+        dev = r.msg.get("device")
+        if not isinstance(dev, str) or dev not in r.account.devices:
+            return
+        await self.revoke(r.account, dev)
+        if dev != r.device.dev:  # a device that revoked itself gets no answer
+            await self._devices(r)
+
+    async def _report_preview(self, r: Request) -> None:
+        note = clean_text(r.msg.get("note"), reports.MAX_NOTE) or ""
+        app = clean_text(r.msg.get("app"), 20) or ""
+        versions = reports.versions(app, __version__, self.models.current if self.models else "")
+        count = reports.parse_count(r.msg.get("count"))
+        draft = reports.build(r.account.read_transcript(), count, note, r.msg.get("details") is True, versions)
+        self.drafts[r.account.id] = draft
+        await r.reply({"t": "report_draft", "id": draft.id, "text": draft.text})
+
+    async def _report_send(self, r: Request) -> None:
+        draft = self.drafts.get(r.account.id)
+        if draft is None or draft.id != r.msg.get("id") or draft.expires < time.time():
+            sent_id = clean_text(r.msg.get("id"), 32) or ""
+            await r.reply({"t": "report_sent", "id": sent_id, "ok": False, "code": "expired"})
+            return
+        del self.drafts[r.account.id]
+        if "report" not in self.gateway_features:  # an older or self-hosted gateway without reports
+            await r.reply({"t": "report_sent", "id": draft.id, "ok": False, "code": "reports_off"})
+            return
+        self._spawn(self._send_report(r.account, r.device, draft))
 
     async def _send_report(self, account: Account, device: Device, draft: reports.Draft) -> None:
         """To the gateway, which opens a private issue and keeps nothing (SPEC §7.7)."""
@@ -611,3 +613,34 @@ class Channel:
         device.cert = cert.model_dump()
         account.save_device(device)
         await self._send(account, device, {"t": "cert", "cert": cert.model_dump()})
+
+
+# What each device message does (SPEC §6.5): one handler per type, the only place the types are listed here.
+HANDLERS: dict[str, Callable[[Channel, Request], Awaitable[None]]] = {
+    "hello": Channel._hello,
+    "say": Channel._say,
+    "approval_reply": Channel._approval_reply,
+    "stop": Channel._stop,
+    "cut": Channel._cut,
+    "sync_request": Channel._sync,
+    "history_request": Channel._history,
+    "history_settings_request": Channel._history_settings,
+    "history_settings_set": Channel._history_settings_set,
+    "history_clear": Channel._history_clear,
+    "model_request": Channel._model,
+    "model_set": Channel._model,
+    "trace_request": Channel._trace,
+    "memories_request": Channel._memories,
+    "memory_forget": Channel._memories,
+    "browser_request": Channel._browser,
+    "browser_forget": Channel._browser,
+    "browser_clear": Channel._browser,
+    "browser_trust": Channel._browser,
+    "login_forget": Channel._browser,
+    "connections_request": Channel._connections,
+    "email_disconnect": Channel._connections,
+    "devices_request": Channel._devices,
+    "revoke_device": Channel._revoke_device,
+    "report_preview": Channel._report_preview,
+    "report_send": Channel._report_send,
+}

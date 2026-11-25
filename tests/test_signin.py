@@ -593,7 +593,9 @@ async def test_a_saved_login_signs_in_without_a_card_and_reads_the_same(setup, l
     assert fake.contexts[-1].url.endswith("/home")
     assert without.split(" The page now")[0] == with_card.split(" The page now")[0] == "Signed in on waitrose.com."
     assert PASSWORD not in everything_recorded(agent, llm, chat, fe)
-    await agent.forget_site(fe, "www.waitrose.com")  # forgetting the site takes its saved login too
+    await agent.browser_actions.forget_site(
+        fe, "www.waitrose.com", via="chat"
+    )  # forgetting the site takes its saved login too
     assert not (fe.dir / logins.FILE).exists()
 
 

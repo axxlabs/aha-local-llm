@@ -16,14 +16,14 @@ from dataclasses import dataclass, field
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
-from . import checks, context, dates, folding, messages
+from . import actions, checks, context, dates, folding, messages
 from .accounts import Account, Accounts
 from .approvals import Approvals
 from .config import Config
 from .items import Image
 from .llm import LLM, ModelUnavailable
 from .policy import addresses
-from .tools import logins, memory, schedule, signins
+from .tools import memory, schedule, signins
 from .tools.registry import Registry, TaskState, ToolContext
 
 log = logging.getLogger("aha.agent")
@@ -148,6 +148,7 @@ class Agent:
         self.sessions: dict[str, Session] = defaultdict(Session)  # each person's live state, by address
         self.last_activity = time.monotonic()  # a message in or out, a card: `aha install --when-idle` waits on it
         self.typing_every = TYPING_EVERY
+        self.browser_actions = actions.Browser(self)  # Settings → Your browser, and the chat commands for it
 
     def _turn(self, account: Account):
         """The model for this person's whole task (llm.turn), or nothing to wait for (a test's model)."""
@@ -208,18 +209,18 @@ class Agent:
             )
             return
         if command in ("sign-ins", "signins", "sign ins"):
-            kept = await self.browser_sites(account)
+            kept = await self.browser_actions.sites(account)
             lines = "\n".join(f"- {s['site']}{messages.SIGNED_IN if s['signed_in'] else ''}" for s in kept)
             await self.send(account, messages.SIGNINS.format(sites=lines) if kept else messages.NO_SIGNINS)
             return
         if command.startswith(("forget sign-in ", "forget signin ", "forget sign in ")):
             site = command.split(" ", 2)[2].removeprefix("in ").strip()
-            found = await self.forget_site(account, site)
+            found = await self.browser_actions.forget_site(account, site, via="chat")
             reply = messages.SIGNIN_FORGOTTEN if found else messages.SIGNIN_UNKNOWN
             await self.send(account, reply.format(site=signins.site_name(site) or site))
             return
         if command in ("clear browser", "clear my browser", "clear browser data"):
-            await self.clear_browser(account)
+            await self.browser_actions.clear(account, via="chat")
             await self.send(account, messages.BROWSER_CLEARED)
             return
         if command in ("reminders", "schedule", "scheduled", "scheduled tasks"):
@@ -234,8 +235,7 @@ class Agent:
             return
         if command.startswith(("cancel reminder ", "cancel task ")):
             entry_id = command.split(" ", 2)[2].strip().strip("`")
-            found = any(e["id"] == entry_id for e in schedule.load(account))
-            schedule.update(account, entry_id, lambda e: None)
+            found = actions.cancel_scheduled(account, entry_id, via="chat")
             await self.send(account, messages.REMINDER_CANCELLED if found else messages.REMINDER_UNKNOWN)
             return
         if command == "forget last":
@@ -314,10 +314,6 @@ class Agent:
 
     # ---- the person's browser (SPEC §3.4 "Browser profiles": it keeps everything in its own profile)
 
-    def _browser(self, account: Account):
-        """The person's own browser, or None (no browser on this computer)."""
-        return self.browser.for_account(account.id) if self.browser is not None else None
-
     async def note_page(self, account: Account) -> None:
         """After a task: note the page that's open, where a new, blank window picks up."""
         session = self.browser.open_session(account.id) if self.browser is not None else None
@@ -327,29 +323,6 @@ class Agent:
             await signins.remember_page(account, session)
         except Exception:
             log.warning("couldn't note the browser's page")
-
-    async def browser_sites(self, account: Account) -> list[dict]:
-        """Settings → Your browser: the sites the person's browser keeps data for, read from it."""
-        try:
-            return await signins.sites(account, self._browser(account))
-        except Exception:
-            log.warning("couldn't read the browser's sites")
-            return await signins.sites(account, None)
-
-    async def forget_site(self, account: Account, site: str) -> bool:
-        """Forget one site in the person's browser (cookies and storage), and its saved logins."""
-        found = await signins.forget(account, self._browser(account), site)
-        found = logins.forget(account, signins.site_name(site) or site) or found  # its saved logins go too (§5.8)
-        return found
-
-    async def clear_browser(self, account: Account) -> None:
-        """Clear browser: stop the running task, then the person's browser, and delete their whole profile."""
-        await self.stop(account, quiet=True)
-        if self.browser is not None:
-            await self.browser.forget(account.id)
-        signins.clear(account)
-        logins.clear(account)
-        log.info("browser cleared for an account: its profile deleted")
 
     async def _run(self, account: Account, text: str, scheduled: str | None = None) -> None:
         while True:

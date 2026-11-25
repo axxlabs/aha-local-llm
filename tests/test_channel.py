@@ -12,6 +12,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
+from aha_local import actions
 from aha_local.accounts import Accounts
 from aha_local.certs import issue_cert, new_key, public_b64
 from aha_local.e2e import crypto as c
@@ -23,6 +24,8 @@ from aha_local.rest import Vault
 class FakeAgent:
     def __init__(self) -> None:
         self.remembered: dict[str, set[str]] = {}  # account id → the sites their browser keeps data for
+        self.browser = None
+        self.browser_actions = FakeBrowser(self)
         self.said: list[str] = []
         self.photos: list = []
         self.replies: list[tuple] = []
@@ -46,27 +49,28 @@ class FakeAgent:
         self.stopped += 1
         self.quiet = quiet
 
-    async def browser_sites(self, account):
-        """What the person's browser keeps data for (the real agent reads it from the browser)."""
+
+class FakeBrowser(actions.Browser):
+    """What the person's browser keeps data for (the real one reads it from the browser)."""
+
+    async def sites(self, account):
         from aha_local.tools import signins
 
         signed = signins.signed_in_sites(account)
-        names = self.remembered.get(account.id, set()) | signed
+        names = self.agent.remembered.get(account.id, set()) | signed
         return [{"site": s, "signed_in": s in signed} for s in sorted(names)]
 
-    async def forget_site(self, account, site):
+    async def forget_site(self, account, site, via):
         from aha_local.tools import signins
 
         name = signins.site_name(site)
-        known = name in self.remembered.get(account.id, set())
-        self.remembered.get(account.id, set()).discard(name)
-        return await signins.forget(account, None, site) or known
+        known = name in self.agent.remembered.get(account.id, set())
+        self.agent.remembered.get(account.id, set()).discard(name)
+        return await super().forget_site(account, site, via) or known
 
-    async def clear_browser(self, account):
-        from aha_local.tools import signins
-
-        self.remembered.pop(account.id, None)
-        signins.clear(account)
+    async def clear(self, account, via):
+        self.agent.remembered.pop(account.id, None)
+        await super().clear(account, via)
 
 
 class Rig:
