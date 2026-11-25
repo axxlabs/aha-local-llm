@@ -33,7 +33,7 @@ from ..accounts import Account, Accounts, Device
 from ..certs import needs_renewal
 from ..items import Image
 from ..protocol import E2E, Cert, CertIssued, CertRequest, DeviceStatus, Pair, Push, Report, ReportResult, Revoke, b64
-from ..tools import google
+from ..tools import background, google
 from . import crypto, webpush
 
 log = logging.getLogger("aha.channel")
@@ -441,6 +441,22 @@ class Channel:
             actions.forget_memory(r.account, clean_text(r.msg.get("id"), 64) or "", via="settings")
         await r.reply({"t": "memories", "items": actions.memories(r.account), "topics": actions.topics(r.account)})
 
+    async def _tasks(self, r: Request) -> None:
+        """The Tasks panel (SPEC §3.4 "Background tasks", §7.4): the person's background tasks and the idle time
+        the checks wait for. Cancel is the person's own action, so no card."""
+        if r.msg.get("t") == "task_cancel":
+            actions.cancel_background(r.account, clean_text(r.msg.get("id"), 64) or "", via="settings")
+        agent = self.agent
+        await r.reply(
+            {
+                "t": "tasks",
+                "items": background.listing(r.account),
+                "idle_since": int(agent.last_input) if agent is not None else 0,
+                "idle_after": background.IDLE_AFTER,
+                "busy": agent.working() if agent is not None else False,
+            }
+        )
+
     async def _browser(self, r: Request) -> None:
         """Settings → Your browser (SPEC §3.4, §5.7, §5.8, §7.4): what it remembers, trust, saved logins."""
         t, site = r.msg.get("t"), clean_text(r.msg.get("site"), 255) or ""
@@ -637,6 +653,8 @@ HANDLERS: dict[str, Callable[[Channel, Request], Awaitable[None]]] = {
     "trace_request": Channel._trace,
     "memories_request": Channel._memories,
     "memory_forget": Channel._memories,
+    "tasks_request": Channel._tasks,
+    "task_cancel": Channel._tasks,
     "browser_request": Channel._browser,
     "browser_forget": Channel._browser,
     "browser_clear": Channel._browser,

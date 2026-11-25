@@ -109,6 +109,12 @@ KINDS = {
         ("Schedule", "Edit", "Don't"),
         "A scheduled task runs later on its own, without you there, so it always asks first.",
     ),
+    "task": Kind(
+        "⏳",
+        ("Start", "Edit", "Don't"),
+        "A background task checks on its own later, while you're not using Aha!, without you there, so it always "
+        "asks first. You can change what it checks, how often and until when.",
+    ),
     "memory": Kind(
         "🧠",
         ("Save", "Edit", "Don't"),

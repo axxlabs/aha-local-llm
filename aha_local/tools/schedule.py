@@ -36,6 +36,13 @@ MAX_LATE = 12 * 3600  # a one-off missed by more than this (computer off) is dro
 LATE_NOTE = 5 * 60
 CHECK_EVERY = 30.0
 NOTHING = "NOTHING_TO_REPORT"
+TASK = (
+    "[Scheduled task the user set up earlier{late}; they aren't necessarily looking at the chat]\n{text}\n\n"
+    "{last}Do it now. If it says to tell them only when something happens and it hasn't, answer "
+    "NOTHING_TO_REPORT: followed by one line on what you found. That line is kept for the next run "
+    "automatically (and not sent), so don't save it as a memory."
+)
+LAST_TIME = "Last time you found: {note}\n\n"
 
 
 # ---- time
@@ -237,6 +244,28 @@ def register(reg: Registry) -> None:
             schedule_cancel,
         )
     )
+
+
+# ---- a scheduled task's run
+
+
+def task_prompt(entry: dict, late: bool) -> str:
+    return TASK.format(
+        text=entry["text"],
+        late=", running late: the computer was off" if late else "",
+        last=LAST_TIME.format(note=entry["last"]) if entry.get("last") else "",
+    )
+
+
+def finish(account: Account, entry_id: str, answer: str, stopped: bool) -> str | None:
+    """After a run: the message for the chat, or None when it watches for a change and there's none. The run's
+    note (or its news) is kept on the entry for the next run."""
+    quiet = answer.strip().lstrip("*_` ").startswith(NOTHING)
+    note = answer.split(NOTHING, 1)[1].lstrip(" :*_`-") if quiet else answer
+    update(account, entry_id, lambda e: {**e, "last": " ".join(note.split())[:MAX_TEXT]})
+    if quiet:
+        return None
+    return f"⏰ {answer}" if answer.strip() else ""
 
 
 # ---- the scheduler

@@ -102,6 +102,7 @@ TOOL_GROUPS = (
     ("calendar_", "calendar"),
     ("memory_", "memory"),
     ("schedule_", "reminders"),
+    ("task_", "background tasks"),
 )
 
 

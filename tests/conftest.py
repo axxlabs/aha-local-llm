@@ -179,8 +179,12 @@ async def say(agent: Agent, text: str = "", button: str | None = None) -> None:
 
 
 async def settle(agent: Agent, timeout: float = 3) -> None:
-    """Wait until no task is running."""
+    """Wait until no task is running (a background check included)."""
     deadline = time.monotonic() + timeout
-    while agent.running and time.monotonic() < deadline:
+
+    def running() -> bool:
+        return any(s.task is not None for s in agent.sessions.values())
+
+    while running() and time.monotonic() < deadline:
         await asyncio.sleep(0.01)
-    assert not agent.running, "a task is still running"
+    assert not running(), "a task is still running"

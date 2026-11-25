@@ -20,7 +20,7 @@ from .e2e import crypto
 from .e2e.channel import Channel
 from .llm import LLM
 from .models import ModelChoice
-from .tools import browser, browser_pool, calendar, conversation, google, mail, memory, schedule, web
+from .tools import background, browser, browser_pool, calendar, conversation, google, mail, memory, schedule, web
 from .tools.registry import Registry
 from .tunnel import Tunnel
 from .vault import RestError, Vault, load_or_create_instance_key
@@ -38,7 +38,7 @@ class Service:
         self.key = load_or_create_instance_key(self.vault, data / "keys" / "instance.key")
         self.accounts = Accounts(self.vault)
         self.registry = Registry()
-        for module in (web, memory, mail, calendar, schedule, conversation):
+        for module in (web, memory, mail, calendar, schedule, background, conversation):
             module.register(self.registry)
         self.browser = browser_pool.BrowserPool(config.browser_url, config.browser_idle_seconds)
         self.llm = LLM(config.llm_url, config.llm_model)
@@ -60,6 +60,7 @@ class Service:
         self.agent = Agent(config, self.accounts, self.llm, self.registry, self.channel, self.browser)
         self.channel.agent = self.agent
         self.scheduler = schedule.Scheduler(self.accounts, self.agent, config.timezone)
+        self.background = background.Runner(self.accounts, self.agent, config.timezone)
         self.started = time.time()
 
     async def _prune_history(self) -> None:
@@ -82,6 +83,7 @@ class Service:
         )
         self.browser.start()
         self.scheduler.start()
+        self.background.start()
         pruning = asyncio.create_task(self._prune_history())
         warming = asyncio.create_task(self.agent.warm())
         log.info("aha %s: %d tools (%d browser)", __version__, len(self.registry.names()), count)
@@ -96,6 +98,7 @@ class Service:
             pruning.cancel()
             warming.cancel()
             await self.scheduler.stop()
+            await self.background.stop()
             await self.browser.stop()
 
     async def announce_restart(self) -> None:

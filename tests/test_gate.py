@@ -28,7 +28,18 @@ def test_every_card_says_why_in_code():
     assert "waitrose.com isn't one of your trusted sites" in explain("type", "waitrose.com")
     assert "read your email" in explain("type_private", "waitrose.com")
     assert explain("trusted") == ""  # a run: no card, no reason
-    for kind in ("email", "draft", "calendar", "calendar_delete", "schedule", "memory", "forget", "signin", "check"):
+    for kind in (
+        "email",
+        "draft",
+        "calendar",
+        "calendar_delete",
+        "schedule",
+        "task",
+        "memory",
+        "forget",
+        "signin",
+        "check",
+    ):
         assert approvals.KINDS[kind].why and approvals.KINDS[kind].icon
 
 

@@ -22,7 +22,7 @@ from .config import Config
 from .items import Image
 from .llm import Model, ModelUnavailable
 from .policy import addresses
-from .tools import memory, schedule, signins
+from .tools import background, memory, schedule, signins
 from .tools.registry import Registry, TaskState, ToolContext, redacted
 
 log = logging.getLogger("aha.agent")
@@ -71,6 +71,7 @@ class Session:
     photos: list[Image] = field(default_factory=list)  # their photos, for the next model call
     sent: int = 0  # messages sent to them, to know whether they've heard back in a task
     last_prompt: list[dict] | None = None  # the task's latest model request: its title is asked at the end
+    background: str = ""  # the background task whose check is running, if that's what runs (SPEC §3.4)
 
     def reset(self) -> None:
         """Drop what's waiting (Stop, Clear history, the account deleted)."""
@@ -84,13 +85,25 @@ TYPING_EVERY = 4.0  # seconds between `typing` frames while a reply is owed (SPE
 STOP_WORDS = {"stop", "cancel", "stop it", "stop that"}
 NEW_MESSAGE = "[New message from the user while you were working]\n{text}"
 PHOTO_ONLY = "(sent a photo)"
-SCHEDULED = (
-    "[Scheduled task the user set up earlier{late}; they aren't necessarily looking at the chat]\n{text}\n\n"
-    "{last}Do it now. If it says to tell them only when something happens and it hasn't, answer "
-    "NOTHING_TO_REPORT: followed by one line on what you found. That line is kept for the next run "
-    "automatically (and not sent), so don't save it as a memory."
-)
-LAST_TIME = "Last time you found: {note}\n\n"
+
+
+@dataclass(frozen=True)
+class Job:
+    """A run the person didn't start (SPEC §3.4): a scheduled task ("scheduled") or a background task's check
+    ("background"). Its module decides what of the answer reaches the chat."""
+
+    kind: str
+    id: str
+
+    @property
+    def quiet(self) -> bool:
+        """Shows nothing while it works: no "typing…", no tool lines (a background check)."""
+        return self.kind == "background"
+
+    def finish(self, account: Account, answer: str, stopped: bool) -> str | None:
+        """The message for the chat, or None: nothing is sent and the turn isn't kept."""
+        done = background.finish if self.kind == "background" else schedule.finish
+        return done(account, self.id, answer, stopped)
 
 
 class _Counted:
@@ -146,6 +159,7 @@ class Agent:
         self.approvals = Approvals(_Counted(self), config.approval_expiry)
         self.sessions: dict[str, Session] = defaultdict(Session)  # each person's live state, by address
         self.last_activity = time.monotonic()  # a message in or out, a card: `aha install --when-idle` waits on it
+        self.last_input = time.time()  # the household's last message or card answer: background checks wait on it
         self.typing_every = TYPING_EVERY
         self.browser_actions = actions.Browser(self)  # Settings → Your browser, and the chat commands for it
 
@@ -158,8 +172,38 @@ class Agent:
 
     @property
     def running(self) -> dict[str, asyncio.Task]:
-        """The tasks running now, by account address."""
-        return {a: s.task for a, s in self.sessions.items() if s.task is not None}
+        """The people's tasks running now, by account address (a background check isn't one of them)."""
+        return {a: s.task for a, s in self.sessions.items() if s.task is not None and not s.background}
+
+    def busy(self) -> bool:
+        """The model is at work: a task or a background check runs and isn't waiting on a card (one waiting for
+        the person, maybe for days, leaves the model free)."""
+        return any(s.task is not None and self.approvals.pending_for(a) is None for a, s in self.sessions.items())
+
+    def working(self) -> bool:
+        """A person's request is being worked on (the Tasks panel says so): not a check, not waiting on a card."""
+        return any(a in self.running and self.approvals.pending_for(a) is None for a in self.sessions)
+
+    def idle(self, now: float | None = None) -> bool:
+        """Nobody typed or answered a card for background.IDLE_AFTER seconds (SPEC §3.4 "Background tasks")."""
+        return (time.time() if now is None else now) - self.last_input >= background.IDLE_AFTER
+
+    def _input(self) -> None:
+        """The person's input: it resets the idle time (a background check never does)."""
+        self.last_activity = time.monotonic()
+        self.last_input = time.time()
+
+    async def _yield_to_people(self, answering: str = "") -> None:
+        """Someone wrote or answered a card: a background check that's working (not waiting on a card, nor the
+        one being answered) stops, so the model is theirs. It runs again at the next idle time."""
+        for address, live in list(self.sessions.items()):
+            task = live.task
+            if not live.background or task is None or address == answering:
+                continue
+            if self.approvals.pending_for(address) is not None:
+                continue
+            task.cancel()
+            await asyncio.wait({task}, timeout=10)
 
     # ---- outbound
 
@@ -174,7 +218,8 @@ class Agent:
     async def inbound(self, account: Account, text: str, image: Image | None = None) -> None:
         """A message the person typed, maybe with a photo (already shown on their devices by the channel)."""
         text = text.strip()
-        self.last_activity = time.monotonic()
+        self._input()
+        await self._yield_to_people()
         self.llm.wrote(account.address)  # their cache slot is the newest to keep (SPEC §3.2)
         account.transcript({"kind": "user", "text": text, "image": bool(image)})
         if self.browser is not None:
@@ -255,6 +300,8 @@ class Agent:
         self, account: Account, approval_id: str, decision: str, values: list | None = None, note: str = ""
     ) -> None:
         account.transcript({"kind": "approval_reply", "id": approval_id, "decision": decision})
+        self._input()
+        await self._yield_to_people(answering=account.address)
         await self.approvals.answer(account, approval_id, decision, values, note)
 
     async def stop(self, account: Account, quiet: bool = False) -> None:
@@ -279,7 +326,8 @@ class Agent:
 
     def owes_reply(self, account: Account) -> bool:
         """What "typing…" shows (SPEC §3.3): a task is running and isn't waiting for the person's approval."""
-        return self.is_running(account) and self.approvals.pending_for(account.address) is None
+        live = self.session(account)
+        return self.is_running(account) and not live.background and self.approvals.pending_for(account.address) is None
 
     async def warm(self) -> None:
         """Load the chosen model and read the fixed start of every request (the system prompt and the tool
@@ -294,20 +342,24 @@ class Agent:
     def start_scheduled(self, account: Account, entry: dict, late: bool = False) -> None:
         """A scheduled task is due (SPEC §3.4): run it as this account, like a message from them."""
         account.transcript({"kind": "scheduled", "text": entry["text"]})
-        text = SCHEDULED.format(
-            text=entry["text"],
-            late=", running late: the computer was off" if late else "",
-            last=LAST_TIME.format(note=entry["last"]) if entry.get("last") else "",
-        )
-        self.session(account).task = asyncio.create_task(self.run(account, text, scheduled=entry["id"]))
+        text = schedule.task_prompt(entry, late)
+        self.session(account).task = asyncio.create_task(self.run(account, text, Job("scheduled", entry["id"])))
 
-    async def run(self, account: Account, text: str, scheduled: str | None = None) -> None:
+    def start_background(self, account: Account, task_id: str, text: str) -> None:
+        """A background task's check, while the household is idle (SPEC §3.4): run as this account, quietly."""
+        account.transcript({"kind": "background", "id": task_id})
+        live = self.session(account)
+        live.background = task_id
+        live.task = asyncio.create_task(self.run(account, text, Job("background", task_id)))
+
+    async def run(self, account: Account, text: str, job: Job | None = None) -> None:
         held = self.browser.hold(account.id) if self.browser else contextlib.nullcontext()
         try:
             with held:
-                await self._run(account, text, scheduled)
+                await self._run(account, text, job)
         finally:
-            self.session(account).task = None
+            live = self.session(account)
+            live.task, live.background = None, ""
             await self.note_page(account)
 
     # ---- the person's browser (SPEC §3.4 "Browser profiles": it keeps everything in its own profile)
@@ -322,10 +374,11 @@ class Agent:
         except Exception:
             log.warning("couldn't note the browser's page")
 
-    async def _run(self, account: Account, text: str, scheduled: str | None = None) -> None:
+    async def _run(self, account: Account, text: str, job: Job | None = None) -> None:
         while True:
-            await self._task(account, text, scheduled)
-            scheduled = None  # a follow-up is the person's own message
+            await self._task(account, text, job)
+            job = None  # a follow-up is the person's own message
+            self.session(account).background = ""
             # Messages that came in after the task's last model call: one follow-up task for all of them.
             pending, self.session(account).inbox = self.session(account).inbox, []
             if not pending:
@@ -339,9 +392,10 @@ class Agent:
             await self._typing_frame(account, self.owes_reply(account), self.queued(account))
             await asyncio.sleep(self.typing_every)
 
-    async def _stop_typing(self, account: Account, typing: asyncio.Task) -> None:
+    async def _stop_typing(self, account: Account, typing: asyncio.Task, quiet: bool = False) -> None:
         typing.cancel()
-        await self._typing_frame(account, False)
+        if not quiet:
+            await self._typing_frame(account, False)
 
     def queued(self, account: Account) -> bool:
         """Its task waits for the model while another person's runs (SPEC §3.3): the app says so."""
@@ -353,11 +407,11 @@ class Agent:
         except Exception:
             log.warning("couldn't send a typing message")
 
-    async def _task(self, account: Account, text: str, scheduled: str | None = None) -> None:
+    async def _task(self, account: Account, text: str, job: Job | None = None) -> None:
         # The task's records in the transcript carry its id, so a message's details can be found (SPEC §3.8).
         account.task = secrets.token_hex(6)
         try:
-            await self._task_body(account, text, scheduled)
+            await self._task_body(account, text, job)
         finally:
             account.task = None
 
@@ -385,21 +439,22 @@ class Agent:
                 with contextlib.suppress(asyncio.CancelledError):
                     await solving
 
-    async def _task_body(self, account: Account, text: str, scheduled: str | None = None) -> None:
+    async def _task_body(self, account: Account, text: str, job: Job | None = None) -> None:
         sent_before = self.session(account).sent
         began = time.time()
-        asked_at = 0 if scheduled else account.seq  # the item of the message that started it (SPEC §7.4)
-        typing = asyncio.create_task(self._typing(account))
+        asked_at = 0 if job else account.seq  # the item of the message that started it (SPEC §7.4)
+        quiet = job is not None and job.quiet
+        typing = asyncio.create_task(asyncio.sleep(0) if quiet else self._typing(account))
         # The model is this person's for the whole task, its title and summary included: its cache stays theirs
         # (SPEC §3.3 "One task at a time"). Waiting for the turn shows as "finishing someone else's request".
         turn = self._turn(account)
         await turn.__aenter__()
         try:
             try:
-                answer, checked, text = await self._within_limit(account, self.solve(account, text))
+                answer, checked, text = await self._within_limit(account, self.solve(account, text, quiet))
             except asyncio.CancelledError:
                 account.transcript({"kind": "stopped"})
-                await self._stop_typing(account, typing)
+                await self._stop_typing(account, typing, quiet)
                 raise
             except TimeoutError:
                 answer, checked, stopped = messages.TOO_LONG, False, True
@@ -413,19 +468,15 @@ class Agent:
                 answer, checked, stopped = messages.FAILED, False, True
             else:
                 stopped = answer.startswith(messages.TOO_MANY_STEPS)
-            if not answer.strip():
+            if not answer.strip() and not job:
                 # After "✅ Save" there may be nothing to add; if they've heard nothing at all, say something.
                 answer = "" if self.session(account).sent > sent_before else "…"
-            await self._stop_typing(account, typing)  # before the answer, so no refresh can land after it
-            if scheduled:
-                quiet = answer.strip().lstrip("*_` ").startswith(schedule.NOTHING)
-                note = answer.split(schedule.NOTHING, 1)[1].lstrip(" :*_`-") if quiet else answer
-                schedule.update(account, scheduled, lambda e: {**e, "last": " ".join(note.split())[:500]})
-                if quiet:
-                    account.transcript({"kind": "answer", "text": "", "scheduled": "nothing to report", "note": note})
-                    return  # watching for a change, and there's none: say nothing, keep the chat clean
-                if answer:
-                    answer = f"⏰ {answer}"
+            await self._stop_typing(account, typing, quiet)  # before the answer, so no refresh can land after it
+            if job:
+                answer = job.finish(account, answer, stopped)
+                if answer is None:
+                    account.transcript({"kind": "answer", "text": "", "job": job.kind, "quiet": True})
+                    return  # nothing to tell yet: say nothing, keep the chat clean
             if answer:
                 # Unfinished stays unfolded after a break (SPEC §7.4 "Folding"): a task that stopped, or a question.
                 await self.send(account, answer, open="stopped" if stopped else "asks" if folding.asks(answer) else "")
@@ -480,8 +531,9 @@ class Agent:
         if found and (new or (titled and title)):  # where a new topic starts is said even for a task that stopped
             await self.out.title(account, first[0], title or "", new=new)
 
-    async def solve(self, account: Account, text: str) -> tuple[str, bool, str]:
-        """Returns the answer, whether it passed the checks, and everything the person said during the task."""
+    async def solve(self, account: Account, text: str, quiet: bool = False) -> tuple[str, bool, str]:
+        """Returns the answer, whether it passed the checks, and everything the person said during the task.
+        `quiet` (a background check): no tool lines, and the person's messages wait for a task of their own."""
         today = dates.now(self.config).date()
 
         def with_dates(message: str) -> str:
@@ -533,7 +585,14 @@ class Agent:
             *(t["content"] for t in conv["turns"] if t["role"] == "user" or t.get("checked")),
         ]
         for _ in range(self.config.max_model_calls):
-            extras, self.session(account).inbox = self.session(account).inbox, []
+            extras, self.session(account).inbox = (
+                ([], self.session(account).inbox)
+                if quiet
+                else (
+                    self.session(account).inbox,
+                    [],
+                )
+            )
             for extra in extras:
                 task.append({"role": "user", "content": NEW_MESSAGE.format(text=with_dates(extra))})
                 sources.append(extra)
@@ -580,7 +639,7 @@ class Agent:
             )
             for call in reply.tool_calls:
                 label = messages.tool_label(call.name)
-                if label and label != shown_tool:  # said as it happens, once per run (SPEC §7.4 "Tools used")
+                if label and label != shown_tool and not quiet:  # said as it happens (SPEC §7.4 "Tools used")
                     shown_tool = label
                     await self.out.tool(account, label)
                 result = await self.registry.call(call.name, call.arguments, ctx)

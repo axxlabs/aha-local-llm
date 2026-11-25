@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from . import context
 from .accounts import Account
-from .tools import google, logins, schedule, signins, trusted
+from .tools import background, google, logins, schedule, signins, trusted
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -76,6 +76,13 @@ def cancel_scheduled(account: Account, entry_id: str, via: str) -> bool:
         return False
     schedule.update(account, entry_id, lambda e: None)
     account.audit({"scheduled_cancelled": entry_id, "via": via})
+    return True
+
+
+def cancel_background(account: Account, task_id: str, via: str) -> bool:
+    if background.update(account, task_id, lambda e: None) is None:
+        return False
+    account.audit({"background_task_cancelled": task_id, "via": via})
     return True
 
 
