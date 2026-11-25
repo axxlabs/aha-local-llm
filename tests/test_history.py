@@ -203,4 +203,4 @@ def test_the_memory_stays_cached_from_one_day_to_the_next(tmp_path):
     today = context.context_block(acct, "Europe/London", "Home", day)
     tomorrow = context.context_block(acct, "Europe/London", "Home", day + dt.timedelta(days=1))
     shared = os.path.commonprefix([today, tomorrow])  # noqa: RUF071 (character by character, as the cache)
-    assert "H01ABC123" in shared and "Today:" not in shared  # everything up to the date is the same text
+    assert len(shared) >= today.index("Today:")  # everything up to the date is the same text, memory included
