@@ -25,7 +25,7 @@ import struct
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from dataclasses import field as dc_field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -35,20 +35,9 @@ import mcp.types as mt
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
-from .. import messages
 from ..approvals import Field
 from ..items import Image
-from ..policy import addresses
-from ..policy.browser import (
-    MESSAGE_BOX,
-    MESSAGE_SITES,
-    classify,
-    form_for,
-    offered,
-    open_action,
-    open_form,
-    sends_message,
-)
+from ..policy.browser import MESSAGE_SITES, TYPING, classify, form_for, offered, opens
 from ..policy.gate import explain
 from ..policy.urls import check_url, site_of
 from . import guard, human, logins, signins
@@ -348,7 +337,6 @@ SNAPSHOT_LINK = re.compile(r"### Snapshot\s*\n- \[Snapshot\]\([^)]*\)")
 REF_TARGET = re.compile(r"^\[?\s*(?:ref\s*[=:]\s*)?((?:f\d+)?e\d+)\s*\]?$")
 # A field only the sign-in card may fill: its page label says password or code (SPEC §3.4 "Signing in").
 SECRET_FIELD = re.compile(r"pass ?word|passcode|\bpin\b|one[- ]time|verification code|security code|\botp\b|2fa", re.I)
-TYPING = ("browser_type", "browser_select_option", "browser_fill_form")
 YAML_BLOCK = re.compile(r"```yaml\n(.*?)(?:```|\Z)", re.S)  # tolerant of a snapshot cut to fit
 
 
@@ -594,14 +582,10 @@ async def run_approved(session, name: str, args: dict, ctx: ToolContext) -> Tool
 
 def check_targets(name: str, args: dict, ctx: ToolContext) -> ToolResult | None:
     """Typing goes only into elements of the latest snapshot, and never into a password or code field."""
-    if name not in TYPING:
+    spec = TYPING.get(name)
+    if spec is None or not spec.checks_targets:
         return None
-    if name == "browser_fill_form":
-        fields = args.get("fields") if isinstance(args.get("fields"), list) else []
-        refs = [str(f.get("target", "")) for f in fields if isinstance(f, dict)]
-    else:
-        refs = [str(args.get("target", ""))]
-    for ref in refs:
+    for ref in spec.targets(args):
         if ref not in ctx.task.ref_lines:
             return ToolResult(
                 f"{ref or 'That element'} isn't in the latest snapshot. Take a snapshot and give the element's "
@@ -618,11 +602,10 @@ def check_targets(name: str, args: dict, ctx: ToolContext) -> ToolResult | None:
     return None
 
 
-def labels_of(name: str, args: dict) -> list[str]:
-    """The page's labels of the elements a typing call targets (from `labelled`)."""
-    if name == "browser_fill_form" and isinstance(args.get("fields"), list):
-        return [str(f.get("name") or f.get("element") or "") for f in args["fields"] if isinstance(f, dict)]
-    return [str(args.get("element") or "")]
+def labels_of(name: str, args: dict, ctx: ToolContext) -> list[str]:
+    """The page's own labels of the elements a typing call targets, from the latest snapshot."""
+    spec = TYPING.get(name)
+    return [element_label(ctx.task.last_snapshot, ref) for ref in spec.targets(args)] if spec else []
 
 
 def labelled(name: str, args: dict, ctx: ToolContext) -> dict:
@@ -650,54 +633,38 @@ def make_handler(name: str):
         args = normalise_targets(args)
         if refused := check_targets(name, args, ctx):  # before any card: a call that would fail never asks
             return refused
-        action = classify(name, args)
-        if action.kind in ("type", "other"):
+        if opens(name, args):  # the same rules as fetch_url (SPEC §5.2 rules 5–7)
+            url, action, refused = await guard.open_address(ctx, str(args.get("url", "")), name)
+            return refused or await ran(session, name, {**args, "url": url}, action, ctx)
+        site = ""
+        if classify(name, args).kind in ("type", "other"):
             try:
-                action = replace(action, site=await current_site(session))  # the browser's own address
+                site = await current_site(session)  # the browser's own address, never the model's
             except Exception:
                 log.warning("couldn't read the current site")
-        if action.kind == "type" and sends_message(name, action.site, labels_of(name, labelled(name, args, ctx))):
-            action = replace(action, kind="send")  # a message to someone: a card every time (SPEC §5.2)
+        action = classify(name, args, site, labels_of(name, args, ctx))
         verdict = guard.check(ctx, action, name)  # SPEC §5.2: the one place that decides
         if verdict.outcome == "block":
-            return ToolResult(f"Blocked by aha's safety policy: {verdict.why}.", error=True)
+            return guard.blocked(verdict.why)
         if verdict.outcome == "run":
             if action.kind == "read":
                 if name == "browser_click" and human.is_ref(args.get("target")):
                     await run_code(session, human.move_code(args["target"]))  # the mouse gets there first (§3.4)
                 return await call_with_snapshot(session, name, args, ctx)
             return await ran(session, name, args, action, ctx)
-
-        # The screenshot shows the page the action happens on. Opening an address happens somewhere else: the
-        # page open now would mislead (seen: an Amazon search card showing the NDTV page before it).
-        shot = None
-        if action.kind not in ("open", "search"):
-            try:
-                shot_result = to_result(await session.call("browser_take_screenshot", {}))
-                shot = shot_result.images[0] if shot_result.images else None
-            except Exception:
-                log.warning("couldn't take a screenshot for the approval")
-        if action.kind in ("open", "search"):
-            made_up = addresses.made_up(action.url, ctx.task.seen_urls)
-            form = open_form(action.url, data=verdict.why.startswith("data"), made_up=made_up)
-        else:
-            form = form_for(name, labelled(name, args, ctx), action.site)
-            if action.kind == "send":
-                form.title = f"Send this message on {action.site}?"
-                for f in form.fields:  # signed on the card, in code (SPEC §3.4): the person sees it, can change it
-                    if f.label == "Text" or MESSAGE_BOX.search(f.label):
-                        f.value = messages.signed(f.value, ctx.account.label, chat=True)
+        try:  # the card shows the page the action happens on
+            shot_result = to_result(await session.call("browser_take_screenshot", {}))
+            shot = shot_result.images[0] if shot_result.images else None
+        except Exception:
+            log.warning("couldn't take a screenshot for the approval")
+            shot = None
+        signer = ctx.account.label if action.kind == "send" else ""
+        form = form_for(name, labelled(name, args, ctx), action.site, signer)
         why = explain(verdict.why, action.site)
         decision, refused = await guard.ask(ctx, "action", form.title, form.fields, shot, why=why)
         if refused:
             return refused
-        final = form.apply(name, args, decision.values)
-        if action.kind in ("open", "search"):
-            again = open_action(str(final.get("url", "")))
-            if again.kind == "block":
-                return ToolResult(f"Blocked by aha's safety policy: {again.reason}.", error=True)
-            action = again
-        return await ran(session, name, final, action, ctx)
+        return await ran(session, name, form.apply(name, args, decision.values), action, ctx)
 
     return handler
 
@@ -717,22 +684,8 @@ async def ran(session, name: str, args: dict, action, ctx: ToolContext) -> ToolR
 
 def entered(name: str, args: dict, ctx: ToolContext) -> str:
     """What was typed or chosen, as plain fact (the person may have changed it on a card; the model can't tell)."""
-    if name == "browser_type":
-        return f"Typed: “{args.get('text', '')}”."
-    if name == "browser_fill_form" and isinstance(args.get("fields"), list):
-        parts = []
-        for f in args["fields"]:
-            if isinstance(f, dict):
-                label = element_label(ctx.task.last_snapshot, str(f.get("target", ""))) or f.get("name") or "a field"
-                parts.append(f"{label}: “{f.get('value', '')}”")
-        return ("Filled in: " + "; ".join(parts) + ".") if parts else ""
-    if name == "browser_select_option":
-        return "Chose: " + ", ".join(str(v) for v in args.get("values") or []) + "."
-    if name == "browser_press_key":
-        return f"Pressed: {args.get('key', '')}."
-    if name == "browser_handle_dialog":
-        return f"Answered the pop-up: “{args.get('promptText', '')}”."
-    return ""
+    spec = TYPING.get(name)
+    return spec.entered(args, labels_of(name, args, ctx)) if spec else ""
 
 
 async def screenshot(session) -> Image | None:
@@ -822,7 +775,7 @@ async def browser_login(args: dict, ctx: ToolContext) -> ToolResult:
     url = await current_url(session) if session.is_open() else ""
     site, why = check_url(url)
     if why or not site:
-        return ToolResult(f"Blocked by aha's safety policy: {why or 'no page is open'}.", error=True)
+        return guard.blocked(why or "no page is open")
     if urlsplit(url).scheme != "https":
         return ToolResult("Signing in only works on secure (https) pages. Tell the user.", error=True)
     # The exact host: on shared hosting (x.herokuapp.com, y.github.io) the site alone would let a look-alike page
@@ -904,6 +857,10 @@ async def browser_login(args: dict, ctx: ToolContext) -> ToolResult:
 
 
 CHECK_ROUNDS = 15
+GAVE_UP = (
+    "The person gave up on the check. Tell them you couldn't get past it and give the link; don't try the check "
+    "yourself."
+)
 
 
 def image_size(image: Image) -> tuple[int, int] | None:
@@ -947,7 +904,7 @@ async def browser_human_check(args: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult("No page is open in the browser: open one with browser_navigate first.", error=True)
     site, why = check_url(url)
     if why or not site:
-        return ToolResult(f"Blocked by aha's safety policy: {why}.", error=True)
+        return guard.blocked(why)
     shown = (urlsplit(url).hostname or site).lower().removeprefix("www.")
     ctx.task.human_check_offered = True
     taps_done = 0
@@ -957,17 +914,9 @@ async def browser_human_check(args: dict, ctx: ToolContext) -> ToolResult:
         if shot is None or size is None:
             return ToolResult("The browser didn't return a screenshot. Try once more.", error=True)
         fields = [Field("Site", shown, "info"), Field("Taps", "", "taps")]
-        decision = await ctx.approvals.ask(ctx.account, "check", f"Show {shown} you're human", fields, shot)
-        if not decision.approved:
-            if decision.reason == "expired":
-                return ToolResult("", error=True, kind="expired")
-            text = (
-                "The person gave up on the check. Tell them you couldn't get past it and give the link; don't try "
-                "the check yourself."
-            )
-            if decision.note:
-                text += f" They said: “{decision.note}”. Follow that."
-            return ToolResult(text, error=True)
+        decision, refused = await guard.ask(ctx, "check", f"Show {shown} you're human", fields, shot, declined=GAVE_UP)
+        if refused:
+            return refused
         taps = human.parse_taps(decision.values[1] if len(decision.values) > 1 else "", *size)
         if taps is None:  # outside the screenshot: nothing is clicked; a fresh card
             continue

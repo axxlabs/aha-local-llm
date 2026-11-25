@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
+from .. import messages
 from ..approvals import Field
 from . import addresses
 from .gate import Action
@@ -90,24 +92,114 @@ def offered(name: str) -> bool:
     return name not in BLOCK and name not in HIDE
 
 
-TYPING_KINDS = {"browser_type", "browser_fill_form", "browser_select_option"}
+# Each browser tool that can carry words out, in one place (SPEC §5.2, §5.3): when a call of it types, the card
+# that shows it, how the approved values go back into its arguments, which page elements it targets, and what was
+# entered, said back to the model as plain fact. Adding or changing such a tool is one entry here.
 
 
-def classify(name: str, args: dict, page_site: str = "") -> Action:
+def _fill_fields(args: dict) -> list[dict]:
+    return [f for f in args.get("fields") or [] if isinstance(f, dict)]
+
+
+def _fill_form(args: dict, where: str) -> Form:
+    fields = []
+    for i, f in enumerate(_fill_fields(args), 1):
+        label = f.get("name") or f.get("element") or f"Field {i}"
+        value = str(f.get("value", ""))
+        fields.append(Field(label, value, "longtext" if "\n" in value else "text"))
+    return Form(f"Fill in {len(fields)} field{'s' if len(fields) != 1 else ''}{where}?", fields)
+
+
+def _type_form(args: dict, where: str) -> Form:
+    el = args.get("element")
+    title = f"Type into {el}{where}?" if el else f"Type this{where}?"
+    # Several lines, kept as they are, so an edit doesn't lose them (seen: a WhatsApp message's line breaks
+    # lost when it was edited on a one-line field).
+    return Form(title, [Field("Text", str(args.get("text", "")), "longtext")])
+
+
+def _filled(args: dict, labels: list[str]) -> str:
+    parts = [
+        f"{label or f.get('name') or 'a field'}: “{f.get('value', '')}”"
+        for f, label in zip(_fill_fields(args), labels, strict=False)
+    ]
+    return ("Filled in: " + "; ".join(parts) + ".") if parts else ""
+
+
+@dataclass(frozen=True)
+class Typing:
+    types: Callable[[dict], bool]  # whether this call carries words out (else it's a read)
+    form: Callable[[dict, str], Form]  # the card: (args, " on <site>")
+    apply: Callable[[dict, list[str]], dict]  # the approved values back into the arguments
+    entered: Callable[[dict, list[str]], str]  # what went, said as fact: (args, the targets' page labels)
+    targets: Callable[[dict], list[str]] = lambda a: [str(a.get("target", ""))]  # elements typed into: checked
+    checks_targets: bool = True  # the targets must be in the latest snapshot and not a sign-in field
+
+
+TYPING: dict[str, Typing] = {
+    "browser_type": Typing(
+        types=lambda a: True,
+        form=_type_form,
+        apply=lambda a, v: {**a, "text": v[0]},
+        entered=lambda a, _: f"Typed: “{a.get('text', '')}”.",
+    ),
+    "browser_fill_form": Typing(
+        types=lambda a: True,
+        form=_fill_form,
+        apply=lambda a, v: {**a, "fields": [{**f, "value": x} for f, x in zip(a.get("fields") or [], v, strict=False)]},
+        entered=_filled,
+        targets=lambda a: [str(f.get("target", "")) for f in _fill_fields(a)],
+    ),
+    "browser_select_option": Typing(
+        types=lambda a: True,
+        form=lambda a, where: Form(
+            f"Choose in “{a.get('element') or 'a list'}”{where}?", [Field("Option", ", ".join(a.get("values") or []))]
+        ),
+        apply=lambda a, v: {**a, "values": [x.strip() for x in v[0].split(",") if x.strip()]},
+        entered=lambda a, _: "Chose: " + ", ".join(str(v) for v in a.get("values") or []) + ".",
+    ),
+    "browser_press_key": Typing(
+        types=lambda a: a.get("key") not in SAFE_KEYS,
+        form=lambda a, where: Form(
+            f"Press the key “{a.get('key', '')}”{where}?", [Field("Key", str(a.get("key", "")))]
+        ),
+        apply=lambda a, v: {**a, "key": v[0]},
+        entered=lambda a, _: f"Pressed: {a.get('key', '')}.",
+        checks_targets=False,
+    ),
+    "browser_handle_dialog": Typing(
+        types=lambda a: bool(a.get("promptText")),
+        form=lambda a, where: Form(f"Answer the page's pop-up{where}?", [Field("Text", str(a.get("promptText", "")))]),
+        apply=lambda a, v: {**a, "promptText": v[0]},
+        entered=lambda a, _: f"Answered the pop-up: “{a.get('promptText', '')}”.",
+        checks_targets=False,
+    ),
+}
+
+
+def opens(name: str, args: dict) -> bool:
+    """The call opens an address: the address goes through the gate's open rules (guard.open)."""
+    return name == "browser_navigate" or (
+        name == "browser_tabs" and args.get("action") == "new" and bool(args.get("url"))
+    )
+
+
+def classify(name: str, args: dict, page_site: str = "", labels: list[str] | None = None) -> Action:
     """A browser tool call as an action for the gate (SPEC §5.2). `page_site` is the current page's site, read
-    from the browser's own address, never from the model."""
+    from the browser's own address, and `labels` the page's own labels of the elements it types into, never
+    the model's words. Typing on a messaging site is a send (rule 2)."""
     if name in BLOCK or name in HIDE:
         return Action("block", reason="this action is disabled")
-    if name == "browser_navigate" or (name == "browser_tabs" and args.get("action") == "new" and args.get("url")):
+    if opens(name, args):
         return open_action(str(args.get("url", "")))
+    if name in TYPING:
+        if not TYPING[name].types(args):
+            return Action("read")
+        if labels is not None and sends_message(name, page_site, labels):
+            return Action("send", page_site)
+        return Action("type", page_site)
     if name in AUTO or name == "browser_tabs":
         return Action("read")
-    if name == "browser_press_key":
-        return Action("read") if args.get("key") in SAFE_KEYS else Action("type", page_site)
-    if name == "browser_handle_dialog":
-        return Action("type", page_site) if args.get("promptText") else Action("read")
-    if name in TYPING_KINDS:
-        return Action("type", page_site)
     return Action("other", page_site)
 
 
@@ -128,48 +220,27 @@ class Form:
 
     def apply(self, name: str, args: dict, values: list[str]) -> dict:
         """The approved values, placed back into the tool's arguments."""
-        if name == "browser_type":
-            return {**args, "text": values[0]}
-        if name == "browser_fill_form":
-            out = []
-            for f, v in zip(args.get("fields") or [], values, strict=False):
-                out.append({**f, "value": v})
-            return {**args, "fields": out}
-        if name == "browser_select_option":
-            return {**args, "values": [x.strip() for x in values[0].split(",") if x.strip()]}
-        if name == "browser_press_key":
-            return {**args, "key": values[0]}
-        if name in ("browser_navigate", "browser_tabs"):
+        if name in TYPING:
+            return TYPING[name].apply(args, values)
+        if opens(name, args):
             return {**args, "url": values[0].strip()}
-        if name == "browser_handle_dialog":
-            return {**args, "promptText": values[0]}
         return json.loads(values[0])
 
 
-def form_for(name: str, args: dict, site: str) -> Form:
+def form_for(name: str, args: dict, site: str, signer: str = "") -> Form:
+    """The card for a browser call. `signer`: it sends a message on a messaging site, signed in that name in
+    code (SPEC §3.4), on the card, so the person sees the signature and can change it."""
     where = f" on {site}" if site else ""
-    if name == "browser_type":
-        el = args.get("element")
-        title = f"Type into {el}{where}?" if el else f"Type this{where}?"
-        # Several lines, kept as they are, so an edit doesn't lose them (seen: a WhatsApp message's line breaks
-        # lost when it was edited on a one-line field).
-        return Form(title, [Field("Text", str(args.get("text", "")), "longtext")])
-    if name == "browser_fill_form":
-        fields = []
-        for i, f in enumerate(args.get("fields") or [], 1):
-            label = f.get("name") or f.get("element") or f"Field {i}"
-            value = str(f.get("value", ""))
-            fields.append(Field(label, value, "longtext" if "\n" in value else "text"))
-        return Form(f"Fill in {len(fields)} field{'s' if len(fields) != 1 else ''}{where}?", fields)
-    if name == "browser_select_option":
-        el = args.get("element") or "a list"
-        return Form(f"Choose in “{el}”{where}?", [Field("Option", ", ".join(args.get("values") or []))])
-    if name == "browser_press_key":
-        return Form(f"Press the key “{args.get('key', '')}”{where}?", [Field("Key", str(args.get("key", "")))])
-    if name in ("browser_navigate", "browser_tabs"):
+    if name in TYPING:
+        form = TYPING[name].form(args, where)
+        if signer:
+            form.title = f"Send this message on {site}?"
+            for f in form.fields:
+                if f.label == "Text" or MESSAGE_BOX.search(f.label):
+                    f.value = messages.signed(f.value, signer, chat=True)
+        return form
+    if opens(name, args):
         return open_form(str(args.get("url", "")))
-    if name == "browser_handle_dialog":
-        return Form(f"Answer the page's pop-up{where}?", [Field("Text", str(args.get("promptText", "")))])
     return Form(f"Run “{name}”{where}?", [Field("Arguments", json.dumps(args, ensure_ascii=False))])
 
 

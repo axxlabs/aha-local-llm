@@ -11,8 +11,6 @@ import trafilatura
 
 from .. import RELEASE
 from ..approvals import Field
-from ..policy import addresses
-from ..policy.browser import open_action, open_form
 from ..policy.gate import Action, explain
 from ..policy.urls import check_url, resolves_publicly
 from . import guard
@@ -34,22 +32,10 @@ HEADERS = {
 
 async def gated_open(ctx: ToolContext, url: str) -> tuple[str, ToolResult | None]:
     """fetch_url's address through the gate (SPEC §5.2): the address to read, or the result to return."""
-    action = open_action(url)
-    verdict = guard.check(ctx, action, "fetch_url")
-    if verdict.outcome == "block":
-        return url, ToolResult(f"Blocked: {verdict.why}.", error=True)
-    if verdict.outcome == "card":
-        made_up = addresses.made_up(url, ctx.task.seen_urls)
-        form = open_form(url, data=verdict.why.startswith("data"), made_up=made_up)
-        why = explain(verdict.why, action.site)
-        decision, refused = await guard.ask(ctx, "action", form.title, form.fields, why=why)
-        if refused:
-            return url, refused
-        url = decision.values[0].strip()
-        if why := check_url(url)[1]:
-            return url, ToolResult(f"Blocked: {why}.", error=True)
-    guard.opened(ctx, url)
-    return url, None
+    url, _, refused = await guard.open_address(ctx, url, "fetch_url")
+    if refused is None:
+        guard.opened(ctx, url)
+    return url, refused
 
 
 async def web_search(args: dict, ctx: ToolContext) -> ToolResult:
@@ -133,9 +119,9 @@ async def fetch_url(args: dict, ctx: ToolContext) -> ToolResult:
     for _ in range(MAX_REDIRECTS + 1):
         _, why = check_url(url)
         if why:
-            return ToolResult(f"Blocked: {why}.", error=True)
+            return guard.blocked(why)
         if not await resolves_publicly(urlsplit(url).hostname or ""):
-            return ToolResult("Blocked: that name doesn't resolve to a public address.", error=True)
+            return guard.blocked("that name doesn't resolve to a public address")
         page = await get_once(url)
         if page.redirect is None:
             break

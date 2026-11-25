@@ -397,7 +397,7 @@ def _compose(kind: str):
         if reply:
             fields.append(Field("In reply to", f"{reply.get('from', '')}: {reply.get('subject', '')}", "info"))
         title = "Send this email?" if kind == "email" else "Save this draft in your mailbox?"
-        decision, refused = await guard.ask(ctx, kind, title, fields)  # a send: always a card (SPEC §5.2)
+        decision, refused = await guard.send(ctx, kind, title, fields)
         if refused:
             return refused
         values = dict(zip((f.label for f in fields), decision.values, strict=False))

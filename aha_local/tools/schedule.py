@@ -179,7 +179,7 @@ async def schedule_add(args: dict, ctx: ToolContext) -> ToolResult:
             Field("When", when.strftime("%Y-%m-%d %H:%M")),
             Field("Repeats", repeat),
         ]
-        d, refused = await guard.ask(ctx, "schedule", "Schedule this task?", fields)  # a send (SPEC §5.2)
+        d, refused = await guard.send(ctx, "schedule", "Schedule this task?", fields)
         if refused:
             return refused
         text, repeat = _clean(d.values[0]), d.values[2].strip().lower()

@@ -316,7 +316,7 @@ async def calendar_add(args: dict, ctx: ToolContext) -> ToolResult:
     )
     fields += [Field("Calendar", cal.name, "info"), day_field(fields[1].value)]
     invite = " and invite the guests" if fields[5].value else ""
-    decision, refused = await guard.ask(ctx, "calendar", f"Add this to {cal.label}{invite}?", fields)
+    decision, refused = await guard.send(ctx, "calendar", f"Add this to {cal.label}{invite}?", fields)
     if refused:
         return refused
     body = event_body(decision.values, tz)
@@ -388,7 +388,7 @@ async def calendar_update(args: dict, ctx: ToolContext) -> ToolResult:
         new("guests", current_guests),
     )
     fields += [Field("Calendar", cal.name, "info"), day_field(fields[1].value)]
-    decision, refused = await guard.ask(ctx, "calendar", f"Change “{event.get('summary', 'this event')}”?", fields)
+    decision, refused = await guard.send(ctx, "calendar", f"Change “{event.get('summary', 'this event')}”?", fields)
     if refused:
         return refused
     body = event_body(decision.values, tz)
@@ -411,7 +411,7 @@ async def calendar_delete(args: dict, ctx: ToolContext) -> ToolResult:
     fields = [Field("Event", describe(event, tz).split("] ", 1)[-1], "info"), Field("Calendar", cal.name, "info")]
     if guests:
         fields.append(Field("Guests told", ", ".join(guests), "info"))
-    _, refused = await guard.ask(ctx, "calendar_delete", f"Delete this event from {cal.label}?", fields)
+    _, refused = await guard.send(ctx, "calendar_delete", f"Delete this event from {cal.label}?", fields)
     if refused:
         return refused
     done = await call(

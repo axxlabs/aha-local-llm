@@ -59,7 +59,7 @@ async def memory_add(args: dict, ctx: ToolContext) -> ToolResult:
     text = " ".join(str(args.get("text", "")).split())[:MAX_FACT_CHARS]
     if not text:
         return ToolResult("Nothing to save: the fact is empty.", error=True)
-    d, refused = await guard.ask(ctx, "memory", "Remember this?", [Field("Fact", text)], then=NOT_AGAIN)
+    d, refused = await guard.send(ctx, "memory", "Remember this?", [Field("Fact", text)], then=NOT_AGAIN)
     if refused or not d.values[0].strip():
         return refused or guard.stopped(d, NOT_AGAIN)
     item = add_fact(ctx.account, " ".join(d.values[0].split()))
@@ -72,7 +72,7 @@ async def memory_update(args: dict, ctx: ToolContext) -> ToolResult:
     if current is None:
         return ToolResult(f"No remembered fact has id {mid}. Use memory_list to see the ids.", error=True)
     title = f"Change “{current['text']}” to:"
-    d, refused = await guard.ask(ctx, "memory", title, [Field("Fact", text)], then=NOT_AGAIN)
+    d, refused = await guard.send(ctx, "memory", title, [Field("Fact", text)], then=NOT_AGAIN)
     if refused or not d.values[0].strip():
         return refused or guard.stopped(d, NOT_AGAIN)
     items = ctx.account.load_memory()
@@ -88,7 +88,7 @@ async def memory_delete(args: dict, ctx: ToolContext) -> ToolResult:
     current = next((m for m in ctx.account.load_memory() if m["id"] == mid), None)
     if current is None:
         return ToolResult(f"No remembered fact has id {mid}. Use memory_list to see the ids.", error=True)
-    _, refused = await guard.ask(
+    _, refused = await guard.send(
         ctx, "forget", "Forget this?", [Field("Fact", current["text"], "bool")], then=NOT_AGAIN
     )
     if refused:
