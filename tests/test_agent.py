@@ -4,6 +4,7 @@
 
 import asyncio
 import dataclasses
+import time
 
 from aha_local import context, messages
 from aha_local.tools.registry import Tool, ToolResult, params
@@ -124,25 +125,30 @@ def test_a_long_tasks_start_stays_the_same_from_step_to_step():
     assert [m["content"][:6] for m in after[-2:]] == ["page 7", "page 8"]
 
 
-async def test_summary_folding_happens_between_tasks(agent, llm, chat, accounts):
+async def test_each_task_leaves_its_topic_memory_and_a_new_topic_starts_from_memory(agent, llm, chat, accounts):
+    """SPEC §4, §5.4: the topic's entry is written at the end of each task, no card; a task sees the turns of the
+    topic going on, and other topics only through their entries."""
     acct = person(accounts)
-    conv = {
-        "summary": "",
-        "turns": [{"role": r, "content": "word " * 3000, "ts": "2026-11-01 10:00"} for r in ("user", "assistant") * 10],
-    }
-    acct.save_context(conv)
-    llm.answer("Fine.")
-    llm.answer("- 1 Nov: talked a lot")  # the summary call
-    await say(agent, "hello")
+    llm.topic_reply = "SAME: Evri parcel\nMEMORY:\n- Evri tracking H01ABC123, collect from 26/11/2026"
+    llm.answer("It's at the Evri shop.")
+    await say(agent, "where is my parcel?")
     await settle(agent)
-    for _ in range(50):
-        if acct.load_context()["summary"]:
-            break
-        await asyncio.sleep(0.01)
-    new = acct.load_context()
-    assert new["summary"] == "- 1 Nov: talked a lot"
-    assert context.estimate(new["turns"]) <= context.TURNS_BUDGET
-    assert new["turns"][-1]["content"] == "Fine."
+    [entry] = acct.load_context()["topics"]
+    assert entry["title"] == "Evri parcel" and "H01ABC123" in entry["text"]
+    assert not [c for c in chat.sent if getattr(c, "buttons", None)]  # no card
+    llm.answer("Tomorrow.")
+    await say(agent, "and when can I collect it?")
+    await settle(agent)
+    assert "where is my parcel?" in str(llm.requests[-1]["messages"])
+    going_on = (entry["from"], entry["ts"])
+    msgs = context.build(acct, [], "Europe/London", "Home", 100_000, topic=going_on)
+    assert "H01ABC123" not in msgs[1]["content"]  # the topic going on: its turns are shown, not its entry
+    assert "where is my parcel?" in str(msgs)
+
+    topic = (999, time.time() + 1)  # a new topic, after a break
+    msgs = context.build(acct, [], "Europe/London", "Home", 100_000, topic=topic)
+    assert "H01ABC123" in msgs[1]["content"] and "Evri parcel" in msgs[1]["content"]
+    assert "where is my parcel?" not in str(msgs)  # the earlier topic's turns are gone from the context
 
 
 async def test_commands(agent, llm, chat, accounts):
@@ -262,25 +268,18 @@ async def test_an_empty_answer_after_an_approval_sends_nothing(agent, llm, chat)
     assert person(agent.accounts).load_memory()[0]["text"] == "Lives in Testville"
 
 
-async def test_typing_ends_before_the_answer_and_stays_off_during_the_summary(agent, llm, chat, accounts):
-    from aha_local import context
-
+async def test_typing_ends_before_the_answer_and_stays_off_while_the_topic_is_written(agent, llm, chat, accounts):
     agent.typing_every = 0.01
-    acct = person(accounts)
-    conv = acct.load_context()
-    conv["turns"] = [{"role": "user", "content": "x" * 4000}, {"role": "assistant", "content": "y"}] * 30
-    acct.save_context(conv)
     gate = asyncio.Event()
     real_chat = llm.chat
 
-    async def slow_summary(messages, tools=None, max_tokens=4096, who=None, **kw):
-        if len(llm.requests) == 1:  # the title and the fold, after the answer
+    async def slow_topic(messages, tools=None, max_tokens=4096, who=None, **kw):
+        if len(llm.requests) == 1:  # the title and memory entry, after the answer
             await gate.wait()
         return await real_chat(messages, tools, max_tokens, who, **kw)
 
-    llm.chat = slow_summary
+    llm.chat = slow_topic
     llm.answer("Fine.")
-    llm.answer("- summary")
     await say(agent, "hello")
     for _ in range(100):
         if chat.texts():
@@ -289,10 +288,9 @@ async def test_typing_ends_before_the_answer_and_stays_off_during_the_summary(ag
     assert chat.typed[-1] is False  # off, sent before "Fine."
     count = len(chat.typed)
     await asyncio.sleep(0.05)
-    assert len(chat.typed) == count  # no typing while the summary is written
+    assert len(chat.typed) == count  # no typing while the topic is written
     gate.set()
     await settle(agent)
-    assert context.estimate(acct.load_context()["turns"]) <= context.TURNS_BUDGET
 
 
 async def test_a_messages_details_are_its_tasks_model_calls_and_tools(agent, llm, chat, accounts):
@@ -463,19 +461,15 @@ async def test_stop_drops_everything_that_was_waiting_for_the_task(agent, llm, c
     assert "image_url" not in str(last)  # the stopped task's photo didn't come along
 
 
-async def test_the_summary_is_asked_at_the_end_of_the_persons_cached_prompt(agent, llm, chat, accounts):
-    """SPEC §4.4: the old turns are already read in the person's slot; a prompt of its own read them all again."""
+async def test_the_topic_memory_is_asked_at_the_end_of_the_persons_cached_prompt(agent, llm, chat, accounts):
+    """SPEC §3.2, §5.4: the task's prompt is already read in the person's slot; a prompt of its own re-reads it."""
     acct = person(accounts)
-    conv = acct.load_context()
-    conv["turns"] = [{"role": "user", "content": "x" * 4000}, {"role": "assistant", "content": "y"}] * 30
-    acct.save_context(conv)
+    llm.topic_reply = "SAME: Greeting\nMEMORY: said hello"
     llm.answer("Fine.")
-    llm.answer("- summary of the old turns")
     await say(agent, "hello")
     await settle(agent)
-    task_request, fold = llm.requests[-2]["messages"], llm.requests[-1]["messages"]
-    assert fold[: len(task_request)] == task_request  # the same start: cached
-    assert fold[len(task_request)] == {"role": "assistant", "content": "Fine."}
-    assert "oldest messages will be taken out" in fold[-1]["content"]
-    assert llm.requests[-1]["tools"] == llm.requests[-2]["tools"]  # same tools, or the cached prompt wouldn't match
-    assert acct.load_context()["summary"] == "- summary of the old turns"
+    task_request, asked = llm.requests[-1]["messages"], llm.titles[-1]
+    assert asked[: len(task_request)] == task_request  # the same start: cached
+    assert asked[len(task_request)] == {"role": "assistant", "content": "Fine."}
+    assert "MEMORY:" in asked[-1]["content"]
+    assert acct.load_context()["topics"][0]["text"] == "said hello"

@@ -412,7 +412,9 @@ async def test_settings_trust_sites_and_forget_memories(tmp_path):
 
     keep, drop = memory.add_fact(acct, "Prefers window seats"), memory.add_fact(acct, "Lives in Leeds")
     await phone.send({"t": "memory_forget", "id": drop["id"]})
-    assert phone.inbox() == [{"t": "memories", "items": [{"id": keep["id"], "text": "Prefers window seats"}]}]
+    assert phone.inbox() == [
+        {"t": "memories", "items": [{"id": keep["id"], "text": "Prefers window seats"}], "topics": []}
+    ]
 
 
 @pytest.mark.parametrize(

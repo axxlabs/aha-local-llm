@@ -4,9 +4,12 @@
 
 Layers, in this order:
   1. system prompt (static, byte-identical for every request and account) + tool definitions
-  2-4. a <context> message: today's date, the person, their memories, the conversation summary
-  4. recent turns: the person's messages and aha's final answers
-  5. the current task: its tool calls and results
+  2. a <context> message: today's date, the person, their profile (approved facts) and the topic memory
+  3. the turns of the topic going on now: the person's messages and aha's final answers
+  4. the current task: its tool calls and results
+
+Older chat isn't in the context: each topic leaves its memory entry (SPEC §5.4), and the model searches the
+rest when it needs it (conversation_search, memory_search, email, calendar).
 
 llama.cpp reuses its work for the longest prefix shared with an earlier request, so everything that changes
 comes after everything that doesn't. The tool traffic of a task is dropped when the task ends; only the
@@ -16,26 +19,22 @@ final answer stays, and the full traffic remains in the transcript file.
 from __future__ import annotations
 
 import datetime as dt
+import time
 from functools import cache
 from pathlib import Path
 
 from . import dates
-from .accounts import Account
+from .accounts import Account, turn_time
 from .tools import memory
 
 PROMPTS = Path(__file__).parent / "prompts"
 CHARS_PER_TOKEN = 3.2
 IMAGE_TOKENS = 1200
-TURNS_BUDGET = 20_000  # tokens of recent turns before the oldest are folded into the summary
-SUMMARY_CHARS = 10_000  # about 3k tokens
+TURNS_BUDGET = 20_000  # tokens of the topic's turns; a longer topic keeps its newest
+TOPICS_CHARS = 19_000  # about 6k tokens of topic memory, newest first; older entries: memory_search
+TOPIC_CHARS = 1_200  # one topic's entry
 TASK_SHARE = 0.6  # past this share of the context, older page snapshots in the task are shortened
 KEEP_PAGES = 2  # the newest page results always stay whole
-
-SUMMARY_PROMPT = """You keep a running summary of a long chat between a person and their assistant, aha.
-Update the summary with the new turns below. Keep: commitments, bookings and their details (dates, times,
-places, reference numbers), open questions, decisions, plans, and anything the person may refer back to.
-Drop small talk and anything already done and irrelevant. Write short dated bullet points, newest last,
-at most about 600 words. Reply with the updated summary only."""
 
 
 @cache
@@ -65,10 +64,26 @@ def days_ahead(now: dt.datetime, count: int = 14) -> str:
     return ", ".join((now + dt.timedelta(days=i)).strftime("%a %d/%m/%Y") for i in range(1, count + 1))
 
 
-def context_block(account: Account, timezone: str, household: str, now: dt.datetime | None = None) -> str:
+def render_topics(entries: list[dict], limit_chars: int | None = None) -> str:
+    lines, total = [], 0
+    for e in sorted(entries, key=lambda e: e.get("ts", 0), reverse=True):
+        day = dates.say(dt.date.fromtimestamp(e["ts"])) if e.get("ts") else "earlier"
+        block = f"- [{e['id']}] {day}, {e.get('title') or 'Untitled'}:\n  " + e["text"].replace("\n", "\n  ")
+        total += len(block) + 1
+        if limit_chars and total > limit_chars:
+            lines.append(f"- … {len(entries) - len(lines)} older topics not shown; use memory_search.")
+            break
+        lines.append(block)
+    return "\n".join(lines)
+
+
+def context_block(
+    account: Account, timezone: str, household: str, now: dt.datetime | None = None, current: int | None = None
+) -> str:
+    """`current`: the topic going on, whose turns are shown whole: its own entry is left out, so the block changes
+    only when a topic ends, and the model server's cached prompt still matches within a topic (SPEC §3.2)."""
     now = now or dates.now(timezone)
-    conv = account.load_context()
-    summary = conv.get("summary") or "(no earlier conversation yet)"
+    topics = [e for e in account.load_context()["topics"] if current is None or e.get("from") != current]
     return (
         "<context>\n"
         f"Today: {now.strftime('%d/%m/%Y')}, a {now.strftime('%A')} ({timezone}). Household: {household}.\n"
@@ -76,10 +91,18 @@ def context_block(account: Account, timezone: str, household: str, now: dt.datet
         f"You are talking with: {account.label} ({account.address.split(':', 1)[0]} chat).\n\n"
         "What you remember about them (each fact approved by them):\n"
         f"{memory.for_context(account)}\n\n"
-        "Summary of your earlier conversation:\n"
-        f"{summary}\n"
+        "Your memory of earlier topics (what you wrote at the end of each; the messages themselves are gone):\n"
+        f"{render_topics(topics, TOPICS_CHARS) if topics else '(no earlier topics yet)'}\n"
         "</context>"
     )
+
+
+def topic_turns(turns: list[dict], since: float) -> list[dict]:
+    """The turns of the topic going on: recorded at or after `since`, the newest that fit the budget."""
+    kept = [t for t in turns if turn_time(t) >= since]
+    while kept and estimate(kept) > TURNS_BUDGET:
+        kept = kept[2:]
+    return kept
 
 
 def build(
@@ -89,15 +112,21 @@ def build(
     household: str,
     context_tokens: int,
     now: dt.datetime | None = None,
+    topic: tuple[int, float] | None = None,
 ) -> list[dict]:
+    """`topic`: (first chat item, when) of the topic going on (folding.segment_start): only its turns are shown."""
     conv = account.load_context()
+    since = topic[1] if topic else 0
+    turns = topic_turns(conv["turns"], since)
+    whole = len(turns) == len([t for t in conv["turns"] if turn_time(t) >= since])
+    current = topic[0] if topic and whole else None  # a topic cut to fit keeps its entry in view
     head = [
         {"role": "system", "content": system_prompt()},
-        {"role": "user", "content": context_block(account, timezone, household, now)},
+        {"role": "user", "content": context_block(account, timezone, household, now, current)},
         {"role": "assistant", "content": "Understood."},
     ]
-    turns = [{"role": t["role"], "content": t["content"]} for t in conv.get("turns", [])]
-    return head + turns + shorten_task(task, context_tokens * TASK_SHARE)
+    shown = [{"role": t["role"], "content": t["content"]} for t in turns]
+    return head + shown + shorten_task(task, context_tokens * TASK_SHARE)
 
 
 def shorten_task(task: list[dict], budget: float) -> list[dict]:
@@ -128,76 +157,44 @@ def strip(m: dict) -> dict:
 def record_turn(account: Account, user_text: str, answer: str, checked: bool = False) -> dict:
     """`checked`: the answer passed the number check, so its numbers may be quoted again later."""
     conv = account.load_context()
+    now = time.time()
     stamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
-    conv.setdefault("turns", []).extend(
+    conv["turns"].extend(
         [
-            {"role": "user", "content": user_text, "ts": stamp},
-            {"role": "assistant", "content": answer, "ts": stamp, "checked": checked},
+            {"role": "user", "content": user_text, "ts": stamp, "t": now},
+            {"role": "assistant", "content": answer, "ts": stamp, "t": now, "checked": checked},
         ]
     )
     account.save_context(conv)
     return conv
 
 
-def turns_to_fold(conv: dict) -> list[dict]:
-    """The oldest turns to fold into the summary, so the rest fit in half the budget. Empty if within budget."""
-    turns = conv.get("turns", [])
-    if estimate(turns) <= TURNS_BUDGET:
-        return []
-    fold = []
-    while turns[len(fold) :] and estimate(turns[len(fold) :]) > TURNS_BUDGET / 2:
-        fold.extend(turns[len(fold) : len(fold) + 2])
-    return fold
-
-
-def apply_fold(account: Account, folded: list[dict], summary: str) -> None:
+def save_topic(account: Account, start: int, started: float, title: str, text: str) -> None:
+    """The topic starting at chat item `start` has this memory entry now, replacing its earlier one (SPEC §5.4);
+    the turns of earlier topics leave the context."""
     conv = account.load_context()
-    turns = conv.get("turns", [])
-    if turns[: len(folded)] != folded:
-        return  # the history was cleared or cut while the summary was written (SPEC §3.8.1)
-    # The summary is as old as its oldest turn; one from before this was recorded stays undated, and a history
-    # length drops it (SPEC §3.8.1).
-    if not conv.get("summary") and folded and folded[0].get("ts"):
-        conv["summary_from"] = folded[0]["ts"]
-    conv["turns"] = turns[len(folded) :]
-    conv["summary"] = summary.strip()[:SUMMARY_CHARS]
+    topics = [e for e in conv["topics"] if e.get("from") != start]
+    text = text.strip()[:TOPIC_CHARS]
+    if text:
+        topics.append({"id": f"t{start}", "from": start, "title": title, "text": text, "ts": started})
+    conv["topics"] = topics
+    conv["turns"] = [t for t in conv["turns"] if turn_time(t) >= started]
     account.save_context(conv)
 
 
-FOLD_ASK = (
-    "[Aha! app, not from the user. The conversation is getting long, so its oldest messages will be taken out: the "
-    "{count} messages from “{first}” to “{last}”. Write the running summary that replaces them: the current summary "
-    "(in the <context> block) updated with those messages. Keep: commitments, bookings and their details (dates, "
-    "times, places, reference numbers), open questions, decisions, plans, and anything the person may refer back "
-    "to. Drop small talk and anything already done and irrelevant. Short dated bullet points, newest last, at most "
-    "about 600 words. Reply with the updated summary only.]"
-)
-
-
-def fold_ask(folded: list[dict]) -> str:
-    """The summary asked at the end of the person's own cached prompt (SPEC §4.4): its old turns are already read."""
-
-    def quote(t: dict) -> str:
-        text = " ".join(str(t.get("content", "")).split())
-        return text[:60] + ("…" if len(text) > 60 else "")
-
-    return FOLD_ASK.format(count=len(folded), first=quote(folded[0]), last=quote(folded[-1]))
-
-
-def fold_request(conv: dict, folded: list[dict]) -> list[dict]:
-    """The summary as a prompt of its own: only when there's no cached prompt to ask it at the end of."""
-    lines = "\n".join(
-        f"[{t.get('ts', '')}] {'Person' if t['role'] == 'user' else 'aha'}: {t['content']}" for t in folded
-    )
-    return [
-        {"role": "system", "content": SUMMARY_PROMPT},
-        {"role": "user", "content": f"Current summary:\n{conv.get('summary') or '(empty)'}\n\nNew turns:\n{lines}"},
-    ]
+def forget_topic(account: Account, topic_id: str) -> bool:
+    conv = account.load_context()
+    kept = [e for e in conv["topics"] if e.get("id") != topic_id]
+    if len(kept) == len(conv["topics"]):
+        return False
+    conv["topics"] = kept
+    account.save_context(conv)
+    return True
 
 
 def forget_last(account: Account) -> bool:
     conv = account.load_context()
-    if len(conv.get("turns", [])) < 2:
+    if len(conv["turns"]) < 2:
         return False
     conv["turns"] = conv["turns"][:-2]
     account.save_context(conv)

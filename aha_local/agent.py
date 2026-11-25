@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from . import actions, checks, context, dates, folding, messages
-from .accounts import Account, Accounts
+from .accounts import Account, Accounts, turn_time
 from .approvals import Approvals
 from .config import Config
 from .items import Image
@@ -386,6 +386,7 @@ class Agent:
 
     async def _task_body(self, account: Account, text: str, scheduled: str | None = None) -> None:
         sent_before = self.session(account).sent
+        began = time.time()
         asked_at = 0 if scheduled else account.seq  # the item of the message that started it (SPEC §7.4)
         typing = asyncio.create_task(self._typing(account))
         # The model is this person's for the whole task, its title and summary included: its cache stays theirs
@@ -428,42 +429,55 @@ class Agent:
                 # Unfinished stays unfolded after a break (SPEC §7.4 "Folding"): a task that stopped, or a question.
                 await self.send(account, answer, open="stopped" if stopped else "asks" if folding.asks(answer) else "")
             account.transcript({"kind": "answer", "text": answer})
-            conv = context.record_turn(account, text, answer, checked)
-            # The task's last request, still cached in the person's slot: the title and the summary are asked at its
-            # end, so they cost only their own words (SPEC §3.2 "Cache slots", §4.4, §7.4).
+            context.record_turn(account, text, answer, checked)
+            # The task's last request, still cached in the person's slot: the topic's title and memory entry are
+            # asked at its end, so they cost only their own words (SPEC §3.2 "Cache slots", §5.4, §7.4).
             prompt, self.session(account).last_prompt = self.session(account).last_prompt, None
-            if answer and not stopped:
-                await self._title(account, answer, prompt, asked_at, text)
-            await self._fold(account, conv, prompt, answer)
+            if answer:
+                await self._topic(account, answer, prompt, asked_at, text, titled=not stopped, began=began)
         finally:
             await turn.__aexit__(None, None, None)
 
-    async def _title(
-        self, account: Account, answer: str, prompt: list[dict] | None, asked_at: int = 0, asked: str = ""
+    async def _topic(
+        self,
+        account: Account,
+        answer: str,
+        prompt: list[dict] | None,
+        asked_at: int = 0,
+        asked: str = "",
+        titled: bool = True,
+        began: float = 0,
     ) -> None:
-        """Name the conversation since the last break, for when the app folds it (SPEC §7.4 "Folding").
+        """Name the topic going on, for when the app folds it (SPEC §7.4 "Folding"), and write its memory entry,
+        what the model will know of it once its messages leave the context (§5.4). `titled`: False for a task that
+        stopped, which stays unfolded (§7.4) but still leaves its memory.
 
         Asked at the end of the task's own last request, so the model server's cached prompt still matches and
-        it costs only the new words; the question and the title are never part of the conversation."""
+        it costs only the new words; the question and the reply are never part of the conversation."""
         asked = asked.split("\n\n", 1)[0]  # the message that started the task, not later notes
-        start = folding.segment_start(account.recent_items(), dates.tz(self.config))
-        if prompt is None or start is None:
-            return
         tz = dates.tz(self.config)
+        items = account.recent_items()
+        found = folding.segment_start(items, tz)
+        if prompt is None:
+            return
+        # No chat items (a task without the app): one topic, since the first turn kept.
+        first_turn = min((turn_time(t) for t in account.load_context()["turns"]), default=began)
+        start = found or (0, min(first_turn, began))
         since = dt.datetime.fromtimestamp(start[1], tz).strftime("%H:%M")
         request = after_task(prompt, answer, folding.ask(since, asked))
         try:
             reply = await self.llm.chat(
-                request, self.registry.specs(), max_tokens=60, who=account.address, tool_choice="none", thinking=False
+                request, self.registry.specs(), max_tokens=500, who=account.address, tool_choice="none", thinking=False
             )
         except ModelUnavailable:
             return
-        new, title = folding.parse(reply.content or "")
-        new = new or (bool(asked_at) and folding.says_new(asked))
-        if new and asked_at > start[0]:  # a new subject: a new part starts at the person's message (SPEC §7.4)
-            await self.out.title(account, asked_at, title or "", new=True)
-        elif title:
-            await self.out.title(account, start[0], title)
+        new, title, entry = folding.parse(reply.content or "")
+        new = (new or (bool(asked_at) and folding.says_new(asked))) and asked_at > start[0]
+        # A new subject: a new topic starts at the person's message (SPEC §7.4).
+        first = (asked_at, next((it["ts"] for it in items if it.get("seq") == asked_at), start[1])) if new else start
+        context.save_topic(account, first[0], first[1], title, entry)
+        if found and (new or (titled and title)):  # where a new topic starts is said even for a task that stopped
+            await self.out.title(account, first[0], title or "", new=new)
 
     async def solve(self, account: Account, text: str) -> tuple[str, bool, str]:
         """Returns the answer, whether it passed the checks, and everything the person said during the task."""
@@ -509,10 +523,12 @@ class Agent:
         # Where numbers in the answer may come from: what the person said or saved, earlier answers, and pages
         # opened in this task. Search snippets don't count (SPEC §3.5).
         conv = account.load_context()
+        topic = folding.segment_start(account.recent_items(), dates.tz(self.config))  # the topic going on (§4)
         sources = [
             text,
             *(m["text"] for m in account.load_memory()),
-            *(t["content"] for t in conv.get("turns", []) if t["role"] == "user" or t.get("checked")),
+            *(e["text"] for e in conv["topics"]),  # the topic memory, like earlier answers (§5.4)
+            *(t["content"] for t in conv["turns"] if t["role"] == "user" or t.get("checked")),
         ]
         for _ in range(self.config.max_model_calls):
             extras, self.session(account).inbox = self.session(account).inbox, []
@@ -523,7 +539,12 @@ class Agent:
                 text = f"{text}\n\n{extra}"
                 take_photos(task[-1])
             msgs = context.build(
-                account, task, self.config.timezone, self.config.household_name, self.config.context_tokens
+                account,
+                task,
+                self.config.timezone,
+                self.config.household_name,
+                self.config.context_tokens,
+                topic=topic,
             )
             reply = await self.llm.chat(msgs, tools, who=account.address)
             self.session(account).last_prompt = msgs  # the title is asked at its end (SPEC §7.4 "Folding")
@@ -583,27 +604,6 @@ class Agent:
                     shot = with_images(f"[Screenshot returned by {call.name}]", [image])
                     task.append({"role": "user", "_kind": "image", "content": shot})
         return (*finish(f"{messages.TOO_MANY_STEPS}\n{last}".strip(), sources, bool(retried), today), text)
-
-    async def _fold(self, account: Account, conv: dict, prompt: list[dict] | None = None, answer: str = "") -> None:
-        """Between tasks only: fold the oldest turns into the summary (SPEC §4.4). Asked at the end of the task's
-        own cached prompt, in the person's slot, where those turns are already read; a prompt of its own only when
-        there's none (a quiet scheduled task)."""
-        folded = context.turns_to_fold(conv)
-        if not folded:
-            return
-        if prompt is not None:
-            request = after_task(prompt, answer, context.fold_ask(folded))
-            tools, choice = self.registry.specs(), "none"  # the same tools, so the cached prompt still matches
-        else:
-            request, tools, choice = context.fold_request(conv, folded), None, "auto"
-        try:
-            reply = await self.llm.chat(
-                request, tools, max_tokens=1500, who=account.address, tool_choice=choice, thinking=False
-            )
-        except ModelUnavailable:
-            return
-        if reply.content:
-            context.apply_fold(account, folded, reply.content)
 
 
 def with_images(text: str, images: list[Image]) -> list[dict]:

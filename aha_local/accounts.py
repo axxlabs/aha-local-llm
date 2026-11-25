@@ -45,6 +45,11 @@ def _epoch(stamp) -> float | None:
         return None
 
 
+def turn_time(turn: dict) -> float:
+    """When a turn of the conversation context was recorded, in epoch seconds (0 if unknown)."""
+    return _epoch(turn.get("t", turn.get("ts"))) or 0.0
+
+
 def _before(stamp, cutoff: float) -> bool:
     t = _epoch(stamp)
     return t is not None and t < cutoff
@@ -215,13 +220,10 @@ class Account:
         self._recent = None  # read again when needed
         changed = self._keep_log("audit.jsonl", cutoff) or changed
         conv = self.load_context()
-        turns = [t for t in conv.get("turns", []) if not _before(t.get("ts"), cutoff)]
-        summary_old = conv.get("summary") and (not conv.get("summary_from") or _before(conv["summary_from"], cutoff))
-        if len(turns) != len(conv.get("turns", [])) or summary_old:
-            conv["turns"] = turns
-            if summary_old:
-                conv["summary"] = ""
-                conv.pop("summary_from", None)
+        turns = [t for t in conv.get("turns", []) if not _before(t.get("t", t.get("ts")), cutoff)]
+        topics = [e for e in conv.get("topics", []) if not _before(e.get("ts"), cutoff)]
+        if len(turns) != len(conv.get("turns", [])) or len(topics) != len(conv.get("topics", [])):
+            conv["turns"], conv["topics"] = turns, topics
             self.save_context(conv)
             changed = True
         return changed
@@ -234,7 +236,17 @@ class Account:
         (self.dir / "context.json").unlink(missing_ok=True)
 
     def load_context(self) -> dict:
-        return self.vault.read_json(self.dir / "context.json", {"summary": "", "turns": []})
+        """The turns of the topic going on and the topic memory (SPEC §4, §5.4)."""
+        conv = self.vault.read_json(self.dir / "context.json", None) or {"turns": [], "topics": []}
+        conv.setdefault("turns", [])
+        conv.setdefault("topics", [])
+        if "summary" in conv:  # from before topics: the rolling summary becomes one entry
+            summary, since = conv.pop("summary"), conv.pop("summary_from", None)
+            if summary:
+                ts = _epoch(since) if since else None
+                entry = {"id": "t0", "from": 0, "title": "Earlier conversation", "text": summary, "ts": ts or 0}
+                conv["topics"] = [entry, *conv["topics"]]
+        return conv
 
     def save_context(self, context: dict) -> None:
         self.vault.write_json(self.dir / "context.json", context)

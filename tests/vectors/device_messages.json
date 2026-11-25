@@ -132,7 +132,8 @@
       "items"
     ],
     "memories": [
-      "items"
+      "items",
+      "topics"
     ],
     "trace": [
       "seq",

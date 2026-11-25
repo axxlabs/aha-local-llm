@@ -435,7 +435,7 @@ class Channel:
         """Settings → What Aha! remembers; Forget is the person's own action, so no card (SPEC §5.4)."""
         if r.msg.get("t") == "memory_forget":
             actions.forget_memory(r.account, clean_text(r.msg.get("id"), 64) or "", via="settings")
-        await r.reply({"t": "memories", "items": actions.memories(r.account)})
+        await r.reply({"t": "memories", "items": actions.memories(r.account), "topics": actions.topics(r.account)})
 
     async def _browser(self, r: Request) -> None:
         """Settings → Your browser (SPEC §3.4, §5.7, §5.8, §7.4): what it remembers, trust, saved logins."""

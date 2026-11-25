@@ -53,7 +53,7 @@ async def test_a_question_stays_open_and_the_title_is_asked_at_the_end_of_the_ca
     asked = llm.titles[0]
     assert asked[: len(llm.requests[-1]["messages"])] == llm.requests[-1]["messages"]  # same prefix: cached
     assert asked[-2] == {"role": "assistant", "content": "There are two tables free tonight. Which one would you like?"}
-    assert "Reply with one line only: NEW:" in asked[-1]["content"]
+    assert "First line: NEW:" in asked[-1]["content"] and "MEMORY:" in asked[-1]["content"]
     assert "Reply with one line only" not in str(fe.load_context())  # never part of the conversation
 
 
@@ -71,10 +71,16 @@ async def test_a_task_that_stopped_stays_open_and_gets_no_title(agent, llm, chat
 
 
 def test_a_new_subject_starts_a_part():
-    assert folding.parse("NEW: Evri parcel tracking") == (True, "Evri parcel tracking")
-    assert folding.parse("SAME: Waitrose order and memories") == (False, "Waitrose order and memories")
-    assert folding.parse("**NEW** - Flat Iron booking.") == (True, "Flat Iron booking")
-    assert folding.parse("Lisbon trip") == (False, "Lisbon trip")
+    assert folding.parse("NEW: Evri parcel tracking") == (True, "Evri parcel tracking", "")
+    assert folding.parse("SAME: Waitrose order and memories") == (False, "Waitrose order and memories", "")
+    assert folding.parse("**NEW** - Flat Iron booking.") == (True, "Flat Iron booking", "")
+    assert folding.parse("Lisbon trip") == (False, "Lisbon trip", "")
+    assert folding.parse("SAME: Evri parcel\nMEMORY:\n- Tracking H01\n- Collect 26/11/2026") == (
+        False,
+        "Evri parcel",
+        "- Tracking H01\n- Collect 26/11/2026",
+    )
+    assert folding.parse("**NEW:** Trip\n**MEMORY:** none")[2] == ""
     shown = items(at(24, 10), at(24, 10, 5), at(24, 10, 49), at(24, 10, 50))
     topic = {"seq": 9, "ts": at(24, 10, 50), "t": "title", "from": 3, "new": True}
     assert folding.segment_start([*shown, topic], LONDON) == (3, at(24, 10, 49))  # from the new subject on

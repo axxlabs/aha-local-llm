@@ -26,9 +26,16 @@ ASK = (
     "SAME only if it continues the same thing: a follow-up or detail about it, a correction, an answer to your "
     "question, or a message that only makes sense with what came before (“and the price?”, “book it”, “make it "
     "8pm”, “what about the other one?”).\n"
-    "Reply with one line only: NEW: and a title for the latest message's request, or SAME: and a title for "
-    "everything you talked about since {since}. A title is at most 6 words, in the language of the conversation, "
-    "no quotes, no full stop.]"
+    "First line: NEW: and a title for the latest message's request, or SAME: and a title for everything you "
+    "talked about since {since}. A title is at most 6 words, in the language of the conversation, no quotes, no "
+    "full stop.\n"
+    "Then a line starting MEMORY: and, on the lines after it, your memory of this topic (NEW: the latest request "
+    "only; SAME: everything since {since}), replacing what you wrote before for it. Later, when these messages "
+    "are gone, this is all you'll have in view about it, so keep what matters: what was asked, what was done or "
+    "found, and the exact details: tracking and reference numbers, order and booking codes, email and postal "
+    "addresses, names, phone numbers, dates (DD/MM/YYYY) and times, amounts, links, and what's still open or "
+    "promised. Only what came up here, from the user or your tools; never a password, one-time code or card "
+    "number. Short plain lines, at most 150 words. If nothing is worth keeping, write MEMORY: none]"
 )
 # The person says so: a new part whatever the model answers (seen: "ok, let's change topics. What happened to …"
 # came back SAME).
@@ -77,11 +84,19 @@ def says_new(asked: str) -> bool:
     return bool(SAYS_NEW.search(asked or ""))
 
 
-def parse(text: str) -> tuple[bool, str]:
-    """(a new subject?, the title) from the model's reply to ASK."""
-    line = next((x for x in text.strip().splitlines() if x.strip()), "")
+MEMORY = re.compile(r"^[\W_]*MEMORY[ \t*_]*[:\-][ \t*_]*", re.I | re.M)
+
+
+def parse(text: str) -> tuple[bool, str, str]:
+    """(a new subject?, the title, the topic's memory entry, "" for none) from the model's reply to ASK."""
+    parts = MEMORY.split(text.strip(), maxsplit=1)
+    head, memory = (parts[0], parts[1]) if len(parts) == 2 else (text, "")
+    line = next((x for x in head.strip().splitlines() if x.strip()), "")
     m = NEW.match(line)
-    return bool(m and m.group(1).upper() == "NEW"), clean(line[m.end() :] if m else line)
+    memory = memory.strip()
+    if memory.lower().rstrip(".") in ("none", "nothing", "n/a"):
+        memory = ""
+    return bool(m and m.group(1).upper() == "NEW"), clean(line[m.end() :] if m else line), memory
 
 
 def clean(text: str) -> str:

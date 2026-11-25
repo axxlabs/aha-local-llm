@@ -34,6 +34,7 @@ class FakeLLM:
         self.lock = asyncio.Lock()
         self.queued_for: set[str] = set()  # accounts whose request waits behind another's
         self.titles: list[list[dict]] = []  # the hidden title requests (SPEC §7.4 "Folding"), kept apart
+        self.topic_reply = "Test title"  # the reply to them: a title, and maybe a memory entry (SPEC §5.4)
 
     def answer(self, text: str) -> None:
         self.script.append(Reply(text))
@@ -56,7 +57,7 @@ class FakeLLM:
     async def chat(self, messages, tools=None, max_tokens=4096, who=None, tool_choice="auto", thinking=True) -> Reply:
         if tool_choice == "none" and "NEW:" in str(messages[-1].get("content")):  # a title: not part of the script
             self.titles.append(messages)
-            return Reply("Test title")
+            return Reply(self.topic_reply)
         self.requests.append({"messages": messages, "tools": tools})
         await asyncio.sleep(0)
         return self.script.pop(0) if self.script else Reply("(script ended)")

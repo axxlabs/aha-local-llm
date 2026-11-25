@@ -50,9 +50,18 @@ async def memory_list(args: dict, ctx: ToolContext) -> ToolResult:
 
 
 async def memory_search(args: dict, ctx: ToolContext) -> ToolResult:
+    """The person's facts and the topic memory (SPEC §5.4), older topics included."""
+    from ..context import render_topics
+
     words = [w for w in str(args.get("query", "")).lower().split() if len(w) > 1]
-    hits = [m for m in ctx.account.load_memory() if any(w in m["text"].lower() for w in words)]
-    return ToolResult(render(hits) if hits else "No remembered facts match.")
+    match = lambda text: any(w in text.lower() for w in words)  # noqa: E731
+    facts = [m for m in ctx.account.load_memory() if match(m["text"])]
+    topics = [e for e in ctx.account.load_context()["topics"] if match(f"{e.get('title', '')} {e['text']}")]
+    if not facts and not topics:
+        return ToolResult("Nothing remembered matches. conversation_search looks through everything said before.")
+    parts = [f"Facts about them:\n{render(facts)}"] if facts else []
+    parts += [f"Earlier topics:\n{render_topics(topics)}"] if topics else []
+    return ToolResult("\n\n".join(parts))
 
 
 async def memory_add(args: dict, ctx: ToolContext) -> ToolResult:
@@ -126,7 +135,8 @@ def register(reg: Registry) -> None:
     reg.add(
         Tool(
             "memory_search",
-            "Search remembered facts about the user by keywords.",
+            "Search what you remember by keywords: facts about the user, and your memory of earlier topics (also "
+            "older ones not shown in the context).",
             params(["query"], query=string("Keywords")),
             memory_search,
         )

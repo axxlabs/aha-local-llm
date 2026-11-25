@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from . import context
 from .accounts import Account
 from .tools import google, logins, schedule, signins, trusted
 
@@ -23,12 +24,22 @@ log = logging.getLogger("aha.actions")
 
 
 def memories(account: Account) -> list[dict]:
-    """What Aha! remembers about the person, for Settings: id and text only."""
+    """The person's profile facts, for the app: id and text only."""
     return [{"id": m.get("id"), "text": m.get("text")} for m in account.load_memory()]
 
 
+def topics(account: Account) -> list[dict]:
+    """The topic memory, newest first, for the app (SPEC §5.4)."""
+    entries = sorted(account.load_context()["topics"], key=lambda e: e.get("ts", 0), reverse=True)
+    return [{"id": e["id"], "title": e.get("title", ""), "text": e["text"], "ts": int(e.get("ts", 0))} for e in entries]
+
+
 def forget_memory(account: Account, memory_id: str, via: str) -> bool:
+    """A profile fact, or a topic's entry (ids starting with "t")."""
     items = account.load_memory()
+    if memory_id.startswith("t") and context.forget_topic(account, memory_id):
+        account.audit({"memory_forgotten": memory_id, "via": via})
+        return True
     if not memory_id or not any(m.get("id") == memory_id for m in items):
         return False
     account.save_memory([m for m in items if m.get("id") != memory_id])

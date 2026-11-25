@@ -71,8 +71,10 @@ def test_a_length_deletes_older_history_everywhere_on_the_computer(tmp_path):
     acct.audit({"kind": "approval", "title": "new"})
     acct.save_context(
         {
-            "summary": "talked about a fictional trip",
-            "summary_from": local(10),
+            "topics": [
+                {"id": "t1", "from": 1, "title": "Trip", "text": "a fictional trip", "ts": time.time() - 10 * 86400},
+                {"id": "t2", "from": 2, "title": "Dinner", "text": "a fictional dinner", "ts": time.time() - 86400},
+            ],
             "turns": [
                 {"role": "user", "content": "old question", "ts": local(9)},
                 {"role": "assistant", "content": "old answer", "ts": local(9)},
@@ -90,7 +92,7 @@ def test_a_length_deletes_older_history_everywhere_on_the_computer(tmp_path):
     assert [json.loads(r)["title"] for r in acct.vault.records(acct.dir / "audit.jsonl")] == ["new"]
     conv = acct.load_context()
     assert [t["content"] for t in conv["turns"]] == ["new question", "new answer"]
-    assert conv["summary"] == "" and "summary_from" not in conv  # it held turns older than a week
+    assert [e["id"] for e in conv["topics"]] == ["t2"]  # the topic memory follows the length too (SPEC §5.4)
     assert acct.history_start() == 2
     assert acct.prune_history() is False  # nothing more to do
 
@@ -98,30 +100,37 @@ def test_a_length_deletes_older_history_everywhere_on_the_computer(tmp_path):
     assert again.history_days == 7  # kept in account.json
 
 
-def test_a_summary_is_kept_while_its_turns_are_within_the_length(tmp_path):
+def test_an_old_summary_becomes_a_topic_entry_and_follows_the_length(tmp_path):
+    """Before topics (SPEC §4): the rolling summary becomes one entry, dated by its oldest turn."""
     accounts = Accounts(Vault(tmp_path, os.urandom(32)))
     acct = accounts.create("Ana")
     acct.history_days = 30
     acct.save_context({"summary": "recent things", "summary_from": local(3), "turns": []})
     acct.prune_history()
-    assert acct.load_context()["summary"] == "recent things"
+    [entry] = acct.load_context()["topics"]
+    assert entry["title"] == "Earlier conversation" and entry["text"] == "recent things"
     acct.save_context({"summary": "from before dates were kept", "turns": []})
     acct.prune_history()
-    assert acct.load_context()["summary"] == ""  # undated: its age is unknown, so it goes
+    assert acct.load_context()["topics"] == []  # undated: its age is unknown, so it goes
 
 
-def test_a_fold_records_the_summarys_age_and_a_fold_after_a_clear_is_dropped(tmp_path):
+def test_a_topic_entry_replaces_its_earlier_one_and_earlier_topics_turns_leave(tmp_path):
     accounts = Accounts(Vault(tmp_path, os.urandom(32)))
     acct = accounts.create("Ana")
-    turns = [{"role": "user", "content": "q", "ts": local(5)}, {"role": "assistant", "content": "a", "ts": local(5)}]
-    acct.save_context({"summary": "", "turns": list(turns)})
-    context.apply_fold(acct, turns, "they asked q")
-    assert acct.load_context()["summary_from"] == local(5)
-
-    acct.save_context({"summary": "", "turns": list(turns)})
-    acct.clear_history()  # while the summary was being written
-    context.apply_fold(acct, turns, "they asked q")
-    assert acct.load_context() == {"summary": "", "turns": []}
+    now = time.time()
+    old = {"role": "user", "content": "old topic", "t": now - 3 * 3600}
+    acct.save_context({"turns": [old], "topics": []})
+    context.save_topic(acct, 5, now - 60, "Parcel", "Tracking H01")
+    context.save_topic(acct, 5, now - 60, "Evri parcel", "Tracking H01, collect 26/11/2026")
+    conv = acct.load_context()
+    assert conv["topics"] == [
+        {"id": "t5", "from": 5, "title": "Evri parcel", "text": "Tracking H01, collect 26/11/2026", "ts": now - 60}
+    ]
+    assert conv["turns"] == []  # the earlier topic's turns left the context; its entry stays
+    context.save_topic(acct, 5, now - 60, "Evri parcel", "")  # nothing worth keeping: no entry
+    assert acct.load_context()["topics"] == []
+    acct.clear_history()
+    assert acct.load_context() == {"turns": [], "topics": []}
 
 
 async def test_settings_and_clear_reach_every_device(tmp_path):
