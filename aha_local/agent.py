@@ -52,6 +52,7 @@ class AgentOut(Protocol):
 
     async def message(self, account: Account, text: str, image: Image | None = None, open: str = "") -> None: ...
     async def title(self, account: Account, start: int, text: str, new: bool = False) -> None: ...
+    async def tool(self, account: Account, label: str) -> None: ...
     async def typing(self, account: Account, on: bool, queued: bool = False) -> None: ...
     async def card(self, account: Account, card: dict) -> None: ...
     async def state(self, account: Account, approval_id: str, state: str) -> None: ...
@@ -519,6 +520,7 @@ class Agent:
         tools = self.registry.specs()
         last = ""
         retried: set[str] = set()  # the checks that already sent a draft back (SPEC §3.5.1): once each
+        shown_tool = ""  # the last tool label said in the chat
         can_sign_in = "browser_login" in self.registry.names()
         # Where numbers in the answer may come from: what the person said or saved, earlier answers, and pages
         # opened in this task. Search snippets don't count (SPEC §3.5).
@@ -577,6 +579,10 @@ class Agent:
                 }
             )
             for call in reply.tool_calls:
+                label = messages.tool_label(call.name)
+                if label and label != shown_tool:  # said as it happens, once per run (SPEC §7.4 "Tools used")
+                    shown_tool = label
+                    await self.out.tool(account, label)
                 result = await self.registry.call(call.name, call.arguments, ctx)
                 addresses.remember(ctx.task.seen_urls, result.text)  # links the task was shown (SPEC §5.2)
                 if result.kind == "expired":

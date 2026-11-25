@@ -208,6 +208,10 @@ class Channel:
         subject starts there, so the part before it folds now."""
         await self.publish(account, {"t": "title", "from": start, "text": text, **({"new": True} if new else {})})
 
+    async def tool(self, account: Account, label: str) -> None:
+        """A tool the model starts using, as it happens (SPEC §7.4 "Tools used"): a chat item, no push."""
+        await self.publish(account, {"t": "tool", "label": label})
+
     async def text(self, account: Account, text: str) -> None:
         await self.message(account, text)
 

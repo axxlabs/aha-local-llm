@@ -167,6 +167,11 @@
     ],
     "error": [
       "code"
+    ],
+    "tool": [
+      "seq",
+      "ts",
+      "label"
     ]
   },
   "pairing": {

@@ -77,9 +77,13 @@ class Chat:
         self.typed: list[bool] = []  # typing on/off, in order
         self.states: list[tuple[str, str]] = []
         self.titles: list[tuple[int, str]] = []
+        self.tools: list[str] = []  # tool lines, as they happened (SPEC §7.4 "Tools used")
 
     async def message(self, account, text, image=None, open="") -> None:
         self.sent.append(SimpleNamespace(text=text, buttons=[], image=image, card=None, open=open))
+
+    async def tool(self, account, label) -> None:
+        self.tools.append(label)
 
     async def title(self, account, start, text, new=False) -> None:
         self.titles.append((start, text) if not new else (start, text, "new"))

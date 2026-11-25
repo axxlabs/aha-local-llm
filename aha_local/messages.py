@@ -82,3 +82,30 @@ def signed(text: str, name: str = "", medium: str = "email", limit: int | None =
     if limit:
         text = text[: max(0, limit - len(sig) - len(sep))]
     return f"{text}{sep}{sig}".strip()
+
+
+# A tool the model starts using, as a grey line in the chat (SPEC §7.4 "Tools used"). None: not shown (the time,
+# a message it sends mid-task, which shows itself).
+TOOL_LABELS = {
+    "web_search": "web search",
+    "fetch_url": "web page",
+    "conversation_search": "conversation history",
+    "show_screenshot": "screenshot",
+    "browser_login": "sign-in",
+    "browser_human_check": "human check",
+    "current_time": None,
+    "message_user": None,
+}
+TOOL_GROUPS = (
+    ("browser_", "browser"),
+    ("email_", "email"),
+    ("calendar_", "calendar"),
+    ("memory_", "memory"),
+    ("schedule_", "reminders"),
+)
+
+
+def tool_label(name: str) -> str | None:
+    if name in TOOL_LABELS:
+        return TOOL_LABELS[name]
+    return next((label for prefix, label in TOOL_GROUPS if name.startswith(prefix)), name.replace("_", " "))
