@@ -19,7 +19,6 @@ import time
 import mcp.types as mt
 
 from ..accounts import Account
-from ..approvals import MASK
 from ..policy.urls import site_of
 
 log = logging.getLogger("aha.signins")
@@ -29,16 +28,6 @@ VERSION = 2  # 1 also held an exported copy of the browser's storage: no more (S
 TIMEOUT = 30  # seconds for the harness's own browser code
 GET_URL = "async (page) => page.url()"
 COOKIE_DOMAINS = "async (page) => JSON.stringify([...new Set((await page.context().cookies()).map((c) => c.domain))])"
-MIN_SECRET = 3  # shorter values aren't masked in results: they'd blank out ordinary text
-
-
-def redact(text: str, secrets: list[str]) -> str:
-    """Hide what the person typed on a login card, wherever it shows up again (SPEC §5.8)."""
-    for s in sorted({s for s in secrets if len(s) >= MIN_SECRET}, key=len, reverse=True):
-        text = text.replace(s, MASK)
-    return text
-
-
 # ---- aha's notes
 
 

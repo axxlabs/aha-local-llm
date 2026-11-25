@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..accounts import Account
-from ..approvals import Approvals
+from ..approvals import MASK, Approvals
 from ..config import Config
 from ..items import Image
 
@@ -31,6 +31,29 @@ class ToolResult:
     full: str = field(default="", repr=False)  # a page before it was cut to fit, for the harness's own checks
 
 
+MIN_SECRET = 3  # shorter values aren't masked in results: they'd blank out ordinary text
+
+
+def redact(text: str, secrets: list[str]) -> str:
+    """Hide what the person typed on a sign-in card, wherever it shows up again (SPEC §5.8)."""
+    for s in sorted({s for s in secrets if len(s) >= MIN_SECRET}, key=len, reverse=True):
+        text = text.replace(s, MASK)
+    return text
+
+
+def redacted(value: Any, secrets: list[str]) -> Any:
+    """A record with every string in it redacted (for the transcript)."""
+    if not secrets:
+        return value
+    if isinstance(value, str):
+        return redact(value, secrets)
+    if isinstance(value, list):
+        return [redacted(v, secrets) for v in value]
+    if isinstance(value, dict):
+        return {k: redacted(v, secrets) for k, v in value.items()}
+    return value
+
+
 @dataclass
 class TaskState:
     """What tools may remember during one task."""
@@ -44,7 +67,9 @@ class TaskState:
     # the browser when a page of a signed-in site shows. Tools never set it themselves.
     private: bool = False
     ran: set[str] = field(default_factory=set)  # tools that ran without error in this task (set by the registry)
-    secrets: list[str] = field(default_factory=list)  # values the person typed on a sign-in card: never shown again
+    # Values the person typed on a sign-in card: never shown again. The registry hides them in every tool result,
+    # and the agent in every transcript record of the task (SPEC §5.8): tools add them, nothing else reads them.
+    secrets: list[str] = field(default_factory=list)
     signed_in_sites: set[str] | None = None  # the sites the person signed in on (read once per task)
     sign_in_page: str = ""  # the site, when the latest page is a sign-in form (SPEC §3.4 "Signing in")
     login_tried: bool = False  # browser_login ran in this task (whatever happened)
@@ -123,6 +148,8 @@ class Registry:
         except Exception as e:  # a failing tool must not end the task; the model can adjust
             log.exception("tool %s failed", name)
             return ToolResult(f"{name} failed: {type(e).__name__}: {str(e)[:300]}", error=True)
+        if ctx.task.secrets:
+            result.text = redact(result.text, ctx.task.secrets)
         if not result.error:
             ctx.task.ran.add(name)
             if tool.private:  # it read the person's private data (SPEC §5.2): declared, not set

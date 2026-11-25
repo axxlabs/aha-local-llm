@@ -9,6 +9,7 @@ import contextlib
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import Protocol
 
 import httpx
 
@@ -68,6 +69,26 @@ class Slots:
         self.owner[slot] = who
         self.last.setdefault(who, time.monotonic())
         return slot
+
+
+class Model(Protocol):
+    """What the agent needs from the model server (the real one is `LLM`; tests give a scripted one)."""
+
+    model: str
+
+    async def chat(
+        self,
+        messages: list[dict],
+        tools=None,
+        max_tokens: int = 4096,
+        who: str | None = None,
+        tool_choice: str = "auto",
+        thinking: bool = True,
+    ) -> Reply: ...
+    def turn(self, who: str) -> contextlib.AbstractAsyncContextManager: ...
+    def paused(self, who: str) -> contextlib.AbstractAsyncContextManager: ...
+    def wrote(self, who: str) -> None: ...
+    def queued(self, who: str) -> bool: ...
 
 
 class LLM:

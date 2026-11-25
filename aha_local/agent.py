@@ -20,10 +20,10 @@ from .accounts import Account, Accounts
 from .approvals import Approvals
 from .config import Config
 from .items import Image
-from .llm import LLM, ModelUnavailable
+from .llm import Model, ModelUnavailable
 from .policy import addresses
 from .tools import memory, schedule, signins
-from .tools.registry import Registry, TaskState, ToolContext
+from .tools.registry import Registry, TaskState, ToolContext, redacted
 
 log = logging.getLogger("aha.agent")
 
@@ -31,9 +31,9 @@ log = logging.getLogger("aha.agent")
 MAX_RECORDED = 20_000  # characters of a model call's text or thinking kept in the transcript
 
 
-def model_record(model: str, reply, secrets_typed: list[str]) -> dict:
+def model_record(model: str, reply) -> dict:
     """One model call, for the message's details (SPEC §3.8): what it wrote, its thinking, the tools it called."""
-    hide = lambda t: signins.redact(t, secrets_typed)[:MAX_RECORDED]  # noqa: E731
+    hide = lambda t: (t or "")[:MAX_RECORDED]  # noqa: E731
     return {
         "kind": "model",
         "model": model,
@@ -121,8 +121,7 @@ class _Pausing:
         self._approvals, self._llm, self._who = approvals, llm, who
 
     async def ask(self, *args, **kw):
-        paused = self._llm.paused(self._who) if hasattr(self._llm, "paused") else contextlib.nullcontext()
-        async with paused:
+        async with self._llm.paused(self._who):
             return await self._approvals.ask(*args, **kw)
 
     def __getattr__(self, name):
@@ -135,7 +134,7 @@ class ApprovalExpired(Exception):
 
 class Agent:
     def __init__(
-        self, config: Config, accounts: Accounts, llm: LLM, registry: Registry, out: AgentOut, browser=None
+        self, config: Config, accounts: Accounts, llm: Model, registry: Registry, out: AgentOut, browser=None
     ) -> None:
         self.config = config
         self.accounts = accounts
@@ -150,8 +149,8 @@ class Agent:
         self.browser_actions = actions.Browser(self)  # Settings → Your browser, and the chat commands for it
 
     def _turn(self, account: Account):
-        """The model for this person's whole task (llm.turn), or nothing to wait for (a test's model)."""
-        return self.llm.turn(account.address) if hasattr(self.llm, "turn") else contextlib.nullcontext()
+        """The model for this person's whole task (llm.turn)."""
+        return self.llm.turn(account.address)
 
     def session(self, account: Account) -> Session:
         return self.sessions[account.address]
@@ -175,8 +174,7 @@ class Agent:
         """A message the person typed, maybe with a photo (already shown on their devices by the channel)."""
         text = text.strip()
         self.last_activity = time.monotonic()
-        if hasattr(self.llm, "wrote"):
-            self.llm.wrote(account.address)  # their cache slot is the newest to keep (SPEC §3.2)
+        self.llm.wrote(account.address)  # their cache slot is the newest to keep (SPEC §3.2)
         account.transcript({"kind": "user", "text": text, "image": bool(image)})
         if self.browser is not None:
             self.browser.touch(account.id)  # the window stays open idle_minutes after their last message
@@ -449,7 +447,7 @@ class Agent:
         it costs only the new words; the question and the title are never part of the conversation."""
         asked = asked.split("\n\n", 1)[0]  # the message that started the task, not later notes
         start = folding.segment_start(account.recent_items(), dates.tz(self.config))
-        if prompt is None or start is None or not hasattr(self.out, "title"):
+        if prompt is None or start is None:
             return
         tz = dates.tz(self.config)
         since = dt.datetime.fromtimestamp(start[1], tz).strftime("%H:%M")
@@ -504,6 +502,11 @@ class Agent:
         browser = self.browser.for_account(account.id) if self.browser else None
         approvals = _Pausing(self.approvals, self.llm, account.address)  # a card frees the model meanwhile
         ctx = ToolContext(account, approvals, self.config, TaskState(), browser, send)
+
+        def record(entry: dict) -> None:
+            """The task's transcript: what the person typed on a sign-in card never shows (SPEC §5.8)."""
+            account.transcript(redacted(entry, ctx.task.secrets))
+
         addresses.remember(ctx.task.seen_urls, text)  # a link the person sent is theirs, not the model's
         tools = self.registry.specs()
         last = ""
@@ -531,14 +534,14 @@ class Agent:
             reply = await self.llm.chat(msgs, tools, who=account.address)
             self.session(account).last_prompt = msgs  # the title is asked at its end (SPEC §7.4 "Folding")
             log.info("model call: %d prompt tokens, %d cached", reply.prompt_tokens, reply.cached_tokens)
-            account.transcript(model_record(self.llm.model, reply, ctx.task.secrets))
+            record(model_record(self.llm.model, reply))
             if not reply.tool_calls:
                 draft = checks.Draft(text, reply.content or "", ctx.task, can_sign_in)
                 failed = next((c for c in checks.CLAIM_CHECKS if c.name not in retried and c.failed(draft)), None)
                 if failed:
                     retried.add(failed.name)
                     log.info(failed.log)
-                    account.transcript({"kind": "check", "name": failed.name})
+                    record({"kind": "check", "name": failed.name})
                     task.append({"role": "assistant", "content": draft.answer})
                     retry = failed.retry_for(draft)
                     task.append({"role": "user", "content": retry})
@@ -551,7 +554,7 @@ class Agent:
                 if missing and "numbers" not in retried:
                     # One more go: ask the model to confirm the numbers on a page, or drop them (SPEC §3.5).
                     retried.add("numbers")
-                    account.transcript({"kind": "check", "name": "numbers", "missing": missing[:20]})
+                    record({"kind": "check", "name": "numbers", "missing": missing[:20]})
                     log.info("draft answer had %d unconfirmed number(s); asking the model to check", len(missing))
                     task.append({"role": "assistant", "content": reply.content or ""})
                     task.append({"role": "user", "content": checks.retry_prompt(missing)})
@@ -573,13 +576,11 @@ class Agent:
                 addresses.remember(ctx.task.seen_urls, result.text)  # links the task was shown (SPEC §5.2)
                 if result.kind == "expired":
                     raise ApprovalExpired
-                if ctx.task.secrets:  # what the person typed on a sign-in card never shows again (SPEC §3.4)
-                    result.text = signins.redact(result.text, ctx.task.secrets)
-                account.transcript(
+                record(
                     {
                         "kind": "tool",
                         "name": call.name,
-                        "args": signins.redact(_short(call.arguments), ctx.task.secrets),
+                        "args": _short(call.arguments),
                         "result": result.text[:4000],
                         "error": result.error,
                     }

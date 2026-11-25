@@ -41,7 +41,7 @@ from ..policy.browser import MESSAGE_SITES, TYPING, classify, form_for, offered,
 from ..policy.gate import explain
 from ..policy.urls import check_url, site_of
 from . import guard, human, logins, signins
-from .registry import Registry, Tool, ToolContext, ToolResult, params, string
+from .registry import Registry, Tool, ToolContext, ToolResult, params, redact, string
 
 log = logging.getLogger("aha.browser")
 
@@ -850,9 +850,9 @@ async def browser_login(args: dict, ctx: ToolContext) -> ToolResult:
         if ctx.task.signed_in_sites is not None:
             ctx.task.signed_in_sites.add(site)
         ctx.task.private = True  # the task now holds private data (SPEC §5.2)
-    ctx.task.last_snapshot = signins.redact(ctx.task.last_snapshot, ctx.task.secrets)
+    ctx.task.last_snapshot = redact(ctx.task.last_snapshot, ctx.task.secrets)
     said = f"Signed in on {host}." if signed else f"Not signed in on {host}: look at the page for why."
-    page.text = said + " The page now:\n\n" + signins.redact(page.text, ctx.task.secrets)
+    page.text = said + " The page now:\n\n" + page.text  # the registry hides what they typed (SPEC §5.8)
     return page
 
 

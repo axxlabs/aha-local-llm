@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import time
@@ -42,6 +43,15 @@ class FakeLLM:
 
     def queued(self, who) -> bool:
         return who in self.queued_for
+
+    def turn(self, who):  # one task at a time is tested on the real LLM (test_slots.py)
+        return contextlib.nullcontext()
+
+    def paused(self, who):
+        return contextlib.nullcontext()
+
+    def wrote(self, who) -> None:
+        pass
 
     async def chat(self, messages, tools=None, max_tokens=4096, who=None, tool_choice="auto", thinking=True) -> Reply:
         if tool_choice == "none" and "NEW:" in str(messages[-1].get("content")):  # a title: not part of the script
