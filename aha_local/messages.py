@@ -36,18 +36,6 @@ exchange) · **help**
 
 Open source (AGPL-3.0): {source}"""
 
-APPROVE_LABELS = {
-    "action": ("Approve", "Edit", "Decline"),
-    "memory": ("Save", "Edit", "Don't"),
-    "forget": ("Forget it", "Edit", "Keep it"),
-    "email": ("Send", "Edit", "Don't send"),
-    "draft": ("Save draft", "Edit", "Don't save"),
-    "signin": ("Sign in", "Edit", "Don't"),
-    "check": ("Send taps", "Edit", "Give up"),
-    "schedule": ("Schedule", "Edit", "Don't"),
-    "calendar": ("Save", "Edit", "Don't"),
-    "calendar_delete": ("Delete it", "Edit", "Keep it"),
-}
 EDIT_IN_CARD = "Type them into the card in the app, then tap its button."
 SIGNINS = (
     "My browser remembers these sites for you, like your own browser does:\n{sites}\n\n"

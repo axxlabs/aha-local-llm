@@ -56,7 +56,7 @@ class Pending:
     image: Image | None
     future: asyncio.Future
     editing: bool = False
-    why: str = ""  # why this card is shown (the (i)); "" → the kind's own reason (KIND_WHY)
+    why: str = ""  # why this card is shown (the (i)); "" → the kind's own reason (KINDS)
 
 
 class Out(Protocol):
@@ -67,28 +67,70 @@ class Out(Protocol):
     async def text(self, account: Account, text: str) -> None: ...
 
 
-# Why each kind of card is shown, when the caller doesn't say more (the (i) on the card, SPEC §7.4). Cards of the
-# browser and of opening addresses come from the gate's rule instead (policy.gate.WHY).
-KIND_WHY = {
-    "email": "Every email asks first, always: nothing is sent in your name without your OK. It's signed as written "
-    "by Aha!, and you can change any of it before it goes.",
-    "draft": "A draft is saved into your mailbox, so it's shown to you first. It isn't sent.",
-    "calendar": "Adding or changing a calendar event always asks first: invitations can go out to the people in "
-    "it, and your calendar is yours. You can change it before it's saved.",
-    "calendar_delete": "Deleting a calendar event always asks first: it can't be undone, and the people invited "
-    "may be told.",
-    "schedule": "A scheduled task runs later on its own, without you there, so it always asks first.",
-    "memory": "Aha! keeps something in its memory for future chats only with your OK, so you always see what it "
-    "remembers.",
-    "forget": "Forgetting a fact can't be undone, so it asks first.",
-    "signin": "A site wants you to sign in. What you type here goes straight into the site's sign-in form: the "
-    "model never sees it, and it isn't kept in the chat. Tick save and Aha! signs you in on this site by itself "
-    "next time.",
-    "check": "The site wants to check that a person is there (a puzzle or a tap). Only you can answer it: Aha! "
-    "taps where you tap.",
-}
+@dataclass(frozen=True)
+class Kind:
+    """One kind of card, all it needs in one place: its icon, its buttons (yes, edit, no), why it's shown when the
+    caller doesn't say more (the (i) on the card, SPEC §7.4), and whether its inputs are open from the start (the
+    person types or taps). Cards of the browser and of opening addresses take their reason from the gate's rule
+    instead (policy.gate.WHY)."""
 
-OPEN_INPUTS = ("signin", "check")  # cards whose inputs are open from the start: the person types or taps
+    icon: str
+    buttons: tuple[str, str, str]
+    why: str = ""
+    open_inputs: bool = False
+
+
+KINDS = {
+    "action": Kind("✋", ("Approve", "Edit", "Decline")),
+    "email": Kind(
+        "✉️",
+        ("Send", "Edit", "Don't send"),
+        "Every email asks first, always: nothing is sent in your name without your OK. It's signed as written by "
+        "Aha!, and you can change any of it before it goes.",
+    ),
+    "draft": Kind(
+        "✉️",
+        ("Save draft", "Edit", "Don't save"),
+        "A draft is saved into your mailbox, so it's shown to you first. It isn't sent.",
+    ),
+    "calendar": Kind(
+        "📅",
+        ("Save", "Edit", "Don't"),
+        "Adding or changing a calendar event always asks first: invitations can go out to the people in it, and "
+        "your calendar is yours. You can change it before it's saved.",
+    ),
+    "calendar_delete": Kind(
+        "📅",
+        ("Delete it", "Edit", "Keep it"),
+        "Deleting a calendar event always asks first: it can't be undone, and the people invited may be told.",
+    ),
+    "schedule": Kind(
+        "⏰",
+        ("Schedule", "Edit", "Don't"),
+        "A scheduled task runs later on its own, without you there, so it always asks first.",
+    ),
+    "memory": Kind(
+        "🧠",
+        ("Save", "Edit", "Don't"),
+        "Aha! keeps something in its memory for future chats only with your OK, so you always see what it remembers.",
+    ),
+    "forget": Kind("🧠", ("Forget it", "Edit", "Keep it"), "Forgetting a fact can't be undone, so it asks first."),
+    "signin": Kind(
+        "🔑",
+        ("Sign in", "Edit", "Don't"),
+        "A site wants you to sign in. What you type here goes straight into the site's sign-in form: the model "
+        "never sees it, and it isn't kept in the chat. Tick save and Aha! signs you in on this site by itself next "
+        "time.",
+        open_inputs=True,
+    ),
+    "check": Kind(
+        "🧩",
+        ("Send taps", "Edit", "Give up"),
+        "The site wants to check that a person is there (a puzzle or a tap). Only you can answer it: Aha! taps "
+        "where you tap.",
+        open_inputs=True,
+    ),
+}
 
 
 def masked(fields: list[Field], values: list[str]) -> list[str]:
@@ -97,12 +139,14 @@ def masked(fields: list[Field], values: list[str]) -> list[str]:
 
 
 def card(p: Pending) -> dict:
-    yes, edit, no = messages.APPROVE_LABELS.get(p.kind, messages.APPROVE_LABELS["action"])
+    kind = KINDS.get(p.kind, KINDS["action"])
+    yes, edit, no = kind.buttons
     editable = any(f.kind in EDITABLE for f in p.fields)
     out = {
         "t": "approval",
         "id": p.id,
         "kind": p.kind,
+        "icon": kind.icon,
         "title": p.title,
         "fields": [
             {
@@ -113,11 +157,11 @@ def card(p: Pending) -> dict:
             }
             for f in p.fields
         ],
-        "buttons": [yes, edit, no] if editable and p.kind not in OPEN_INPUTS else [yes, no],
+        "buttons": [yes, edit, no] if editable and not kind.open_inputs else [yes, no],
     }
     if p.image is not None:
         out["image"] = p.image.to_dict()
-    if why := p.why or KIND_WHY.get(p.kind, ""):
+    if why := p.why or kind.why:
         out["why"] = why
     return out
 
@@ -236,7 +280,7 @@ class Approvals:
         elif decision == "decline":
             self._resolve(p, Decision(False, note=str(note)[:MAX_VALUE].strip(), reason="declined"))
         elif decision == "edit":
-            if p.kind in OPEN_INPUTS or not any(f.kind in TYPED for f in p.fields):
+            if KINDS.get(p.kind, KINDS["action"]).open_inputs or not any(f.kind in TYPED for f in p.fields):
                 await self.out.text(account, messages.EDIT_IN_CARD)
                 return
             p.editing = True

@@ -29,7 +29,7 @@ def test_every_card_says_why_in_code():
     assert "read your email" in explain("type_private", "waitrose.com")
     assert explain("trusted") == ""  # a run: no card, no reason
     for kind in ("email", "draft", "calendar", "calendar_delete", "schedule", "memory", "forget", "signin", "check"):
-        assert approvals.KIND_WHY[kind]
+        assert approvals.KINDS[kind].why and approvals.KINDS[kind].icon
 
 
 def test_an_html_emails_links_keep_their_addresses():
