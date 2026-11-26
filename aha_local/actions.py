@@ -121,20 +121,24 @@ class Browser:
         return [{**listed[s], "login_saved": s in saved} for s in sorted(listed)]
 
     async def forget_site(self, account: Account, site: str, via: str) -> bool:
-        """Forget one site in the person's browser (cookies and storage), and its saved logins (§5.8)."""
+        """Forget everything about one site (SPEC §3.4): the browser's cookies and storage, its saved logins
+        (§5.8) and its trust (§5.7). One Forget, one site's whole record."""
         name = signins.site_name(site) or site
         found = await signins.forget(account, self._session(account), site)
         found = logins.forget(account, name) or found
+        found = (name in trusted.sites(account) and trusted.set_trusted(account, name, False)) or found
         if found:
             account.audit({"site_forgotten": name, "via": via})
         return found
 
     async def clear(self, account: Account, via: str) -> None:
-        """Clear browser: stop the running task, then the person's browser, and delete their whole profile."""
+        """Clear browser: stop the running task, then the person's browser, and delete their whole profile: every
+        site forgotten, its saved logins and trust too."""
         await self.agent.stop(account, quiet=True)
         if self.agent.browser is not None:
             await self.agent.browser.forget(account.id)
         signins.clear(account)
         logins.clear(account)
+        trusted.clear(account)
         account.audit({"browser_cleared": True, "via": via})
         log.info("browser cleared for an account: its profile deleted")

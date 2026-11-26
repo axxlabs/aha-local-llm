@@ -32,6 +32,11 @@ def _save(account: Account, found: list[str]) -> None:
         path.unlink(missing_ok=True)
 
 
+def clear(account: Account) -> None:
+    """With Clear browser: every site is forgotten, its trust too."""
+    (account.dir / FILE).unlink(missing_ok=True)
+
+
 def valid(text: str) -> str:
     """The site as a registrable domain, if it names a public web site by name ('' otherwise: no addresses)."""
     host = text.strip().lower().removeprefix("https://").removeprefix("http://").split("/", 1)[0].split(":", 1)[0]

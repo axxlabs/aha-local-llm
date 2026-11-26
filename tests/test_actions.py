@@ -43,3 +43,18 @@ def test_a_topic_entry_is_forgotten_like_a_fact(accounts):
     assert {"memory_forgotten": "t7", "via": "settings"} in [
         {k: v for k, v in e.items() if k != "ts"} for e in audited(fe)
     ]
+
+
+async def test_forgetting_a_site_forgets_its_whole_record(accounts):
+    """SPEC §3.4: one Forget per site: its sign-in, saved login and trust together."""
+    from types import SimpleNamespace
+
+    from aha_local.tools import trusted
+
+    fe = accounts.create("Test Person")
+    logins.save(fe, "www.waitrose.com", "test@example.com", "not-a-real-password")
+    trusted.set_trusted(fe, "waitrose.com", True)
+    browser = actions.Browser(SimpleNamespace(browser=None))
+    assert await browser.forget_site(fe, "www.waitrose.com", "settings")
+    assert not logins.sites(fe) and trusted.sites(fe) == []
+    assert await browser.listing(fe) == []

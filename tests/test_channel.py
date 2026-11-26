@@ -406,10 +406,12 @@ async def test_settings_trust_sites_and_forget_memories(tmp_path):
     ]
     await phone.send({"t": "browser_trust", "site": "192.168.1.1", "trusted": True})
     assert phone.inbox()[0] == {"t": "error", "code": "bad_site"}
-    await phone.send({"t": "browser_clear"})
-    assert phone.inbox()[0]["sites"][0]["trusted"]  # clearing browser data leaves trust
-    await phone.send({"t": "browser_trust", "site": "waitrose.com", "trusted": False, "login_saved": False})
+    await phone.send({"t": "browser_trust", "site": "waitrose.com", "trusted": False})
     assert phone.inbox() == [{"t": "browser", "sites": []}] and trusted.sites(acct) == []
+    await phone.send({"t": "browser_trust", "site": "waitrose.com", "trusted": True})
+    phone.inbox()
+    await phone.send({"t": "browser_clear"})
+    assert phone.inbox() == [{"t": "browser", "sites": []}] and trusted.sites(acct) == []  # every site forgotten
 
     keep, drop = memory.add_fact(acct, "Prefers window seats"), memory.add_fact(acct, "Lives in Leeds")
     await phone.send({"t": "memory_forget", "id": drop["id"]})

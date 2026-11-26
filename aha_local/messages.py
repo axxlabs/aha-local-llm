@@ -49,9 +49,12 @@ SIGNED_IN = " (signed in)"
 NO_SIGNINS = (
     "My browser doesn't remember any site for you yet. When a site asks you to sign in, I'll show you a sign-in card."
 )
-SIGNIN_FORGOTTEN = "Done: I've forgotten {site}, so you're signed out there."
+SIGNIN_FORGOTTEN = "Done: I've forgotten {site}: you're signed out there, and its saved login and trust are gone."
 SIGNIN_UNKNOWN = "My browser doesn't remember {site} for you. Say **sign-ins** to see the list."
-BROWSER_CLEARED = "Done: my browser has forgotten every site for you, so you're signed out everywhere."
+BROWSER_CLEARED = (
+    "Done: my browser has forgotten every site for you: you're signed out everywhere, and saved logins and trusted "
+    "sites are gone."
+)
 
 
 # What Aha! writes for someone else is signed, in code (SPEC §3.4): on the card, so the person sees it and can
