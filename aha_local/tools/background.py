@@ -91,9 +91,16 @@ class Note:
     text: str
     prompt: str = ""  # the task's full instruction: the box's (i)
     every: int = 0  # minutes between checks
+    id: str = ""  # the task's: the Tasks panel links its last check to this message (SPEC §7.4)
 
     def for_app(self) -> dict:
-        return {"kind": self.kind, "title": self.title, "prompt": self.prompt, "every": self.every * 60}
+        return {
+            "kind": self.kind,
+            "title": self.title,
+            "prompt": self.prompt,
+            "every": self.every * 60,
+            **({"id": self.id} if self.id else {}),
+        }
 
     @property
     def head(self) -> str:
@@ -536,7 +543,7 @@ def finish(account: Account, task_id: str, answer: str, stopped: bool) -> Note |
         if entry is None:
             return None  # cancelled while it ran
         account.audit({"background_task_closed": task_id, "outcome": kind})
-    return Note("update" if kind == "notify" else kind, entry["title"], text, entry["prompt"], entry["every"])
+    return Note("update" if kind == "notify" else kind, entry["title"], text, entry["prompt"], entry["every"], task_id)
 
 
 def interrupted(account: Account, task_id: str) -> None:
@@ -693,4 +700,4 @@ class Runner:
         when = dates.for_model(dt.datetime.fromtimestamp(entry["until"], self.tz))
         last = f" The last check found: {entry['last']}" if entry.get("last") else ""
         text = EXPIRED.format(when=when, last=last)
-        await self.agent.task_note(account, Note("expired", entry["title"], text, entry["prompt"], entry["every"]))
+        await self.agent.task_note(account, Note("expired", entry["title"], text, entry["prompt"], entry["every"], entry["id"]))

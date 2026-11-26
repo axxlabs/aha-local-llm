@@ -133,6 +133,7 @@ async def test_a_closure_goes_to_the_chat_and_ends_the_task(runner, agent, llm, 
         "title": "Reply from Sam about Saturday",
         "prompt": task()["prompt"],  # the box's (i): the full description
         "every": 15 * 60,
+        "id": "abc123",  # the Tasks panel links the task's last check to this message
     }
     # Its own topic: what was going on folded first, and the part is titled with the task's title.
     assert chat.cuts == [0] and chat.titles[0][1] == "Reply from Sam about Saturday"
