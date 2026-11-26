@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 from .. import dates
 from ..accounts import Account
 from ..approvals import Field
-from ..policy import addresses
+from ..policy import addresses, grants
 from ..policy.grants import Grant, emails_in
 from . import guard, trusted
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
@@ -41,6 +41,8 @@ MAX_PROMPT = 2000
 MAX_LAST = 4000  # the previous check's whole answer, given to the next one
 IDLE_AFTER = 5 * 60  # seconds without input from anyone before a check runs
 CHECK_EVERY = 30.0
+SITES = {"type": "array", "items": {"type": "string"}}
+MAX_ALLOWED = 20  # sites, and people, each, a new task may ask for
 NEVER = "never"
 OUTCOME = re.compile(r"^[\W_]*(WAITING|NOTIFY|DONE|FAILED)\b[ \t*_`]*[:\-–—]?[ \t*_`]*", re.I)
 
@@ -132,6 +134,44 @@ def run_now(account: Account, task_id: str) -> bool:
 
 def _urls(text: str) -> list[str]:
     return list(dict.fromkeys(u.rstrip(".,;:!?") for u in addresses.URL_IN_TEXT.findall(text or "")))
+
+
+def _sites(values: object) -> tuple[list[str], list[str]]:
+    """(sites, what wasn't a site)."""
+    good, bad = [], []
+    for v in values if isinstance(values, list) else []:
+        site = trusted.valid(str(v))
+        (good if site else bad).append(site or str(v))
+    return list(dict.fromkeys(good)), bad
+
+
+def _people(values: object) -> tuple[list[str], list[str]]:
+    good, bad = [], []
+    for v in values if isinstance(values, list) else []:
+        found = emails_in(str(v))
+        (good if len(found) == 1 else bad).append(found[0] if len(found) == 1 else str(v))
+    return list(dict.fromkeys(good)), bad
+
+
+def asked_items(args: dict, trusted_sites: set[str]) -> tuple[list[tuple[str, Grant]], list[str]]:
+    """What a new task's checks may do without asking, as the model asked it: one tick each on the card, in the
+    person's words, and what wasn't a site or one address. Trusted sites need no tick; typing on a site includes
+    opening it, so a site asked for both is one tick."""
+    opens, bad_opens = _sites(args.get("open"))
+    types, bad_types = _sites(args.get("type"))
+    people, bad_people = _people(args.get("email"))
+    types = [t for t in types if t not in trusted_sites][:MAX_ALLOWED]
+    opens = [o for o in opens if o not in trusted_sites and o not in types][:MAX_ALLOWED]
+    yes = lambda key: args.get(key) is True  # noqa: E731
+    g = grants
+    items = [(g.type_label(t), Grant(type={t})) for t in types]
+    items += [(g.open_label(o), Grant(open={o})) for o in opens]
+    items += [(g.SEARCH_LABEL, Grant(search=True))] if yes("search") else []
+    items += [(g.email_label(p), Grant(email={p})) for p in people[:MAX_ALLOWED]]
+    items += [(g.DRAFTS_LABEL, Grant(drafts=True))] if yes("drafts") else []
+    items += [(g.CALENDAR_ADD_LABEL, Grant(calendar_add=True))] if yes("calendar_add") else []
+    items += [(g.CALENDAR_CHANGE_LABEL, Grant(calendar_change=True))] if yes("calendar_change") else []
+    return items, [*bad_opens, *bad_types, *bad_people]
 
 
 def links_of(account: Account, task_id: str) -> list[str]:
@@ -300,6 +340,15 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
             "again.",
             error=True,
         )
+    # What its checks may do without asking (SPEC §3.4 "Background tasks", §5.2 "Allowed up front"): the model
+    # says, the person ticks on the card. A request the person watches asks for each action as it happens.
+    items, bad = asked_items(args, set(trusted.sites(ctx.account)))
+    if bad:
+        return ToolResult(
+            f"Not created: {', '.join(bad)} isn't a site's name (like fedex.com) or one email address. Fix it and "
+            "call task_create again.",
+            error=True,
+        )
     # It checks later on its own, without the person watching, so they approve it (SPEC §3.4).
     fields = [
         Field("Waiting for", title),
@@ -308,11 +357,7 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
         Field("Check every (minutes)", str(minutes)),
         Field("Until", _until_text(end, tz)),
     ]
-    # What the person allowed up front for this request goes on with the task's checks (SPEC §3.4): shown, so
-    # starting it is agreeing to that too.
-    allowed = ctx.task.grant.labels()
-    if allowed:
-        fields.append(Field("Allowed up front", "; ".join(allowed), "info"))
+    fields += [Field(label, "true", "bool") for label, _ in items]
     d, refused = await guard.send(ctx, "task", "Start this background task?", fields)
     if refused:
         return refused
@@ -323,6 +368,10 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
             f"The edited details weren't valid ({why}), so nothing was started. Ask the person.", error=True
         )
     title, prompt, minutes, end, first = got
+    grant = Grant()
+    for (_, g), ticked in zip(items, v[5:], strict=False):
+        if ticked == "true":
+            grant.add(g)
     entries = load(ctx.account)
     if len(entries) >= MAX_TASKS:
         return ToolResult(f"Not created: there are already {MAX_TASKS} background tasks.", error=True)
@@ -348,7 +397,7 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
             )
             else {}
         ),
-        **({"grant": ctx.task.grant.to_dict()} if ctx.task.grant else {}),
+        **({"grant": grant.to_dict()} if grant else {}),
     }
     save(ctx.account, [*entries, entry])
     return ToolResult(
@@ -386,8 +435,9 @@ def register(reg: Registry) -> None:
             "request, with only your memory: write it so it makes sense on its own later, with what to look at "
             "(the site by its name, like fedex.com, and how to find the page there; names, tracking codes), how, "
             "and what counts as done. Put an address in it only if you opened it or the user sent it in this "
-            "request: never one you put together. Ask permissions_request first for what its checks will need "
-            "(typing the tracking number on fedex.com). Don't say in it what to answer: "
+            "request: never one you put together. Say what its checks will need to do without asking (`type` "
+            "for typing the tracking number on fedex.com, `email` for who it writes to…): the user ticks each before "
+            "it starts; anything not ticked waits for them when it happens. Don't say in it what to answer: "
             "each check is told how to answer. Checks run only while nobody is using Aha!, so timing isn't exact.",
             params(
                 ["title", "prompt", "every_minutes", "until"],
@@ -407,6 +457,17 @@ def register(reg: Registry) -> None:
                     "The first check, local YYYY-MM-DD HH:MM, for something at a time; leave it out to start "
                     "`every_minutes` from now. 'Every weekday at 8' asked on a Saturday evening starts Monday 08:00"
                 ),
+                type={**SITES, "description": "Sites its checks type on (a search box, a form), like fedex.com"},
+                open={
+                    **SITES,
+                    "description": "Sites whose pages its checks only read, after reading the user's email or a "
+                    "signed-in page (reading needs nothing otherwise)",
+                },
+                search={"type": "boolean", "description": "Its checks search the web after reading private things"},
+                email={**SITES, "description": "Email addresses of the people its checks send email to or invite"},
+                drafts={"type": "boolean", "description": "Its checks save email drafts (nothing is sent)"},
+                calendar_add={"type": "boolean", "description": "Its checks add new events to the calendar"},
+                calendar_change={"type": "boolean", "description": "Its checks change events already there"},
             ),
             task_create,
         )

@@ -20,11 +20,7 @@ from .test_signin import PASSWORD, setup, start_sign_in  # noqa: F401
 
 
 def tool_results(llm) -> list[str]:
-    return [
-        m["content"]
-        for m in llm.requests[-1]["messages"]
-        if m.get("role") == "tool" and not m["tool_call_id"].startswith("perm-")
-    ]
+    return [m["content"] for m in llm.requests[-1]["messages"] if m.get("role") == "tool"]
 
 
 async def test_any_site_is_remembered_between_tasks_and_restarts(setup, llm, chat, accounts):
@@ -381,11 +377,7 @@ async def test_a_new_windows_blank_page_is_said_and_the_last_page_given(setup, l
     llm.answer("Your trolley has the rice in it.")
     await agent.inbound(fe, "remove the toilet paper")
     await settle(agent)
-    results = [
-        m
-        for m in llm.requests[n + 1]["messages"]
-        if m.get("role") == "tool" and not m["tool_call_id"].startswith("perm-")
-    ]
+    results = [m for m in llm.requests[n + 1]["messages"] if m.get("role") == "tool"]
     assert "new browser window" in results[-1]["content"]
     assert "https://www.shop.example/trolley/visit-1/" in results[-1]["content"]
     retry = llm.requests[n + 2]["messages"][-1]["content"]

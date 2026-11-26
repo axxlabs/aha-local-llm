@@ -109,7 +109,7 @@ async def send(
 def allowed_note(kind: str, title: str, fields: list[Field]) -> str:
     """The chat's line for a send that ran without its card, allowed up front: what it was, and to whom."""
     shown = "; ".join(f"{f.label}: {f.value}" for f in fields if f.kind in ("text", "info") and f.value)
-    return f"{KINDS.get(kind, KINDS['action']).icon} {title.rstrip('?')}, as you allowed up front. {shown}".strip()
+    return f"{KINDS.get(kind, KINDS['action']).icon} {title.rstrip('?')}, as you allowed for this task. {shown}".strip()
 
 
 async def open_address(ctx: ToolContext, url: str, tool: str) -> tuple[str, Action, ToolResult | None]:

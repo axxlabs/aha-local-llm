@@ -311,10 +311,10 @@ async def test_a_messages_details_are_its_tasks_model_calls_and_tools(agent, llm
     assert person(accounts).task is None  # cleared when the task ends
     sent = {"kind": "item", "item": {"t": "msg", "role": "aha", "seq": 7, "text": "It's noon."}, "task": task}
     events = trace([*records, sent], 7)
-    assert [e["kind"] for e in events] == ["model", "tool", "tool", "model", "answer", "item"]  # permissions first
+    assert [e["kind"] for e in events] == ["model", "tool", "model", "answer", "item"]
     assert "task" not in events[0] and events[-1]["text"] == "It's noon."
     assert trace(records, 8) == []  # not a task's message
-    assert len(trace([*records, sent], 7, budget=600)) == 6  # shortened to fit, never dropped
+    assert len(trace([*records, sent], 7, budget=600)) == 5  # shortened to fit, never dropped
 
 
 async def test_whoever_has_a_task_running_hears_when_aha_restarts(accounts):

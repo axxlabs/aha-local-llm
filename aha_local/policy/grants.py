@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
-"""Permissions allowed up front (SPEC §5.2 "Allowed up front").
+"""What a background task's checks may do without asking (SPEC §5.2 "Allowed up front").
 
-At the start of a request the model says what it expects to need (`permissions_request`); the person allows it
-on one card, and for the rest of the topic those actions run without their own card, like a trusted site. A
-background task started then keeps them for its checks. Only what the person ticked is in a `Grant`: the model's
-words never reach it any other way.
+When the model starts a background task it says what the checks will need (`task_create`); the person ticks
+each on the task's card, and can change it later in the Tasks panel. Its checks then run those actions without
+their own card, like a trusted site, since nobody is watching them. A request the person is watching has none:
+each action asks as it happens. Only what the person ticked is in a `Grant`: the model's words never reach it
+any other way.
 """
 
 from __future__ import annotations

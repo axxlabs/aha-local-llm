@@ -82,10 +82,9 @@ class TaskState:
     # exactly isn't the model writing an address (SPEC §5.2 rule 7).
     seen_urls: set[tuple] = field(default_factory=set)
     banners_tried: set[tuple[str, str]] = field(default_factory=set)  # cookie banners closed: (page, button)
-    # Allowed up front by the person (SPEC §5.2 "Allowed up front"): the topic's, shared with the agent's session,
-    # or a background task's own. Only permissions_request's card adds to it.
+    # What a background task's checks may do without asking (SPEC §5.2 "Allowed up front"): ticked by the person
+    # on its card, or in the Tasks panel. A request the person is watching has none.
     grant: Grant = field(default_factory=Grant)
-    estimated: bool = False  # permissions_request ran in this task: the first step of every task (SPEC §3.4)
 
 
 @dataclass
@@ -127,9 +126,6 @@ def string(description: str) -> dict:
 class Registry:
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
-        from . import permissions  # every registry has it: the first step of every task (SPEC §3.4)
-
-        permissions.register(self)
 
     def add(self, tool: Tool) -> None:
         self._tools[tool.name] = tool

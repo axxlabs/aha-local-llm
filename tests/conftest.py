@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import dataclasses
 import json
 import os
 import time
@@ -73,19 +72,7 @@ class FakeLLM:
         self.requests.append({"messages": messages, "tools": tools})
         await asyncio.sleep(0)
         reply = self.script.pop(0) if self.script else Reply("(script ended)")
-        return self._permissions_first(messages, reply)
-
-    def _permissions_first(self, messages, reply: Reply) -> Reply:
-        """The model's first step of every task (SPEC §3.4): an empty permissions_request alongside its first
-        tool calls, unless the script asks for it itself, or a test turns it off (`permissions_first`)."""
-        if not self.permissions_first or not reply.tool_calls:
-            return reply
-        made = [c["function"]["name"] for m in messages for c in m.get("tool_calls") or []]
-        names = [c.name for c in reply.tool_calls]
-        if "permissions_request" in made or "permissions_request" in names:
-            return reply
-        first = ToolCall(f"perm-{len(self.requests)}", "permissions_request", "{}")
-        return dataclasses.replace(reply, tool_calls=[first, *reply.tool_calls])
+        return reply
 
 
 class Chat:

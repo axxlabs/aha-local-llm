@@ -23,8 +23,8 @@ from .items import Image
 from .llm import Model, ModelUnavailable
 from .policy import addresses
 from .policy.grants import Grant
-from .tools import background, memory, permissions, signins
-from .tools.registry import Registry, TaskState, ToolContext, ToolResult, redacted
+from .tools import background, memory, signins
+from .tools.registry import Registry, TaskState, ToolContext, redacted
 
 log = logging.getLogger("aha.agent")
 
@@ -76,22 +76,12 @@ class Session:
     sent: int = 0  # messages sent to them, to know whether they've heard back in a task
     last_prompt: list[dict] | None = None  # the task's latest model request: its title is asked at the end
     background: str = ""  # the background task whose check is running, if that's what runs (SPEC §3.4)
-    # What the person allowed up front (SPEC §5.2 "Allowed up front"), for the topic it was allowed in: a new topic
-    # starts with nothing allowed. Kept here, not on disk: after a restart it's asked again.
-    grant: Grant = field(default_factory=Grant)
-    grant_topic: tuple | None = None
-
-    def grant_for(self, topic: tuple | None) -> Grant:
-        if topic != self.grant_topic:
-            self.grant, self.grant_topic = Grant(), topic
-        return self.grant
 
     def reset(self) -> None:
         """Drop what's waiting (Stop, Clear history, the account deleted)."""
         self.inbox.clear()
         self.photos.clear()
         self.last_prompt = None
-        self.grant, self.grant_topic = Grant(), None
 
 
 LIMIT_TICK = 0.5  # seconds between looks at the task's time limit
@@ -582,7 +572,8 @@ class Agent:
     ) -> tuple[str, bool, str]:
         """Returns the answer, whether it passed the checks, and everything the person said during the task.
         `quiet` (a background check): no tool lines, and the person's messages wait for a task of their own.
-        `grant`: a background task's own permissions; otherwise the topic's (SPEC §5.2 "Allowed up front")."""
+        `grant`: a background task's own permissions (SPEC §5.2 "Allowed up front"); a request the person is
+        watching has none: each action asks as it happens."""
         today = dates.now(self.config).date()
 
         def with_dates(message: str) -> str:
@@ -612,10 +603,7 @@ class Agent:
         browser = self.browser.for_account(account.id) if self.browser else None
         approvals = _Pausing(self.approvals, self.llm, account.address)  # a card frees the model meanwhile
         topic = folding.segment_start(account.recent_items(), dates.tz(self.config))  # the topic going on (§4)
-        # Permissions up front are the first step of a task the person started (SPEC §3.4); a check runs with its
-        # task's own, already allowed.
-        state = TaskState(grant=grant if grant is not None else self.session(account).grant_for(topic))
-        state.estimated = quiet
+        state = TaskState(grant=grant if grant is not None else Grant())
         ctx = ToolContext(account, approvals, self.config, state, browser, send)
 
         def record(entry: dict) -> None:
@@ -702,22 +690,12 @@ class Agent:
                     ],
                 }
             )
-            # The permissions come first (SPEC §3.4): asked in the same reply as other calls, they run before
-            # them; without them, the others don't run. The results go back in the order the calls were made.
-            calls = list(reply.tool_calls)
-            order = sorted(range(len(calls)), key=lambda i: calls[i].name != permissions.NAME)
-            answered: dict[int, list[dict]] = {}
-            for i in order:
-                call = calls[i]
-                answered[i] = added = []
+            for call in reply.tool_calls:
                 label = messages.tool_label(call.name)
                 if label and label != shown_tool and not quiet:  # said as it happens (SPEC §7.4 "Tools used")
                     shown_tool = label
                     await self.out.tool(account, label)
-                if ctx.task.estimated or call.name == permissions.NAME:
-                    result = await self.registry.call(call.name, call.arguments, ctx)
-                else:
-                    result = ToolResult(permissions.FIRST, error=True)
+                result = await self.registry.call(call.name, call.arguments, ctx)
                 addresses.remember(ctx.task.seen_urls, result.text)  # links the task was shown (SPEC §5.2)
                 if result.kind == "expired":
                     raise ApprovalExpired
@@ -732,7 +710,7 @@ class Agent:
                 )
                 if call.name not in UNSOURCED_TOOLS and not result.error:
                     sources.append(result.text)
-                added.append(
+                task.append(
                     {
                         "role": "tool",
                         "tool_call_id": call.id,
@@ -742,9 +720,7 @@ class Agent:
                 )
                 for image in result.images:
                     shot = with_images(f"[Screenshot returned by {call.name}]", [image])
-                    added.append({"role": "user", "_kind": "image", "content": shot})
-            for i in range(len(calls)):
-                task.extend(answered[i])
+                    task.append({"role": "user", "_kind": "image", "content": shot})
         return (*finish(f"{messages.TOO_MANY_STEPS}\n{last}".strip(), sources, bool(retried), today), text)
 
 

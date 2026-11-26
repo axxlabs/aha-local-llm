@@ -116,8 +116,7 @@
       "fields",
       "buttons",
       "image?",
-      "why?",
-      "replan?"
+      "why?"
     ],
     "approval_state": [
       "seq",

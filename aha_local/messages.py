@@ -93,7 +93,6 @@ TOOL_LABELS = {
     "browser_human_check": "human check",
     "current_time": None,
     "message_user": None,
-    "permissions_request": None,
 }
 TOOL_GROUPS = (
     ("browser_", "browser"),
