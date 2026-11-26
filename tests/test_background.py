@@ -35,7 +35,6 @@ def task(**over) -> dict:
         "prompt": "Search the email for a reply from sam@example.com about Saturday; done when one arrives.",
         "done_when": "Sam replied about Saturday",
         "every": 15,
-        "until": None,
         "next": now - 1,
         "created": int(now) - 3600,
         "checks": 0,
@@ -70,7 +69,7 @@ async def test_creating_one_needs_a_card_with_every_detail(runner, agent, llm, c
     await agent.approval_reply(fe, card.card["id"], "approve")
     await settle(agent)
     (saved,) = background.load(fe)
-    assert saved["every"] == 15 and saved["until"] is None and saved["next"] > time.time() + 14 * 60
+    assert saved["every"] == 15 and saved["next"] > time.time() + 14 * 60
 
 
 async def test_a_declined_or_too_frequent_task_starts_nothing(runner, agent, llm, chat, accounts):
@@ -174,17 +173,6 @@ async def test_a_check_that_doesnt_finish_keeps_waiting(runner, agent, llm, chat
     assert not chat.sent and len(background.load(fe)) == 1
 
 
-async def test_an_expired_task_ends_with_a_message_and_no_model_call(runner, agent, llm, chat, accounts):
-    fe = person(accounts)
-    background.save(fe, [task(until=time.time() - 60, last="still 'In transit'")])
-    agent.last_input = time.time()  # not idle: expiry doesn't wait for idle
-    await runner.tick()
-    assert not llm.requests and background.load(fe) == []
-    assert chat.texts()[0].startswith("I stopped waiting on ") and chat.sent[0].task["kind"] == "expired"
-    assert chat.cuts == [0]
-    assert chat.texts()[0].endswith("The last check found: still 'In transit'")
-
-
 async def test_a_message_stops_a_running_check_and_gets_the_model(runner, agent, llm, chat, accounts):
     fe = person(accounts)
     background.save(fe, [task()])
@@ -254,7 +242,6 @@ async def test_the_panel_lists_tasks_and_cancel_is_the_persons(runner, agent, ac
         "done_when",
         "at",
         "every",
-        "until",
         "next",
         "last",
         "checks",
@@ -399,21 +386,18 @@ async def test_the_next_check_gets_the_last_result_whatever_it_was(runner, agent
 
 
 async def test_the_person_edits_what_a_task_checks(runner, agent, llm, accounts):
-    """Every field: what it waits for, what it checks, how often, the next check and until when (SPEC §3.4)."""
+    """Every field: what it waits for, what it checks, how often, and the next check (SPEC §3.4)."""
     fe = person(accounts)
     background.save(fe, [task()])
     edit = lambda **c: actions.edit_background(fe, "abc123", c, via="settings")  # noqa: E731
     assert edit(prompt="Check the WhatsApp chat with Sam\nfor a reply.") == ""
     assert background.load(fe)[0]["prompt"] == "Check the WhatsApp chat with Sam\nfor a reply."
-    later, end = time.time() + 3600, time.time() + 86400
-    assert edit(title="Sam's reply", every=30 * 60, next=later, until=end) == ""
+    later = time.time() + 3600
+    assert edit(title="Sam's reply", every=30 * 60, next=later) == ""
     saved = background.load(fe)[0]
-    assert (saved["title"], saved["every"], saved["next"], saved["until"]) == ("Sam's reply", 30, later, end)
-    assert edit(until=None) == "" and background.load(fe)[0]["until"] is None  # no end
+    assert (saved["title"], saved["every"], saved["next"]) == ("Sam's reply", 30, later)
     assert edit(prompt="   ") != ""  # never empty
     assert "at most every 5 minutes" in edit(every=60)
-    assert edit(until=time.time() - 10) != ""
-    assert edit(next=end + 10, until=end) == "the next check is after until"
     assert edit(next=time.time() - 3600) == "" and background.load(fe)[0]["next"] <= time.time()  # due now
     assert actions.edit_background(fe, "nope", {"title": "x"}, via="settings") == "no such task"
     edit(next=time.time() - 1)
@@ -443,7 +427,7 @@ async def test_something_at_a_time_of_day_checks_then_every_day(runner, agent, l
     await settle(agent)
     (saved,) = background.load(fe)
     at = dt.datetime.fromtimestamp(saved["next"], LONDON)
-    assert (at.hour, at.minute) == (18, 0) and saved["next"] - time.time() <= 86400 and saved["until"] is None
+    assert (at.hour, at.minute) == (18, 0) and saved["next"] - time.time() <= 86400
     assert background.next_check(saved, saved["next"]) - saved["next"] == 86400  # then the same time tomorrow
     assert "every day at 18:00" in background.describe(saved, LONDON)
 

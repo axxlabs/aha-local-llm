@@ -3,10 +3,11 @@
 """Background tasks, per account (SPEC §3.4 "Background tasks").
 
 What the model waits for and checks on its own: a reply, a delivery, a page changing. Each task has the prompt a
-check runs, how often to check (at least every 5 minutes) and until when (or never). Checks run only when the
-household is idle (nobody typed or answered a card for 5 minutes, no request running), one at a time, and say
-nothing until there's news: a check reports with check_result; done or failed sends its message and ends the task;
-notify sends it and the task goes on; waiting keeps a note for next time.
+check runs, how often to check (every so many minutes, at least 5, or at times of day) and what ends it (or
+never); no end date. Checks run only when the household is idle (nobody typed or answered a card for 5 minutes,
+no request running), one at a time, and say nothing until there's news: a check reports with check_result; done or
+failed sends its message and ends the task; notify sends it and the task goes on; waiting keeps a note for next
+time.
 """
 
 from __future__ import annotations
@@ -89,8 +90,7 @@ def how_it_went(entry: dict) -> str:
     return entry.get("last_how", "")
 
 
-EXPIRED = "I stopped waiting on {when}.{last}"
-HEADS = {"update": "Task update", "done": "Task done", "failed": "Task failed", "expired": "Task expired"}
+HEADS = {"update": "Task update", "done": "Task done", "failed": "Task failed"}
 
 
 @dataclass(frozen=True)
@@ -98,7 +98,7 @@ class Note:
     """A background task's news for the chat (SPEC §3.4, §7.4 "Task notes"): its own topic, drawn as a box with
     its kind and the task's title above the message."""
 
-    kind: str  # update | done | failed | expired
+    kind: str  # update | done | failed
     title: str
     text: str
     prompt: str = ""  # the task's full instruction: the box's (i)
@@ -136,7 +136,6 @@ class Entry(TypedDict, total=False):
     every: int  # minutes between checks (with `at`, a day divided by its times)
     at: list[str]  # times of day it checks, "08:00", in `tz`; none: every `every` minutes
     tz: str  # the household's time zone when `at` was set
-    until: float | None  # epoch seconds it ends, None: never
     next: float  # epoch seconds of the next planned check
     created: int
     checks: int  # checks run so far
@@ -274,10 +273,7 @@ def every_words(minutes: int) -> str:
 
 
 def describe(entry: Entry, tz: ZoneInfo) -> str:
-    until = entry.get("until")
-    end = f"done when: {entry.get('done_when', NEVER)}" + (
-        "" if until is None else ", until " + dates.for_model(dt.datetime.fromtimestamp(until, tz))
-    )
+    end = f"done when: {entry['done_when']}"
     nxt = dates.for_model(dt.datetime.fromtimestamp(entry["next"], tz))
     last = f" Last found: {entry['last']}" if entry.get("last") else ""
     return (
@@ -307,10 +303,6 @@ def _every(value) -> tuple[int | None, str]:
     if minutes > MAX_EVERY:
         return None, "check at least once a week"
     return minutes, ""
-
-
-def _until_text(until: float | None, tz: ZoneInfo) -> str:
-    return NEVER if until is None else dates.editable(dt.datetime.fromtimestamp(until, tz))
 
 
 AT = re.compile(r"^([01]?\d|2[0-3])[:h.]([0-5]\d)$")
@@ -461,7 +453,6 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
         "done_when": ends,
         "every": minutes,
         **({"at": times, "tz": ctx.config.timezone} if times else {}),
-        "until": None,
         "created": int(now),
         "checks": 0,
         **({"card": d.card} if d.card else {}),
@@ -651,12 +642,12 @@ def interrupted(account: Account, task_id: str) -> None:
     )
 
 
-EDITABLE = ("title", "prompt", "done_when", "every", "at", "until", "next", "grant")  # what the panel sends
+EDITABLE = ("title", "prompt", "done_when", "every", "at", "next", "grant")  # what the panel sends
 
 
 def edit(account: Account, task_id: str, changes: dict) -> str:
     """The person's own edit of a task, any of its fields (the Tasks panel): "" when done, else why not.
-    `every` in seconds; `until` and `next` epoch seconds (`until` None: no end); a `next` in the past is due now."""
+    `every` in seconds; `next` epoch seconds; a `next` in the past is due now."""
     entry = next((e for e in load(account) if e["id"] == task_id), None)
     if entry is None:
         return "no such task"
@@ -693,17 +684,10 @@ def edit(account: Account, task_id: str, changes: dict) -> str:
             return why or "give times of day like 08:00"
         new["at"], new["every"] = times, 1440 // len(times)
         new.setdefault("tz", entry.get("tz") or "UTC")
-    if "until" in changes:
-        until = changes["until"]
-        if until is not None and (not isinstance(until, int | float) or until <= now + 60 or until > now + MAX_AHEAD):
-            return "until must be in the future, within a year, or no end"
-        new["until"] = until
     if "next" in changes:
         if not isinstance(changes["next"], int | float) or changes["next"] > now + MAX_AHEAD:
             return "the next check must be a time within a year"
         new["next"] = max(float(changes["next"]), now)
-    if new["until"] is not None and new["next"] >= new["until"]:
-        return "the next check is after until"
     kept = (*EDITABLE, "links")
     update(account, task_id, lambda e: {**e, **{k: new[k] for k in kept if k in new}})
     return ""
@@ -741,7 +725,7 @@ def check_prompt(entry: Entry, now: float, tz: ZoneInfo) -> str:
 
 def listing(account: Account) -> list[dict]:
     """For the app's Tasks panel, newest first (SPEC §6.5)."""
-    keys = ("id", "title", "prompt", "done_when", "at", "until", "next", "created", "card")
+    keys = ("id", "title", "prompt", "done_when", "at", "next", "created", "card")
     # "grant": what it allows, for the panel's editor; "allowed": the same in the person's words
     rows = sorted(load(account), key=lambda e: e.get("created", 0), reverse=True)
     return [
@@ -764,7 +748,7 @@ def listing(account: Account) -> list[dict]:
 
 
 class Runner:
-    """Every CHECK_EVERY seconds, while the household is idle: end expired tasks, run the most overdue check."""
+    """Every CHECK_EVERY seconds, while the household is idle: run the most overdue check."""
 
     def __init__(self, accounts, agent, timezone: str) -> None:
         self.accounts = accounts
@@ -792,22 +776,10 @@ class Runner:
         due: list[tuple[float, Account, dict]] = []
         for account in self.accounts.all():
             for entry in load(account):
-                if entry.get("until") is not None and entry["until"] <= now:
-                    await self._expire(account, entry)
-                elif (entry["next"] <= now or entry.get("now")) and not self.agent.is_running(account):
+                if (entry["next"] <= now or entry.get("now")) and not self.agent.is_running(account):
                     due.append((entry["next"], account, entry))
         asked = [d for d in due if d[2].get("now")]  # Run now: no idle wait, only a free model
         if self.agent.busy() or not (asked or (due and self.agent.idle(now))):
             return
         _, account, entry = min(asked or due, key=lambda d: d[0])
         await self.agent.start_background(account, entry["id"], check_prompt(entry, now, self.tz))
-
-    async def _expire(self, account: Account, entry: Entry) -> None:
-        if update(account, entry["id"], lambda e: None) is None:
-            return
-        account.audit({"background_task_closed": entry["id"], "outcome": "expired"})
-        when = dates.for_model(dt.datetime.fromtimestamp(entry["until"], self.tz))
-        last = f" The last check found: {entry['last']}" if entry.get("last") else ""
-        text = EXPIRED.format(when=when, last=last)
-        note = Note("expired", entry["title"], text, entry["prompt"], entry["every"], entry["id"])
-        await self.agent.task_note(account, note)

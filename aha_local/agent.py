@@ -275,13 +275,11 @@ class Agent:
         await self.out.message(account, text[:20_000], image, open, task, receipt(record), run)
 
     async def task_note(
-        self, account: Account, note: background.Note, start: int = 0, record: list[str] | None = None
+        self, account: Account, note: background.Note, start: int, record: list[str] | None = None
     ) -> None:
-        """A background task's news (SPEC §3.4, §7.4 "Task notes"): always in a topic of its own. A check folded
-        what was going on before it started (`start`: the first item after that fold); with no check (it
-        expired), it folds now. The part is titled with the task's title."""
-        if not start:
-            start = await self._fold(account)
+        """A background task's news (SPEC §3.4, §7.4 "Task notes"): always in a topic of its own. Its check folded
+        what was going on before it started (`start`: the first item after that fold). The part is titled with the
+        task's title."""
         await self.send(account, note.text, task=note.for_app(), record=record)
         await self.out.title(account, start, note.title)
 
