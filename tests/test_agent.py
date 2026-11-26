@@ -5,6 +5,7 @@
 import asyncio
 import dataclasses
 import time
+from types import SimpleNamespace
 
 from aha_local import context, messages
 from aha_local.tools.registry import Tool, ToolResult, params
@@ -127,7 +128,7 @@ def test_a_long_tasks_start_stays_the_same_from_step_to_step():
 
 async def test_each_task_leaves_its_topic_memory_and_a_new_topic_starts_from_memory(agent, llm, chat, accounts):
     """SPEC §4, §5.4: the topic's entry is written at the end of each task, no card; a task sees the turns of the
-    topic going on, and other topics only through their entries."""
+    topic going on, and finds other topics' entries with conversation_search."""
     acct = person(accounts)
     llm.topic_reply = "SAME: Evri parcel\nMEMORY:\n- Evri tracking H01ABC123, collect from 26/11/2026"
     llm.answer("It's at the Evri shop.")
@@ -147,8 +148,11 @@ async def test_each_task_leaves_its_topic_memory_and_a_new_topic_starts_from_mem
 
     topic = (999, time.time() + 1)  # a new topic, after a break
     msgs = context.build(acct, [], "Europe/London", "Home", 100_000, topic=topic)
-    assert "H01ABC123" in msgs[1]["content"] and "Evri parcel" in msgs[1]["content"]
-    assert "where is my parcel?" not in str(msgs)  # the earlier topic's turns are gone from the context
+    assert "H01ABC123" not in str(msgs) and "where is my parcel?" not in str(msgs)  # neither in every request
+    from aha_local.tools.conversation import conversation_search
+
+    found = await conversation_search({"query": "evri tracking"}, SimpleNamespace(account=acct))
+    assert "Evri parcel" in found.text and "H01ABC123" in found.text
 
 
 async def test_commands(agent, llm, chat, accounts):

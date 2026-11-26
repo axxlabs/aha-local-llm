@@ -174,9 +174,14 @@ async def test_settings_and_clear_reach_every_device(tmp_path):
     assert [x["seq"] for x in sync["items"]] == [seq + 1] and sync["start"] == seq + 1  # numbers carry on
 
 
-def test_all_of_the_memory_is_always_in_view_and_there_is_no_memory_search(tmp_path):
-    """SPEC §5.4: every fact and every topic's entry, however many; the model searches the history instead."""
+def test_every_fact_is_in_view_and_earlier_topics_are_searched(tmp_path):
+    """SPEC §5.4: every approved fact, however many, in every request; the topics' entries aren't, and
+    conversation_search finds them, best match first."""
+    import asyncio
+    from types import SimpleNamespace
+
     from aha_local.tools import memory
+    from aha_local.tools.conversation import conversation_search
     from aha_local.tools.registry import Registry
 
     accounts = Accounts(Vault(tmp_path, os.urandom(32)))
@@ -185,32 +190,23 @@ def test_all_of_the_memory_is_always_in_view_and_there_is_no_memory_search(tmp_p
         context.save_topic(acct, 100 + i, time.time() - (80 - i) * 60, f"Topic {i}", f"Tracking CODE{i:03d}")
         memory.add_fact(acct, f"Fact {i}")
     block = context.build(acct, [], "Europe/London", "Home", 100_000)[1]["content"]
-    assert all(f"CODE{i:03d}" in block and f"Fact {i}" in block for i in range(80))
-    assert block.index("CODE000") < block.index("CODE079")  # oldest first: a new entry goes at the end
+    assert all(f"Fact {i}" in block for i in range(80)) and "CODE" not in block
+    assert "conversation_search" in block
+    found = asyncio.run(conversation_search({"query": "tracking code042"}, SimpleNamespace(account=acct))).text
+    assert found.index("CODE042") < found.index("CODE079")  # the best match first, then the newest
     reg = Registry()
     memory.register(reg)
     assert "memory_search" not in reg.names() and "memory_list" not in reg.names()
 
 
 def test_the_date_comes_before_the_memory(tmp_path):
-    """SPEC §4: the model reads every entry knowing what day it is."""
+    """SPEC §4: the model reads every fact knowing what day it is."""
     import datetime as dt
+
+    from aha_local.tools import memory
 
     accounts = Accounts(Vault(tmp_path, os.urandom(32)))
     acct = accounts.create("Ana")
-    context.save_topic(acct, 3, time.time() - 3600, "Evri parcel", "Tracking H01ABC123")
+    memory.add_fact(acct, "Lives in Lisbon")
     block = context.context_block(acct, "Europe/London", "Home", dt.datetime(2026, 11, 25, 9, 0))
-    assert block.index("Today: 25/11/2026") < block.index("What you remember") < block.index("H01ABC123")
-
-
-def test_the_topic_memory_keeps_the_newest_that_fit_its_budget():
-    """SPEC §4: every topic of the history's length was in every request; a busy month would fill the context."""
-    from aha_local.context import render_topics
-
-    entries = [
-        {"id": f"t{i}", "ts": 1_795_000_000 + i * 3600, "title": f"Topic {i}", "text": "x" * 300} for i in range(10)
-    ]
-    shown = render_topics(entries, budget=320)  # about 105 tokens each: three fit
-    assert shown.startswith("(7 older topics not shown: find them with conversation_search)")
-    assert [line.split("]")[0][3:] for line in shown.splitlines() if line.startswith("- [")] == ["t7", "t8", "t9"]
-    assert "older" not in render_topics(entries)  # within the budget: all of them
+    assert block.index("Today: 25/11/2026") < block.index("What you remember") < block.index("Lisbon")
