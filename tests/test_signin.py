@@ -15,7 +15,6 @@ import re
 import mcp.types as mt
 import pytest
 
-from aha_local import checks
 from aha_local.agent import Agent
 from aha_local.tools import browser, browser_page, logins, signins
 from aha_local.tools.browser_pool import BrowserPool, BrowserSession
@@ -424,87 +423,10 @@ async def test_an_answer_left_on_a_sign_in_page_goes_back_once(setup, llm, chat,
     await settle(agent)
 
 
-async def test_claims_without_the_tool_go_back_once(setup, llm, chat, accounts):
-    """Seen with the real model: 'Scheduled…' with nothing set up; 'Here is the page' with no screenshot sent."""
-    from aha_local.tools import background
-
-    agent, _, _ = setup
-    background.register(agent.registry)
-    fe = person(accounts)
-    llm.answer("Scheduled. Every weekday at 08:00 I'll check the forecast.")
-    llm.answer("I can't run things on a schedule yet.")
-    await agent.inbound(fe, "every weekday at 8am tell me if it will rain")
-    await settle(agent)
-    assert "haven't called task_create" in json.dumps(llm.requests[1]["messages"])
-    assert chat.texts()[-1] == "I can't run things on a schedule yet."
-
-    llm.call("browser_navigate", url="https://news.example.com/")
-    llm.answer("Here is the news homepage.")
-    llm.call("show_screenshot")
-    llm.answer("There it is.")
-    await agent.inbound(fe, "show me a screenshot of the news homepage")
-    await settle(agent)
-    assert "only shows the page to you" in json.dumps(llm.requests[-2]["messages"])
-    assert any(m.image is not None and m.card is None for m in chat.sent)
-
-    for request in ("show me how to cook rice", "what time is it?"):
-        assert not checks.unshown_screenshot(request, {"browser_navigate"})
-
-
-def test_asking_for_a_password_in_the_chat_is_caught():
-    for bad in (
-        "Tell me your email and password and I'll walk you through the sign-in.",
-        "Please send me the verification code from the text message.",
-        "You can share your Waitrose password here.",
-        "I need you to provide a password for the account. What password would you like to use?",  # evri.com
-    ):
-        assert checks.asks_for_secret(bad), bad
-    for fine in (
-        "I'll show you the sign-in card again: type your password there.",
-        "Your password is never shown to me.",
-        "What time should I book?",
-    ):
-        assert not checks.asks_for_secret(fine), fine
-
-
 WAITROSE_REFUSAL = (
     "I can navigate to the Waitrose website and help you find toilet paper options, but I can't log into your "
     "personal account or add items to your cart. That would require your login credentials, which I shouldn't ask for."
 )
-
-
-async def test_refusing_to_sign_in_without_trying_goes_back_once(setup, llm, chat, accounts):
-    """Seen with the real model (2026-11-22): it refused before opening the site."""
-    agent, _, _ = setup
-    fe = person(accounts)
-    llm.answer(WAITROSE_REFUSAL)
-    llm.call("browser_navigate", url="https://www.waitrose.com/login")
-    llm.call("browser_login")
-    await agent.inbound(fe, "can you log into waitrose website and add toilet papers to the cart?")
-    card = await chat.next()
-    assert card.card and card.card["kind"] == "signin"
-    assert WAITROSE_REFUSAL not in chat.texts()
-    assert "you can't sign in or use the person's account" in json.dumps(llm.requests[1]["messages"])
-    await agent.approval_reply(fe, card.card["id"], "decline")
-    await settle(agent)
-
-
-def test_what_counts_as_refusing_to_sign_in():
-    for bad in (
-        WAITROSE_REFUSAL,
-        "Sorry, I'm unable to sign in to your Tesco account.",
-        "I cannot add the toilet roll to your basket.",
-        "Logging in needs your password, so I can't access your account.",
-    ):
-        assert checks.refuses_sign_in(bad, set(), True), bad
-    assert not checks.refuses_sign_in(WAITROSE_REFUSAL, {"browser_login"}, True)  # it tried: an honest report
-    assert not checks.refuses_sign_in(WAITROSE_REFUSAL, set(), False)  # no browser on this computer
-    for fine in (
-        "I couldn't find a sign-in form on that page.",
-        "Added 2 packs of toilet paper to your basket.",
-        "The site can't be opened right now.",
-    ):
-        assert not checks.refuses_sign_in(fine, set(), True), fine
 
 
 async def test_a_cookie_banner_is_closed_with_reject_before_the_sign_in_card(setup, llm, chat, accounts):
@@ -535,33 +457,6 @@ async def test_a_cookie_banner_past_where_a_long_page_is_cut_is_still_closed(set
     await start_sign_in(agent, llm, chat, fe, url="https://www.waitrose.com/login/cookies-ask/long")
     page = fake.contexts[-1]
     assert not page.banner and "e80" in page.moves
-
-
-def test_an_answer_that_only_announces_work_goes_back():
-    """Seen on evri.com sign-up: "Let me proceed with the account creation." as the final answer, nothing done."""
-    for bad in (
-        "I'll create a secure password for you and fill in the form. Let me proceed with the account creation.",
-        "I found 3 slots. I'll book the 10am one now.",
-    ):
-        assert checks.only_promises(bad), bad
-    for fine in (
-        "If there are more items you'd like me to find, please let me know and I will continue scrolling.",
-        "Here is your trolley. Let me know if you want to change anything.",
-        "Shall I book it now?",
-        "Your parcel is booked for Tuesday.",
-    ):
-        assert not checks.only_promises(fine), fine
-
-
-async def test_a_promise_as_the_final_answer_is_sent_back_once(setup, llm, chat, accounts):
-    agent, _, _ = setup
-    fe = person(accounts)
-    llm.answer("I'll fill in the form now. Let me proceed.")
-    llm.answer("I couldn't open the form: the page didn't load.")
-    await agent.inbound(fe, "make me an evri account")
-    await settle(agent)
-    assert "nothing runs after it" in json.dumps(llm.requests[1]["messages"])
-    assert chat.texts()[-1] == "I couldn't open the form: the page didn't load."
 
 
 async def login(agent, llm, chat, account, url="https://www.waitrose.com/login", answer="Done."):

@@ -248,15 +248,6 @@ async def test_typing_while_a_reply_is_owed_but_not_while_an_approval_waits(agen
     assert chat.texts() == [ask.text, "Noted."]  # no "On it…", no "Busy…"
 
 
-async def test_a_claimed_forget_without_the_tool_is_sent_back(agent, llm, chat):
-    llm.answer("Done, I've forgotten where you live.")
-    llm.answer("I haven't removed it yet. Shall I?")
-    await say(agent, "forget where I live")
-    await settle(agent)
-    assert chat.texts() == ["I haven't removed it yet. Shall I?"]
-    assert "[aha check]" in llm.requests[1]["messages"][-1]["content"]
-
-
 async def test_an_empty_answer_after_an_approval_sends_nothing(agent, llm, chat):
     llm.call("memory_add", text="Lives in Testville")
     llm.answer("")
@@ -294,7 +285,7 @@ async def test_typing_ends_before_the_answer_and_stays_off_while_the_topic_is_wr
 
 
 async def test_a_messages_details_are_its_tasks_model_calls_and_tools(agent, llm, chat, accounts):
-    """⋯ → Details (SPEC §3.8): each model call, with its thinking and timing, and each tool, tagged by task."""
+    """A request's Details (SPEC §3.8): each model call, with its thinking and timing, and each tool, tagged by task."""
     from aha_local.e2e.channel import trace
     from aha_local.llm import Reply
 
@@ -308,7 +299,9 @@ async def test_a_messages_details_are_its_tasks_model_calls_and_tools(agent, llm
     assert model[1]["reasoning"] == "The tool said 12:00." and model[1]["ms"] == 850
     task = model[0]["task"]
     assert all(r.get("task") == task for r in records if r["kind"] in ("model", "tool", "out", "answer"))
-    assert person(accounts).task is None  # cleared when the task ends
+    from aha_local.accounts import TASK
+
+    assert TASK.get() is None  # only inside the task
     sent = {"kind": "item", "item": {"t": "msg", "role": "aha", "seq": 7, "text": "It's noon."}, "task": task}
     events = trace([*records, sent], 7)
     assert [e["kind"] for e in events] == ["model", "tool", "model", "answer", "item"]

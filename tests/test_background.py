@@ -102,7 +102,7 @@ async def test_checks_wait_for_idle_and_dont_reset_it(runner, agent, llm, chat, 
     idle(agent)
     since = agent.last_input
     llm.call("email_search", query="from:sam@example.com")  # not registered: an error, which is fine here
-    llm.answer("WAITING: no reply from Sam yet")
+    llm.call("check_result", outcome="waiting", message="no reply from Sam yet")
     await runner.tick()
     await settle(agent)
     assert "[Background task you set up earlier, check 1" in llm.requests[0]["messages"][-1]["content"]
@@ -122,10 +122,10 @@ async def test_a_closure_goes_to_the_chat_and_ends_the_task(runner, agent, llm, 
     fe = person(accounts)
     background.save(fe, [task(last="no reply yet", checks=3)])
     idle(agent)
-    llm.answer("DONE: Sam replied: yes, see you there.")
+    llm.call("check_result", outcome="done", message="Sam replied: yes, see you there.")
     await runner.tick()
     await settle(agent)
-    assert "answered WAITING:\nno reply yet" in llm.requests[-1]["messages"][-1]["content"]
+    assert "reported waiting:\nno reply yet" in llm.requests[-1]["messages"][-1]["content"]
     assert "check 4" in llm.requests[-1]["messages"][-1]["content"]
     assert chat.texts() == ["Sam replied: yes, see you there."]
     assert chat.sent[0].task == {
@@ -140,7 +140,7 @@ async def test_a_closure_goes_to_the_chat_and_ends_the_task(runner, agent, llm, 
     assert background.load(fe) == []
 
     background.save(fe, [task()])
-    llm.answer("**FAILED:** the email account isn't connected any more.")
+    llm.call("check_result", outcome="failed", message="the email account isn't connected any more.")
     await runner.tick()
     await settle(agent)
     assert chat.texts()[-1].startswith("the email account") and chat.sent[-1].task["kind"] == "failed"
@@ -151,10 +151,10 @@ async def test_notify_tells_the_person_and_the_task_goes_on(runner, agent, llm, 
     fe = person(accounts)
     background.save(fe, [task(title="Emails from Sam", last="last email: 'Lunch?'")])
     idle(agent)
-    llm.answer("NOTIFY: Sam wrote again: 'Running late, start without me.'")
+    llm.call("check_result", outcome="notify", message="Sam wrote again: 'Running late, start without me.'")
     await runner.tick()
     await settle(agent)
-    assert "NOTIFY:" in llm.requests[-1]["messages"][-1]["content"]
+    assert "check_result" in llm.requests[-1]["messages"][-1]["content"]
     assert chat.texts() == ["Sam wrote again: 'Running late, start without me.'"]
     assert chat.sent[0].task["kind"] == "update" and chat.sent[0].task["title"] == "Emails from Sam"
     (left,) = background.load(fe)
@@ -220,7 +220,7 @@ async def test_a_card_waiting_for_someone_leaves_the_model_free(runner, agent, l
     assert card.card is not None and agent.running and not agent.busy() and not agent.working()
     background.save(hb, [task()])
     idle(agent)
-    llm.answer("WAITING: nothing yet")
+    llm.call("check_result", outcome="waiting", message="nothing yet")
     await runner.tick()
     await asyncio.sleep(0.05)
     assert background.load(hb)[0]["checks"] == 1
@@ -236,7 +236,7 @@ async def test_one_check_at_a_time_the_most_overdue_first(runner, agent, llm, ac
     background.save(fe, [task(next=time.time() - 60)])
     background.save(hb, [task(id="def456", title="Parcel", next=time.time() - 600)])
     idle(agent)
-    llm.answer("WAITING: nothing yet")
+    llm.call("check_result", outcome="waiting", message="nothing yet")
     await runner.tick()
     await runner.tick()  # the first still runs, or just ended: never two at once
     await settle(agent)
@@ -270,14 +270,6 @@ async def test_the_panel_lists_tasks_and_cancel_is_the_persons(runner, agent, ac
     assert [e["id"] for e in background.load(fe)] == ["abc123"]
 
 
-def test_outcomes():
-    assert background.outcome("WAITING: nope") == ("waiting", "nope")
-    assert background.outcome("*Done* — here it is") == ("done", "here it is")
-    assert background.outcome("failed:\ngone") == ("failed", "gone")
-    assert background.outcome("Sam replied.") == ("notify", "Sam replied.")
-    assert background.outcome("NOTIFY: again") == ("notify", "again")
-
-
 async def test_every_change_tells_the_open_panels(runner, agent, llm, chat, accounts, monkeypatch):
     """Seen: a task created while the Tasks panel was open showed only after a refresh."""
     fe = person(accounts)
@@ -294,17 +286,19 @@ async def test_every_change_tells_the_open_panels(runner, agent, llm, chat, acco
     assert told == [fe.id, fe.id]
 
 
-async def test_an_answer_without_its_word_is_asked_again_and_never_closes_the_task(runner, agent, llm, chat, accounts):
+async def test_an_answer_without_check_result_is_asked_again_and_never_closes_the_task(
+    runner, agent, llm, chat, accounts
+):
     """Seen: the task's own prompt said 'If he hasn't replied yet, say "No reply from Leonard yet"'; the check
-    answered just that, with no WAITING, and it counted as DONE: the task ended with "Task done: … No reply"."""
+    answered just that, and it counted as done. A check reports with check_result, a tool call, not words."""
     fe = person(accounts)
     background.save(fe, [task(title="Leonard's WhatsApp reply")])
     idle(agent)
     llm.answer("No reply from Leonard yet.")
-    llm.answer("WAITING: no reply from Leonard yet")
+    llm.call("check_result", outcome="waiting", message="no reply from Leonard yet")
     await runner.tick()
     await settle(agent)
-    assert "doesn't start with WAITING:" in llm.requests[-1]["messages"][-1]["content"]
+    assert "You haven't called check_result" in llm.requests[-1]["messages"][-1]["content"]
     assert not chat.sent
     (left,) = background.load(fe)
     assert left["last"] == "no reply from Leonard yet" and left["checks"] == 1
@@ -333,7 +327,7 @@ async def test_run_now_skips_the_idle_wait_but_not_a_busy_model(runner, agent, l
     assert not llm.requests  # waits for the model to be free
     agent.session(fe).task = None
 
-    llm.answer("WAITING: no reply yet")
+    llm.call("check_result", outcome="waiting", message="no reply yet")
     await runner.tick()
     await settle(agent)
     assert "check 1" in llm.requests[0]["messages"][-1]["content"]
@@ -349,11 +343,11 @@ async def test_the_next_check_gets_the_last_result_whatever_it_was(runner, agent
     fe = person(accounts)
     background.save(fe, [task()])
     idle(agent)
-    long = "WAITING: " + "the inbox shows 3 new emails, none from Sam. " * 20
-    llm.answer(long)
+    long = "the inbox shows 3 new emails, none from Sam. " * 20
+    llm.call("check_result", outcome="waiting", message=long)
     await runner.tick()
     await settle(agent)
-    assert background.load(fe)[0]["last"] == long.removeprefix("WAITING: ").strip()  # whole, not cut to a line
+    assert background.load(fe)[0]["last"] == long.strip()  # whole, not cut to a line
 
     def again() -> None:
         e = background.load(fe)[0]
@@ -361,10 +355,10 @@ async def test_the_next_check_gets_the_last_result_whatever_it_was(runner, agent
         background.save(fe, [e])
 
     again()
-    llm.answer("NOTIFY: Sam wrote: 'Lunch is off.'")
+    llm.call("check_result", outcome="notify", message="Sam wrote: 'Lunch is off.'")
     await runner.tick()
     await settle(agent)
-    assert "answered WAITING:\nthe inbox shows 3 new emails" in llm.requests[-1]["messages"][-1]["content"]
+    assert "reported waiting:\nthe inbox shows 3 new emails" in llm.requests[-1]["messages"][-1]["content"]
 
     again()
     start = len(llm.requests)
@@ -373,7 +367,7 @@ async def test_the_next_check_gets_the_last_result_whatever_it_was(runner, agent
     await runner.tick()
     await settle(agent)
     first = llm.requests[start]["messages"][-1]["content"]
-    assert "answered NOTIFY, and this was sent to the user:\nSam wrote: 'Lunch is off.'" in first
+    assert "reported news, and this was sent to the user:\nSam wrote: 'Lunch is off.'" in first
     assert background.load(fe)[0]["last_how"] == "unfinished"
 
     # Stopped by someone's message: the next check is told so.
@@ -395,7 +389,7 @@ async def test_the_next_check_gets_the_last_result_whatever_it_was(runner, agent
     assert background.load(fe)[0]["last_how"] == "interrupted"
     llm.chat = real
     idle(agent)
-    llm.answer("WAITING: nothing")
+    llm.call("check_result", outcome="waiting", message="nothing")
     await runner.tick()
     await settle(agent)
     assert "was stopped before it finished" in llm.requests[-1]["messages"][-1]["content"]
@@ -421,7 +415,7 @@ async def test_the_person_edits_what_a_task_checks(runner, agent, llm, accounts)
     assert actions.edit_background(fe, "nope", {"title": "x"}, via="settings") == "no such task"
     edit(next=time.time() - 1)
     idle(agent)
-    llm.answer("WAITING: nothing yet")
+    llm.call("check_result", outcome="waiting", message="nothing yet")
     await runner.tick()
     await settle(agent)
     assert "Check the WhatsApp chat with Sam\nfor a reply." in llm.requests[-1]["messages"][-1]["content"]
@@ -460,7 +454,7 @@ async def test_a_check_saying_it_will_check_again_isnt_a_schedule_claim(runner, 
     fe = person(accounts)
     background.save(fe, [task()])
     idle(agent)
-    llm.answer("WAITING: no reply yet; I'll check again every 15 minutes.")
+    llm.call("check_result", outcome="waiting", message="no reply yet; I'll check again every 15 minutes.")
     await runner.tick()
     await settle(agent)
     sent_back = [str(r["messages"][-1].get("content")) for r in llm.requests[1:]]
@@ -475,7 +469,7 @@ async def test_a_check_folds_first_and_a_card_in_it_leaves_no_working(runner, ag
     background.save(fe, [task()])
     idle(agent)
     llm.call("task_create", title="Y", prompt="Check y", every_minutes=60, until="never")  # any card will do
-    llm.answer("DONE: Sam replied.")
+    llm.call("check_result", outcome="done", message="Sam replied.")
     await runner.tick()
     card = await chat.next()
     assert card.card is not None and chat.cuts == [0]  # folded before the check showed anything
@@ -530,4 +524,20 @@ async def test_the_person_edits_what_a_task_is_allowed(accounts):
 
 
 async def test_a_page_that_didnt_load_waits_for_the_next_check():
-    assert "A page that didn't load or that you couldn't find isn't that: answer WAITING" in background.CHECK
+    assert "A page that didn't load or that you couldn't find isn't that: report waiting" in background.CHECK
+
+
+async def test_check_result_is_only_for_a_check(agent, llm, chat):
+    from .conftest import say
+
+    if "check_result" not in agent.registry.names():
+        background.register(agent.registry)
+    llm.call("check_result", outcome="done", message="All done.")
+    llm.answer("Here you go.")
+    await say(agent, "hi")
+    await settle(agent)
+    assert chat.texts() == ["Here you go."]  # refused: a request the person watches answers them
+    assert (
+        "Only a background task's check"
+        in [m for m in llm.requests[-1]["messages"] if m["role"] == "tool"][-1]["content"]
+    )

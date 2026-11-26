@@ -21,11 +21,17 @@ import secrets
 import shutil
 import time
 import zipfile
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .protocol import Cert
 from .vault import Vault
+
+# The task running in this asyncio context (SPEC §3.8): the records written while it runs carry its id, and its
+# Details line is named by it. A context variable, not a field on the account: only what runs inside the task
+# (its tools, its messages) is tagged, never something written for the same account from elsewhere meanwhile.
+TASK: ContextVar[str | None] = ContextVar("aha_task", default=None)
 
 VERSION = 2
 
@@ -104,7 +110,6 @@ class Account:
     seq: int = 0
     devices: dict[str, Device] = field(default_factory=dict)
     history_days: int | None = None  # how long the computer keeps this person's history; None: forever (§3.8.1)
-    task: str | None = field(default=None, repr=False, compare=False)  # the running task: tags its records (§3.8)
     # The latest chat items, in short (seq, ts, t, from, new): read from the transcript once, then kept up to date
     # as items are written, so finding the current part of the chat (SPEC §7.4) never reads the whole history.
     _recent: list[dict] | None = field(default=None, repr=False, compare=False)
@@ -154,7 +159,7 @@ class Account:
         return device
 
     def transcript(self, entry: dict) -> None:
-        entry = {**entry, "task": self.task} if self.task else entry
+        entry = {**entry, "task": task} if (task := TASK.get()) else entry
         self.vault.append(self.dir / "transcript.jsonl", _log_line(entry))
         if self._recent is not None and entry.get("kind") == "item" and isinstance(entry.get("item"), dict):
             self._recent.append(_brief(entry["item"]))

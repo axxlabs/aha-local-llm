@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import __version__, actions, diagnostics, folding, messages, reports
-from ..accounts import Account, Accounts, Device
+from ..accounts import TASK, Account, Accounts, Device
 from ..certs import needs_renewal
 from ..items import Image
 from ..protocol import E2E, Cert, CertIssued, CertRequest, DeviceStatus, Pair, Push, Report, ReportResult, Revoke, b64
@@ -189,6 +189,9 @@ class Channel:
         self.pairings: dict[str, PairingState] = {}
         self._cert_waiters: dict[str, asyncio.Future] = {}
         self._tasks: set[asyncio.Task] = set()
+        self._lanes: dict[str, asyncio.Task] = {}  # per account: the latest device message's handling
+        self.watching: set[str] = set()  # devices showing the app now: they get live diagnostics (SPEC §7.4)
+        self._last_stats: dict[str, dict] = {}  # the last reading each was sent
         self.gateway_pin = ""
         self.gateway_features: frozenset[str] = frozenset()  # from the gateway's hello (SPEC §6.5)
         self.models = models  # the household's model choice (models.ModelChoice), for Settings
@@ -226,29 +229,38 @@ class Channel:
     async def steps(self, account: Account) -> None:
         """The request's Details line (SPEC §7.4 "Details"): a chat item, no push, once per task, where its work
         starts. Its records come live (`step`); expanded later, the app asks for them (`trace_request`)."""
-        await self.publish(account, {"t": "steps", "task": account.task or ""})
+        await self.publish(account, {"t": "steps", "task": TASK.get() or ""})
 
     async def step(self, account: Account, event: dict) -> None:
         """One record of the task as it happens, for its Details line (SPEC §7.4): outside the chat items, since
         the transcript keeps it already."""
         event = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), **{k: _cut(v, STEP_CHARS) for k, v in event.items()}}
-        await self.to_devices(account, {"t": "step", "task": account.task or "", "event": event})
+        await self.to_devices(account, {"t": "step", "task": TASK.get() or "", "event": event})
 
     async def diagnostics(self, reader=None, every: float = diagnostics.EVERY) -> None:
-        """Live diagnostics in the app's header (SPEC §7.4): a reading every few seconds, only while some device
-        is online, to the accounts that have one."""
+        """Live diagnostics in the app's header (SPEC §7.4): a reading every few seconds, only to the devices
+        showing the app now (`stats_watch`), and only when it changed. Each message to a device moves its
+        encryption on and is saved, so a reading every 3 s to every online device was ~29,000 writes a day each,
+        app open or not."""
         reader = reader or diagnostics.Reader()
         while True:
             await asyncio.sleep(every)
-            if not self.online:
-                continue
-            try:
-                reading = await reader.read()
-                for account in self.accounts.all():
-                    if any(self.is_online(d) for d in account.devices.values()):
-                        await self.to_devices(account, reading)
-            except Exception:
-                log.exception("live diagnostics failed")
+            await self.diagnostics_once(reader)
+
+    async def diagnostics_once(self, reader) -> None:
+        watching = [d for d in self.watching if d in self.online]
+        if not watching:
+            return
+        try:
+            reading = await reader.read()
+            for dev in watching:
+                found = self.accounts.by_device(dev)
+                if found is None or self._last_stats.get(dev) == reading:
+                    continue
+                if await self._send(*found, reading):
+                    self._last_stats[dev] = reading
+        except Exception:
+            log.exception("live diagnostics failed")
 
     async def text(self, account: Account, text: str) -> None:
         await self.message(account, text)
@@ -337,10 +349,33 @@ class Channel:
         device.last_seen = int(time.time())
         account.save_device(device)  # saved after accepting it
         self.online.add(device.dev)
+        self._in_order(account, self._handle(account, device, message))
+
+    def _in_order(self, account: Account, work) -> None:
+        """Handle a device's message without holding up the gateway's frames (SPEC §6.5): decrypted in order above,
+        then handled in its own task, after the account's earlier messages, so each person's stay in order and one
+        slow handler (a card answered while a background check stops) never stalls anyone else's."""
+        before = self._lanes.get(account.id)
+
+        async def run() -> None:
+            if before is not None:
+                with contextlib.suppress(Exception, asyncio.CancelledError):
+                    await before
+            await work
+
+        lane = self._lanes[account.id] = asyncio.create_task(run())
+        self._tasks.add(lane)
+        lane.add_done_callback(self._tasks.discard)
+
+    async def _handle(self, account: Account, device: Device, message: dict) -> None:
         try:
             await self._dispatch(account, device, message)
         except Exception:
             log.exception("handling a device message failed")
+
+    async def drained(self) -> None:
+        """Every device message received so far has been handled (tests, and a clean stop)."""
+        await asyncio.gather(*self._lanes.values(), return_exceptions=True)
 
     async def on_device_status(self, frame: DeviceStatus) -> None:
         if frame.online:
@@ -352,6 +387,8 @@ class Channel:
                 task.add_done_callback(self._tasks.discard)
         else:
             self.online.discard(frame.dev)
+            self.watching.discard(frame.dev)
+            self._last_stats.pop(frame.dev, None)
 
     def on_cert(self, frame: CertIssued) -> None:
         waiter = self._cert_waiters.pop(frame.id, None)
@@ -360,6 +397,8 @@ class Channel:
 
     def on_disconnect(self) -> None:
         self.online.clear()
+        self.watching.clear()
+        self._last_stats.clear()
 
     # ---- what devices ask for
 
@@ -405,6 +444,14 @@ class Channel:
             return
         note = clean_text(r.msg.get("note"), 2000) or ""
         await self.agent.approval_reply(r.account, approval_id, decision, r.msg.get("values"), note)
+
+    async def _stats_watch(self, r: Request) -> None:
+        """The app is on screen (`on`) or not: live diagnostics go only to a device showing it (SPEC §7.4)."""
+        if r.msg.get("on") is True:
+            self.watching.add(r.device.dev)
+            self._last_stats.pop(r.device.dev, None)  # the next reading goes, changed or not
+        else:
+            self.watching.discard(r.device.dev)
 
     async def _stop(self, r: Request) -> None:
         if self.agent is not None:
@@ -717,6 +764,7 @@ HANDLERS: dict[str, Callable[[Channel, Request], Awaitable[None]]] = {
     "memories_request": Channel._memories,
     "memory_forget": Channel._memories,
     "tasks_request": Channel._background,
+    "stats_watch": Channel._stats_watch,
     "task_cancel": Channel._background,
     "task_run": Channel._background,
     "task_edit": Channel._background,

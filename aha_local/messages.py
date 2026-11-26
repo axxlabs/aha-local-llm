@@ -13,7 +13,7 @@ RESTARTING = (
     "Aha! is restarting on your computer, so anything I was working on has stopped. Give it a minute, then ask again."
 )
 TOO_LONG = "That took too long, so I stopped. Try a smaller step, or tell me where to start."
-TOO_MANY_STEPS = "I couldn't finish that within my step limit. Here's where I got to:"
+TOO_MANY_STEPS = "I couldn't finish that within my step limit. What I did:"
 APPROVAL_EXPIRED = "I stopped waiting for your approval, so I didn't do it."
 APPROVAL_STALE = "That approval isn't open any more."
 EDIT_ONE = "Send the corrected value."

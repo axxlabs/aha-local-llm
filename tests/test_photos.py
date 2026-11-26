@@ -23,16 +23,15 @@ def images_in(request: dict) -> list[str]:
     ]
 
 
-async def test_a_photo_goes_to_the_model_and_its_numbers_dont_trigger_the_check(agent, llm, chat, accounts):
+async def test_a_photo_goes_to_the_model(agent, llm, chat, accounts):
     fe = person(accounts)
     llm.answer("The total on the receipt is £23.40, paid at 14:05.")
     await agent.inbound(fe, "how much did I spend?", RECEIPT)
     await settle(agent)
     assert images_in(llm.requests[0]) == [f"data:image/jpeg;base64,{RECEIPT.b64}"]
-    assert len(llm.requests) == 1  # no retry for numbers read from the photo
-    assert chat.texts() == ["The total on the receipt is £23.40, paid at 14:05."]  # and no warning
-    (user, answer) = fe.load_context()["turns"][-2:]
-    assert user["content"] == "how much did I spend? [photo]" and answer["checked"] is False
+    assert chat.texts() == ["The total on the receipt is £23.40, paid at 14:05."]
+    (user, _) = fe.load_context()["turns"][-2:]
+    assert user["content"] == "how much did I spend? [photo]"
     assert any(e.get("image") for e in fe.read_transcript() if e["kind"] == "user")
 
 

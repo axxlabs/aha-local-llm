@@ -87,3 +87,22 @@ def test_a_click_is_recorded_with_the_pages_own_label_and_site():
     ctx = SimpleNamespace(task=task)
     assert clicked_on({"target": "e12", "element": "add button"}, ctx) == "Clicked “Add to trolley” on waitrose.com"
     assert clicked_on({"target": "e99", "element": "the  foil"}, ctx) == "Clicked “the foil” on waitrose.com"
+
+
+async def test_out_of_steps_says_what_was_done_not_the_models_last_words(agent, llm, chat, accounts):
+    """Seen: "Let me take a fresh snapshot to see the current state." sent as the answer at the step limit."""
+    import dataclasses
+
+    from aha_local import messages
+
+    agent.config = dataclasses.replace(agent.config, max_model_calls=2)
+    llm.call("memory_add", text="Likes tea")
+    llm.call("memory_add", text="Likes coffee")
+    await say(agent, "remember I like tea and coffee")
+    card = await chat.next()
+    await say(agent, "ok", button=card.buttons[0].id)
+    card = await chat.next()
+    await say(agent, "no", button=card.buttons[-1].id)
+    await settle(agent)
+    [saved] = person(accounts).load_memory()
+    assert chat.texts()[-1] == f"{messages.TOO_MANY_STEPS}\n- Saved [{saved['id']}]: Likes tea"

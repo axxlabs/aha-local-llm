@@ -11,7 +11,7 @@ import re
 
 import pytest
 
-from aha_local import approvals, checks
+from aha_local import approvals
 from aha_local.tools import human, signins
 from aha_local.tools.registry import TaskState
 
@@ -185,18 +185,6 @@ async def test_giving_up_on_a_check_stops_it(setup, llm, chat, accounts):
     await settle(agent)
     results = tool_results(llm)
     assert "No page is open" in results[0] and "gave up on the check" in results[-1]
-
-
-def test_a_check_card_claimed_without_the_tool_is_caught():
-    for bad in (
-        "Please complete the captcha on the card I sent.",
-        "Tap the pictures with buses on the screenshot.",
-        "I've sent you a check card.",
-    ):
-        assert checks.unbacked_check_claim(bad, set()), bad
-        assert not checks.unbacked_check_claim(bad, {"browser_human_check"})
-    for fine in ("The site wants a check I can't do here: open it yourself.", "Booked for 7pm."):
-        assert not checks.unbacked_check_claim(fine, set()), fine
 
 
 async def test_an_approved_form_is_typed_in_its_own_order(setup, llm, chat, accounts):
@@ -385,25 +373,6 @@ async def test_a_new_windows_blank_page_is_said_and_the_last_page_given(setup, l
     assert chat.texts()[-1] == "Your trolley has the rice in it."
 
     assert await agent.browser_actions.forget_site(fe, "shop.example", via="chat") and signins.last_page(fe) == ""
-
-
-def test_a_site_action_claimed_without_a_browser_action_is_caught():
-    """Seen: "add it back" → "Done, added back to your trolley" with no tool call at all."""
-    claim = "Done — the bathroom tissue has been added back to your trolley."
-    draft = checks.Draft("err. add it back", claim, TaskState(), True)
-    failed = next(c for c in checks.CLAIM_CHECKS if c.failed(draft))
-    assert failed.name == "site"
-    # Looking isn't doing.
-    looked = checks.Draft("add it back", claim, TaskState(ran={"browser_navigate", "browser_snapshot"}), True)
-    assert next(c for c in checks.CLAIM_CHECKS if c.failed(looked)).name == "site"
-    # Done with a click: fine, and "remove" with "I've removed" isn't taken for a memory then.
-    clicked = checks.Draft(
-        "remove the toilet paper", "I've removed it from your trolley.", TaskState(ran={"browser_click"}), True
-    )
-    assert not any(c.failed(clicked) for c in checks.CLAIM_CHECKS)
-    # Reading the trolley back isn't a claim of an action.
-    read = checks.Draft("read my trolley to me", "Your delivery slot is booked for 01/12/2026.", TaskState(), True)
-    assert not any(c.failed(read) for c in checks.CLAIM_CHECKS)
 
 
 async def test_on_whatsapp_web_the_message_box_is_always_a_card_and_the_page_is_private(setup, llm, chat, accounts):

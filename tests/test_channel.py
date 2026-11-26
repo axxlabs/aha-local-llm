@@ -134,6 +134,7 @@ class PyDevice:
 
     async def send(self, message: dict) -> None:
         await self.rig.channel.on_e2e(E2E(dev=self.dev, box=c.encrypt_json(self.ratchet, message)))
+        await self.rig.channel.drained()
 
     def inbox(self) -> list[dict]:
         out = []
@@ -530,3 +531,61 @@ async def test_a_fold_with_nothing_open_since_the_last_one_is_skipped(tmp_path):
     await rig.channel.message(acct, "again")
     await rig.channel.cut(acct)
     assert len([it for it in acct.recent_items() if it.get("t") == "cut"]) == 2
+
+
+async def test_one_persons_slow_message_doesnt_hold_up_anothers(tmp_path, monkeypatch):
+    """Device messages are handled off the gateway's frame loop, in order for each person (SPEC §6.5): seen, a card
+    answered while a background check stopped held up everyone's messages for up to 10 seconds."""
+    import asyncio
+
+    from aha_local.e2e import channel as ch
+
+    rig = Rig(tmp_path)
+    _, ana = await rig.pair("Ana")
+    _, bo = await rig.pair("Bo")
+    release, order = asyncio.Event(), []
+
+    async def slow(self, r):
+        order.append("slow")
+        await release.wait()
+
+    async def quick(self, r):
+        order.append(f"quick:{r.account.name}")
+
+    monkeypatch.setitem(ch.HANDLERS, "slow", slow)
+    monkeypatch.setitem(ch.HANDLERS, "quick", quick)
+    await rig.channel.on_e2e(E2E(dev=ana.dev, box=c.encrypt_json(ana.ratchet, {"t": "slow"})))
+    await rig.channel.on_e2e(E2E(dev=ana.dev, box=c.encrypt_json(ana.ratchet, {"t": "quick"})))
+    await rig.channel.on_e2e(E2E(dev=bo.dev, box=c.encrypt_json(bo.ratchet, {"t": "quick"})))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert order == ["slow", "quick:Bo"]  # Bo isn't held up; Ana's second waits for her first
+    release.set()
+    await rig.channel.drained()
+    assert order == ["slow", "quick:Bo", "quick:Ana"]
+
+
+async def test_diagnostics_go_only_to_a_device_showing_the_app_and_only_when_changed(tmp_path):
+    """SPEC §7.4: each message to a device is a saved step of its encryption; readings to every online device
+    every 3 s were ~29,000 writes a day each, app open or not."""
+    rig = Rig(tmp_path)
+    _, phone = await rig.pair()
+    await phone.send({"t": "hello", "name": "Phone"})
+    phone.inbox()
+    readings = iter([{"t": "stats", "cpu": {"load": 5}}] * 2 + [{"t": "stats", "cpu": {"load": 9}}])
+
+    class Reader:
+        async def read(self):
+            return next(readings)
+
+    reader = Reader()
+    await rig.channel.diagnostics_once(reader)
+    assert phone.inbox() == []  # online, but not showing the app
+    await phone.send({"t": "stats_watch", "on": True})
+    await rig.channel.diagnostics_once(reader)
+    await rig.channel.diagnostics_once(reader)  # the same reading: not sent again
+    await rig.channel.diagnostics_once(reader)
+    assert [m["cpu"]["load"] for m in phone.inbox()] == [5, 9]
+    await phone.send({"t": "stats_watch", "on": False})
+    await rig.channel.diagnostics_once(reader)
+    assert phone.inbox() == []

@@ -93,6 +93,9 @@ class TaskState:
     # What the task changed, one line per action that worked, set by the registry from each result's `did`: kept
     # with the request's answer, so a later request knows, even when this one stopped before saying so (SPEC §4).
     done: list[str] = field(default_factory=list)
+    # A background task's check (SPEC §3.4): where its check_result call puts {"outcome", "message"}. None: this
+    # isn't a check, and check_result refuses.
+    report: dict | None = None
 
 
 @dataclass

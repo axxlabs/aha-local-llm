@@ -69,3 +69,13 @@ def test_what_counts_as_a_made_up_address():
     assert not addresses.made_up("https://www.sevenrooms.com/", seen)  # a home page is fine
     assert not addresses.made_up("https://www.google.com/search?q=flat+iron", seen)  # a search
     assert addresses.home(guessed) == "https://www.sevenrooms.com/"
+
+
+def test_a_search_is_its_own_rule_not_a_trusted_sites():
+    """Trusting google.com is for typing there; a search after reading mail still shows its words first."""
+    from aha_local.policy.gate import Action, Facts, decide
+
+    trusting = Facts(trusted={"google.com"}, private=True)
+    assert decide(Action("search", "google.com", "https://www.google.com/search?q=x"), trusting).outcome == "card"
+    assert decide(Action("search"), Facts(trusted={"google.com"})).outcome == "run"
+    assert decide(Action("type", "google.com"), trusting).outcome == "run"

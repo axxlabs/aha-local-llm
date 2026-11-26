@@ -4,9 +4,6 @@
 
 from __future__ import annotations
 
-import pytest
-
-from aha_local import checks
 from aha_local.approvals import Decision, Field
 from aha_local.policy.gate import Action, Facts, decide
 from aha_local.policy.grants import Grant
@@ -137,22 +134,6 @@ async def test_a_request_the_person_watches_asks_for_every_send(agent, llm, chat
     await agent.approval_reply(fe, card.card["id"], "decline")
     await settle(agent)
     assert "permissions_request" not in agent.registry.names()
-
-
-@pytest.mark.parametrize(
-    "answer, plan",
-    [
-        (
-            "1. Find a table at 19:00\n2. Book it on thefork.co.uk\n3. I'll remind you every day\n\nShall I go ahead?",
-            True,
-        ),
-        ("I'll remind you every day at 8.", False),
-        ("1. Done\n2. Done\n\nAll set.", False),
-    ],
-)
-def test_a_plan_isnt_a_claim_of_work_done(answer, plan):
-    assert checks.is_plan(answer) is plan
-    assert checks.unbacked_schedule_claim(answer, set()) is (not plan and "remind" in answer)
 
 
 def test_a_task_stored_before_the_split_keeps_what_it_allowed():

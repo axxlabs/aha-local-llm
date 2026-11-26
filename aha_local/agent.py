@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from . import actions, checks, context, dates, folding, messages
-from .accounts import Account, Accounts, turn_time
+from .accounts import TASK, Account, Accounts, turn_time
 from .approvals import Approvals
 from .config import Config
 from .items import Image
@@ -105,9 +105,9 @@ class Job:
     start: int = 0  # the first item after the fold the check made before it started: its note's part
     quiet: bool = True  # no "typing…", no tool lines
 
-    def finish(self, account: Account, answer: str, stopped: bool) -> background.Note | None:
+    def finish(self, account: Account, outcome: str, message: str, stopped: bool) -> background.Note | None:
         """The task's note for the chat, or None: nothing is sent and the turn isn't kept."""
-        return background.finish(account, self.id, answer, stopped)
+        return background.finish(account, self.id, outcome, message, stopped)
 
     def grant(self, account: Account) -> Grant:
         """What the person allowed up front when the task was started: its checks keep it (SPEC §3.4)."""
@@ -434,11 +434,11 @@ class Agent:
 
     async def _task(self, account: Account, text: str, job: Job | None = None) -> None:
         # The task's records in the transcript carry its id, so a message's details can be found (SPEC §3.8).
-        account.task = secrets.token_hex(6)
+        token = TASK.set(secrets.token_hex(6))
         try:
             await self._task_body(account, text, job)
         finally:
-            account.task = None
+            TASK.reset(token)
 
     async def _within_limit(self, account: Account, work):
         """Run the task with its time limit (SPEC §3.3), counting only the time it works: while a card waits for
@@ -470,6 +470,7 @@ class Agent:
         asked_at = 0 if job else account.seq  # the item of the message that started it (SPEC §7.4)
         quiet = job is not None and job.quiet
         done: list[str] = []  # what it changed, kept with its answer (SPEC §4 "What a request did")
+        report: dict = {}  # a background check's check_result: {"outcome", "message"} (SPEC §3.4)
         typing = asyncio.create_task(asyncio.sleep(0) if quiet else self._typing(account))
         # The model is this person's for the whole task, its title and summary included: its cache stays theirs
         # (SPEC §3.3 "One task at a time"). Waiting for the turn shows as "finishing someone else's request".
@@ -477,7 +478,7 @@ class Agent:
         await turn.__aenter__()
         try:
             try:
-                answer, checked, text = await self._within_limit(
+                answer, text = await self._within_limit(
                     account,
                     self.solve(
                         account,
@@ -486,6 +487,7 @@ class Agent:
                         job.grant(account) if job else None,
                         job.links(account) if job else None,
                         done,
+                        report if job else None,
                     ),
                 )
             except asyncio.CancelledError:
@@ -497,15 +499,15 @@ class Agent:
                 await self._stop_typing(account, typing, quiet)
                 raise
             except TimeoutError:
-                answer, checked, stopped = messages.TOO_LONG, False, True
+                answer, stopped = messages.TOO_LONG, True
             except ApprovalExpired:
-                answer, checked, stopped = messages.APPROVAL_EXPIRED, False, True
+                answer, stopped = messages.APPROVAL_EXPIRED, True
             except ModelUnavailable as e:
                 log.error("model unavailable: %s", e)
-                answer, checked, stopped = messages.MODEL_DOWN, False, True
+                answer, stopped = messages.MODEL_DOWN, True
             except Exception:
                 log.exception("task failed")
-                answer, checked, stopped = messages.FAILED, False, True
+                answer, stopped = messages.FAILED, True
             else:
                 stopped = answer.startswith(messages.TOO_MANY_STEPS)
             if not answer.strip() and not job:
@@ -514,7 +516,7 @@ class Agent:
             await self._stop_typing(account, typing, quiet)  # before the answer, so no refresh can land after it
             noted = False  # a background task's note: its own topic, already sent and titled
             if job:
-                result = job.finish(account, answer, stopped)
+                result = job.finish(account, report.get("outcome", ""), report.get("message", answer), stopped)
                 if result is None:
                     account.transcript({"kind": "answer", "text": "", "job": "background", "quiet": True})
                     return  # nothing to tell yet: say nothing, keep the chat clean
@@ -524,7 +526,7 @@ class Agent:
                 # Unfinished stays unfolded after a break (SPEC §7.4 "Folding"): a task that stopped, or a question.
                 await self.send(account, answer, open="stopped" if stopped else "asks" if folding.asks(answer) else "")
             account.transcript({"kind": "answer", "text": answer})
-            context.record_turn(account, text, answer, checked, done)
+            context.record_turn(account, text, answer, done)
             # The task's last request, still cached in the person's slot: the topic's title and memory entry are
             # asked at its end, so they cost only their own words (SPEC §3.2 "Cache slots", §5.4, §7.4).
             prompt, self.session(account).last_prompt = self.session(account).last_prompt, None
@@ -583,12 +585,14 @@ class Agent:
         grant: Grant | None = None,
         links: list[str] | None = None,
         done: list[str] | None = None,
-    ) -> tuple[str, bool, str]:
-        """Returns the answer, whether it passed the checks, and everything the person said during the task.
+        report: dict | None = None,
+    ) -> tuple[str, str]:
+        """Returns the answer and everything the person said during the task.
         `quiet` (a background check): no tool lines, and the person's messages wait for a task of their own.
         `grant`: a background task's own permissions (SPEC §5.2 "Allowed up front"); a request the person is
         watching has none: each action asks as it happens. `done`: filled with what it changes, one line each
-        (SPEC §4 "What a request did"), kept by the caller even if it stops."""
+        (SPEC §4 "What a request did"), kept by the caller even if it stops. `report`: a background check's, filled
+        by its check_result call (SPEC §3.4)."""
         today = dates.now(self.config).date()
 
         def with_dates(message: str) -> str:
@@ -597,15 +601,13 @@ class Agent:
             return f"{message}\n\n{line}" if line else message
 
         task: list[dict] = [{"role": "user", "content": with_dates(text)}]
-        has_photo = False
 
         def take_photos(message: dict) -> None:
             """Attach the person's waiting photos to a message for the model (the vision model reads them)."""
-            nonlocal has_photo, text
+            nonlocal text
             photos, self.session(account).photos = self.session(account).photos, []
             if not photos:
                 return
-            has_photo = True
             text = text + " [photo]" * len(photos)
             message["content"] = with_images(message["content"], photos)
 
@@ -618,7 +620,11 @@ class Agent:
         browser = self.browser.for_account(account.id) if self.browser else None
         approvals = _Pausing(self.approvals, self.llm, account.address)  # a card frees the model meanwhile
         topic = folding.segment_start(account.recent_items(), dates.tz(self.config))  # the topic going on (§4)
-        state = TaskState(grant=grant if grant is not None else Grant(), done=done if done is not None else [])
+        state = TaskState(
+            grant=grant if grant is not None else Grant(),
+            done=done if done is not None else [],
+            report=report,
+        )
         ctx = ToolContext(account, approvals, self.config, state, browser, send)
 
         steps_shown = False
@@ -641,18 +647,8 @@ class Agent:
         # model wrote: only the links its task kept count (SPEC §5.2 "Made-up addresses").
         addresses.remember(ctx.task.seen_urls, " ".join(links or []) if quiet else text)
         tools = self.registry.specs()
-        last = ""
         retried: set[str] = set()  # the checks that already sent a draft back (SPEC §3.5.1): once each
         can_sign_in = "browser_login" in self.registry.names()
-        # Where numbers in the answer may come from: what the person said or saved, earlier answers, and pages
-        # opened in this task, Google's results page (web_search) among them (SPEC §3.5).
-        conv = account.load_context()
-        sources = [
-            text,
-            *(m["text"] for m in account.load_memory()),
-            *(e["text"] for e in conv["topics"]),  # the topic memory, like earlier answers (§5.4)
-            *(t["content"] for t in conv["turns"] if t["role"] == "user" or t.get("checked")),
-        ]
         for _ in range(self.config.max_model_calls):
             extras, self.session(account).inbox = (
                 ([], self.session(account).inbox)
@@ -664,7 +660,6 @@ class Agent:
             )
             for extra in extras:
                 task.append({"role": "user", "content": NEW_MESSAGE.format(text=with_dates(extra))})
-                sources.append(extra)
                 addresses.remember(ctx.task.seen_urls, extra)
                 text = f"{text}\n\n{extra}"
                 take_photos(task[-1])
@@ -681,31 +676,24 @@ class Agent:
             log.info("model call: %d prompt tokens, %d cached", reply.prompt_tokens, reply.cached_tokens)
             await record(model_record(self.llm.model, reply))
             if not reply.tool_calls:
-                draft = checks.Draft(text, reply.content or "", ctx.task, can_sign_in, sources, has_photo)
-                # A check's own "I'll check again in 15 minutes" isn't a promise to set something up (SPEC §3.4).
-                skip = retried | ({"schedule"} if quiet else set())
-                failed = next((c for c in checks.CLAIM_CHECKS if c.name not in skip and c.failed(draft)), None)
+                answer = reply.content or ""
+                draft = checks.Draft(ctx.task, can_sign_in)
+                failed = next((c for c in checks.CLAIM_CHECKS if c.name not in retried and c.failed(draft)), None)
                 if failed:
                     retried.add(failed.name)
                     log.info(failed.log)
-                    await record({"kind": "check", "name": failed.name, **failed.details(draft)})
-                    task.append({"role": "assistant", "content": draft.answer})
+                    await record({"kind": "check", "name": failed.name})
+                    task.append({"role": "assistant", "content": answer})
                     task.append({"role": "user", "content": failed.retry_for(draft)})
                     continue
-                if quiet and "outcome" not in retried and not background.marked(draft.answer):
-                    # A check's answer must say what it found (SPEC §3.4): seen, one that followed its own prompt's
-                    # wording ("No reply yet") with no WAITING closed the task.
-                    retried.add("outcome")
-                    await record({"kind": "check", "name": "outcome"})
-                    task.append({"role": "assistant", "content": draft.answer})
-                    task.append({"role": "user", "content": background.OUTCOME_RETRY})
+                if report is not None and not report and "report" not in retried:
+                    # A check reports what it found with check_result (SPEC §3.4): a tool call, not words to parse.
+                    retried.add("report")
+                    await record({"kind": "check", "name": "report"})
+                    task.append({"role": "assistant", "content": answer})
+                    task.append({"role": "user", "content": background.REPORT_RETRY})
                     continue
-                if has_photo:
-                    # Numbers in the person's photo can't be matched as text: no warning, and the answer isn't a
-                    # source later (SPEC §3.5.1).
-                    return checks.chat_format(reply.content or ""), False, text
-                return (*finish(reply.content or "", sources, bool(retried), today), text)
-            last = reply.content or last
+                return checks.chat_format(answer), text
             task.append(
                 {
                     "role": "assistant",
@@ -732,8 +720,6 @@ class Agent:
                         "error": result.error,
                     }
                 )
-                if not result.error:
-                    sources.append(result.text)
                 task.append(
                     {
                         "role": "tool",
@@ -745,7 +731,9 @@ class Agent:
                 for image in result.images:
                     shot = with_images(f"[Screenshot returned by {call.name}]", [image])
                     task.append({"role": "user", "_kind": "image", "content": shot})
-        return (*finish(f"{messages.TOO_MANY_STEPS}\n{last}".strip(), sources, bool(retried), today), text)
+            if report:  # the check said what it found: it's over (SPEC §3.4)
+                return report.get("message", ""), text
+        return out_of_steps(ctx.task.done), text
 
 
 def with_images(text: str, images: list[Image]) -> list[dict]:
@@ -760,23 +748,13 @@ def after_task(prompt: list[dict], answer: str, question: str) -> list[dict]:
     return [*prompt, {"role": "assistant", "content": answer}, {"role": "user", "content": question}]
 
 
-def finish(answer: str, sources: list[str], retried: bool = False, today: dt.date | None = None) -> tuple[str, bool]:
-    """App formatting, fixes in code (talk about a draft after a check, a wrong weekday), and a visible warning for
-    numbers no opened page supports.
-
-    Returns the answer and whether it passed: only answers that passed count as sources later.
-    """
-    answer = checks.chat_format(answer)
-    if retried:
-        answer = checks.drop_draft_talk(answer)
-    answer, wrong = checks.fix_weekdays(answer, today or dt.date.today())
-    if wrong:
-        log.info("fixed %d weekday(s) in the answer", wrong)
-    missing = checks.unverified(answer, sources)
-    if missing:
-        log.info("answer had %d unconfirmed number(s)", len(missing))
-        return f"{answer}\n\n{checks.warning(missing)}", False
-    return answer, True
+def out_of_steps(done: list[str]) -> str:
+    """The answer when the step limit ends a task (SPEC §3.3): what it did, from the record of its actions, not the
+    model's last words (seen: "Let me take a fresh snapshot to see the current state." sent as the answer)."""
+    did = [line.split(": ", 1)[-1] for line in done]
+    if not did:
+        return f"{messages.TOO_MANY_STEPS} nothing was changed."
+    return f"{messages.TOO_MANY_STEPS}\n" + "\n".join(f"- {d}" for d in did)
 
 
 def _short(arguments: str) -> str:

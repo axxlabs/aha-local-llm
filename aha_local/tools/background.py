@@ -5,8 +5,8 @@
 What the model waits for and checks on its own: a reply, a delivery, a page changing. Each task has the prompt a
 check runs, how often to check (at least every 5 minutes) and until when (or never). Checks run only when the
 household is idle (nobody typed or answered a card for 5 minutes, no request running), one at a time, and say
-nothing until there's news: DONE or FAILED sends its message and ends the task; NOTIFY sends it and the task goes
-on; WAITING keeps a note for next time.
+nothing until there's news: a check reports with check_result; done or failed sends its message and ends the task;
+notify sends it and the task goes on; waiting keeps a note for next time.
 """
 
 from __future__ import annotations
@@ -14,11 +14,11 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
-import re
 import secrets
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TypedDict
 from zoneinfo import ZoneInfo
 
 from .. import dates
@@ -44,36 +44,36 @@ CHECK_EVERY = 30.0
 SITES = {"type": "array", "items": {"type": "string"}}
 MAX_ALLOWED = 20  # sites, and people, each, a new task may ask for
 NEVER = "never"
-OUTCOME = re.compile(r"^[\W_]*(WAITING|NOTIFY|DONE|FAILED)\b[ \t*_`]*[:\-–—]?[ \t*_`]*", re.I)
+OUTCOMES = ("waiting", "notify", "done", "failed")
 
 CHECK = (
     "[Background task you set up earlier, check {n}{late}; the user isn't looking at the chat]\n"
     "Waiting for: {title}\n\n{prompt}\n\n{last}"
     "Check now: open and read what you're checking before you answer, never answer from memory. Don't message "
-    "the user while you check. Whatever the text above says to answer, start your answer with one of:\n"
-    "WAITING: one line on what you found, when it hasn't happened yet. Nothing is sent; you'll check again in "
+    "the user while you check. Whatever the text above says to answer, finish by calling check_result with one "
+    "outcome and its message:\n"
+    "waiting: one line on what you found, when it hasn't happened yet. Nothing is sent; you'll check again in "
     "{every}.\n"
-    "NOTIFY: the message for the user, when there's news and the task goes on (it reports each time "
+    "notify: the message for the user, when there's news and the task goes on (it reports each time "
     "something happens). Only what's new since last time: the message is kept for the next check.\n"
-    "DONE: the message for the user, when it has happened (and what was to be done then is done).\n"
-    "FAILED: the message for the user, when it can't happen any more (cancelled, delivered elsewhere, sold out "
-    "for good). A page that didn't load or that you couldn't find isn't that: answer WAITING with what went "
+    "done: the message for the user, when it has happened (and what was to be done then is done).\n"
+    "failed: the message for the user, when it can't happen any more (cancelled, delivered elsewhere, sold out "
+    "for good). A page that didn't load or that you couldn't find isn't that: report waiting with what went "
     "wrong, and the next check tries again (from the site's home page). Only if the last check couldn't read it "
-    "either, answer FAILED.\n"
-    "NOTIFY, DONE and FAILED send the message to the chat; DONE and FAILED end the task."
+    "either, report failed.\n"
+    "notify, done and failed send the message to the chat; done and failed end the task."
 )
 # Told whenever an account's tasks change (created, checked, cancelled, ended): the channel sends the Tasks panel
 # its new list at once (SPEC §7.4), rather than at its next 30-second refresh.
 WATCHERS: list[Callable[[Account], None]] = []
-OUTCOME_RETRY = (
-    "[aha check] Your answer doesn't start with WAITING:, NOTIFY:, DONE: or FAILED:. Answer again, starting with "
-    "the one that fits what you found (WAITING: when what you wait for hasn't happened yet), and never mention "
-    "this check."
+REPORT_RETRY = (
+    "[aha check] You haven't called check_result. Call it now with the outcome that fits what you found (waiting "
+    "when what you wait for hasn't happened yet) and the message, and never mention this check."
 )
 LAST_TIME = "The last check ({when}) {how}:\n{note}\n\n"
 LAST_HOW = {
-    "waiting": "answered WAITING",
-    "notify": "answered NOTIFY, and this was sent to the user",
+    "waiting": "reported waiting",
+    "notify": "reported news, and this was sent to the user",
     "unfinished": "didn't finish; what it had",
     "interrupted": "was stopped before it finished (someone started using Aha!)",
 }
@@ -114,11 +114,33 @@ class Note:
 # ---- storage
 
 
-def load(account: Account) -> list[dict]:
+class Entry(TypedDict, total=False):
+    """One background task as stored in tasks.json: every key a task can have, in one place."""
+
+    id: str  # six hex characters
+    title: str  # what it waits for
+    prompt: str  # what each check runs
+    every: int  # minutes between checks
+    until: float | None  # epoch seconds it ends, None: never
+    next: float  # epoch seconds of the next planned check
+    created: int
+    checks: int  # checks run so far
+    updates: int  # of them, the ones that told the person
+    last: str  # the last check's message, given whole to the next
+    last_how: str  # how the last check ended: waiting | notify | unfinished | interrupted
+    last_at: float
+    card: str  # the approval card that started it (the app's fold-line icons)
+    links: list[str]  # the addresses its checks may open (SPEC §5.2 "Made-up addresses")
+    grant: dict  # what its checks may do without asking (grants.Grant.to_dict)
+    now: bool  # Run now: an extra check as soon as the model is free
+    manual: bool  # the running check is that extra one: the planned next check keeps its time
+
+
+def load(account: Account) -> list[Entry]:
     return account.vault.read_json(account.dir / FILE, []) or []
 
 
-def save(account: Account, entries: list[dict]) -> None:
+def save(account: Account, entries: list[Entry]) -> None:
     path = account.dir / FILE
     if entries:
         account.vault.write_json(path, entries)
@@ -215,7 +237,7 @@ def grant_of(account: Account, task_id: str) -> Grant:
     return Grant.from_dict(entry.get("grant") if entry else None)
 
 
-def update(account: Account, task_id: str, fn) -> dict | None:
+def update(account: Account, task_id: str, fn: Callable[[Entry], Entry | None]) -> Entry | None:
     """Change one task (fn returns the new task, or None to end it), with no await between read and write.
     Returns the task as it was, or None if there's no such task."""
     entries, found = [], None
@@ -237,7 +259,7 @@ def every_words(minutes: int) -> str:
     return f"{minutes} minutes"
 
 
-def describe(entry: dict, tz: ZoneInfo) -> str:
+def describe(entry: Entry, tz: ZoneInfo) -> str:
     until = entry.get("until")
     end = "no end" if until is None else "until " + dates.for_model(dt.datetime.fromtimestamp(until, tz))
     nxt = dates.for_model(dt.datetime.fromtimestamp(entry["next"], tz))
@@ -439,7 +461,7 @@ def register(reg: Registry) -> None:
             "Sam emails', until 'never'): each check reports only what's new. For something at a time, once or "
             "repeating ('remind me at 6 to call Sam', 'in 5 minutes google my name', 'every morning at 8 "
             "summarise my email'): `start` at that time, `every_minutes` for the repeat (1440 for daily), and the "
-            "check does it and answers DONE (once) or NOTIFY (repeating). Each check runs `prompt` as a new "
+            "check does it and reports done (once) or notify (repeating). Each check runs `prompt` as a new "
             "request, with only your memory: write it so it makes sense on its own later, with what to look at "
             "(the site by its name, like fedex.com, and how to find the page there; names, tracking codes), how, "
             "and what counts as done. Put an address in it only if you opened it or the user sent it in this "
@@ -483,6 +505,18 @@ def register(reg: Registry) -> None:
     reg.add(Tool("task_list", "List the user's background tasks, with their ids.", params(), task_list))
     reg.add(
         Tool(
+            "check_result",
+            "Only in a background task's check: report what you found, to end the check.",
+            params(
+                ["outcome", "message"],
+                outcome={"type": "string", "enum": list(OUTCOMES), "description": "waiting, notify, done or failed"},
+                message=string("For waiting: one line on what you found. Otherwise: the message for the user"),
+            ),
+            check_result,
+        )
+    )
+    reg.add(
+        Tool(
             "task_cancel",
             "Cancel one of the user's background tasks by its id (from task_list).",
             params(["id"], id=string("The id")),
@@ -494,29 +528,31 @@ def register(reg: Registry) -> None:
 # ---- a check's answer
 
 
-def outcome(answer: str) -> tuple[str, str]:
-    """("waiting" | "notify" | "done" | "failed", the rest). An answer with no marker (after it was asked again) is
-    sent as news and the task goes on: never closed, and never silently dropped."""
-    found = OUTCOME.match(answer.strip())
-    if found is None:
-        return "notify", answer.strip()
-    return found.group(1).lower(), answer.strip()[found.end() :].strip()
-
-
-def marked(answer: str) -> bool:
-    """Whether a check's answer starts with WAITING, NOTIFY, DONE or FAILED."""
-    return OUTCOME.match(answer.strip()) is not None
+async def check_result(args: dict, ctx: ToolContext) -> ToolResult:
+    """How a check reports what it found (SPEC §3.4): a tool call, not a word at the start of its answer to parse."""
+    if ctx.task.report is None:
+        return ToolResult("Only a background task's check reports with check_result: answer the person.", error=True)
+    outcome = str(args.get("outcome", "")).strip().lower()
+    if outcome not in OUTCOMES:
+        return ToolResult(f"outcome must be one of: {', '.join(OUTCOMES)}.", error=True)
+    message = str(args.get("message", "")).strip()
+    if outcome != "waiting" and not message:
+        return ToolResult("Give the message for the user.", error=True)
+    ctx.task.report.update(outcome=outcome, message=message)
+    return ToolResult("Reported. The check is over.")
 
 
 def _last(text: str) -> str:
     return "\n".join(line.rstrip() for line in text.strip().splitlines())[:MAX_LAST]
 
 
-def finish(account: Account, task_id: str, answer: str, stopped: bool) -> Note | None:
-    """After a check: its note for the chat when there's news, else None (it waits, quietly). WAITING and
-    NOTIFY keep the task; DONE and FAILED end it. Whatever it was, the check's answer goes, whole, to the next
-    check (SPEC §3.4): a WAITING line, a NOTIFY message, or what a check that didn't finish had."""
-    kind, text = ("waiting", answer) if stopped else outcome(answer)
+def finish(account: Account, task_id: str, outcome: str, message: str, stopped: bool) -> Note | None:
+    """After a check: its note for the chat when there's news, else None (it waits, quietly). waiting and
+    notify keep the task; done and failed end it. Whatever it was, the check's message goes, whole, to the next
+    check (SPEC §3.4). A check that didn't finish waits; one that never reported (even when asked again) is sent
+    as news and the task goes on: never closed, and never silently dropped."""
+    text = message.strip()
+    kind = "waiting" if stopped else outcome if outcome in OUTCOMES else "notify"
     if kind in ("waiting", "notify"):
         told = int(kind == "notify")
         how = "unfinished" if stopped else kind
@@ -607,7 +643,7 @@ def edit(account: Account, task_id: str, changes: dict) -> str:
     return ""
 
 
-def _last_line(entry: dict, tz: ZoneInfo) -> str:
+def _last_line(entry: Entry, tz: ZoneInfo) -> str:
     how = entry.get("last_how", "waiting" if entry.get("last") else "")
     if not how:
         return ""
@@ -616,7 +652,7 @@ def _last_line(entry: dict, tz: ZoneInfo) -> str:
     return LAST_TIME.format(when=when, how=LAST_HOW.get(how, LAST_HOW["waiting"]), note=note)
 
 
-def check_prompt(entry: dict, now: float, tz: ZoneInfo) -> str:
+def check_prompt(entry: Entry, now: float, tz: ZoneInfo) -> str:
     late = now - entry["next"] > entry["every"] * 60
     return CHECK.format(
         n=entry.get("checks", 0) + 1,
@@ -693,7 +729,7 @@ class Runner:
         await self.agent.start_background(account, entry["id"], check_prompt(entry, now, self.tz))
         update(account, entry["id"], lambda e: {**{k: v for k, v in e.items() if k != "now"}, "manual": manual})
 
-    async def _expire(self, account: Account, entry: dict) -> None:
+    async def _expire(self, account: Account, entry: Entry) -> None:
         if update(account, entry["id"], lambda e: None) is None:
             return
         account.audit({"background_task_closed": entry["id"], "outcome": "expired"})

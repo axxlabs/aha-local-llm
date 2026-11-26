@@ -32,6 +32,7 @@ CHARS_PER_TOKEN = 3.2
 IMAGE_TOKENS = 1200
 TURNS_BUDGET = 20_000  # tokens of the topic's turns; a longer topic keeps its newest
 TOPIC_CHARS = 1_200  # one topic's entry
+TOPICS_BUDGET = 16_000  # tokens of the topic memory in every request: the newest that fit
 TASK_SHARE = 0.6  # past this share of the context, older page snapshots in the task are shortened
 KEEP_PAGES = 2  # the newest page results always stay whole
 
@@ -63,13 +64,23 @@ def days_ahead(now: dt.datetime, count: int = 14) -> str:
     return ", ".join((now + dt.timedelta(days=i)).strftime("%a %d/%m/%Y") for i in range(1, count + 1))
 
 
-def render_topics(entries: list[dict]) -> str:
-    """Every topic's entry, oldest first: a new one goes at the end, so the start of the block stays cached."""
+def render_topics(entries: list[dict], budget: int = TOPICS_BUDGET) -> str:
+    """The topics' entries, oldest first: a new one goes at the end, so the start of the block stays cached. Only
+    the newest that fit `budget` tokens (SPEC §4): every topic of the history's length was in every request, and a
+    busy month would have filled the context. Older ones are still found with conversation_search."""
     lines = []
     for e in sorted(entries, key=lambda e: e.get("ts", 0)):
         day = dates.say(dt.date.fromtimestamp(e["ts"])) if e.get("ts") else "earlier"
         lines.append(f"- [{e['id']}] {day}, {e.get('title') or 'Untitled'}:\n  " + e["text"].replace("\n", "\n  "))
-    return "\n".join(lines)
+    kept, used = [], 0
+    for line in reversed(lines):
+        used += len(line) / CHARS_PER_TOKEN
+        if used > budget:
+            break
+        kept.append(line)
+    left = len(lines) - len(kept)
+    older = [f"({left} older topic{'s' if left != 1 else ''} not shown: find them with conversation_search)"]
+    return "\n".join((older if left else []) + kept[::-1])
 
 
 def context_block(
@@ -163,11 +174,8 @@ def strip(m: dict) -> dict:
     return {k: v for k, v in m.items() if not k.startswith("_")}
 
 
-def record_turn(
-    account: Account, user_text: str, answer: str, checked: bool = False, done: list[str] | None = None
-) -> dict:
-    """`checked`: the answer passed the number check, so its numbers may be quoted again later. `done`: what the
-    request changed (SPEC §4 "What a request did"), shown with the answer to later requests."""
+def record_turn(account: Account, user_text: str, answer: str, done: list[str] | None = None) -> dict:
+    """`done`: what the request changed (SPEC §4 "What a request did"), shown with the answer to later requests."""
     conv = account.load_context()
     now = time.time()
     stamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -179,7 +187,6 @@ def record_turn(
                 "content": answer,
                 "ts": stamp,
                 "t": now,
-                "checked": checked,
                 **({"done": done[-MAX_DONE:]} if done else {}),
             },
         ]

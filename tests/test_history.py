@@ -201,3 +201,16 @@ def test_the_date_comes_before_the_memory(tmp_path):
     context.save_topic(acct, 3, time.time() - 3600, "Evri parcel", "Tracking H01ABC123")
     block = context.context_block(acct, "Europe/London", "Home", dt.datetime(2026, 11, 25, 9, 0))
     assert block.index("Today: 25/11/2026") < block.index("What you remember") < block.index("H01ABC123")
+
+
+def test_the_topic_memory_keeps_the_newest_that_fit_its_budget():
+    """SPEC §4: every topic of the history's length was in every request; a busy month would fill the context."""
+    from aha_local.context import render_topics
+
+    entries = [
+        {"id": f"t{i}", "ts": 1_795_000_000 + i * 3600, "title": f"Topic {i}", "text": "x" * 300} for i in range(10)
+    ]
+    shown = render_topics(entries, budget=320)  # about 105 tokens each: three fit
+    assert shown.startswith("(7 older topics not shown: find them with conversation_search)")
+    assert [line.split("]")[0][3:] for line in shown.splitlines() if line.startswith("- [")] == ["t7", "t8", "t9"]
+    assert "older" not in render_topics(entries)  # within the budget: all of them

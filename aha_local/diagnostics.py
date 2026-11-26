@@ -17,7 +17,7 @@ from pathlib import Path
 
 log = logging.getLogger("aha.diagnostics")
 
-EVERY = 3.0  # seconds between readings while a device is online
+EVERY = 10.0  # seconds between readings while a device shows the app
 CPU_SENSORS = ("k10temp", "zenpower", "coretemp", "cpu_thermal", "cpu-thermal")  # AMD, Intel, ARM boards
 
 

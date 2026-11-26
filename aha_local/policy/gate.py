@@ -56,7 +56,9 @@ def decide(a: Action, f: Facts) -> Verdict:
         return Verdict("block", a.reason or "this action is disabled")
     if a.kind == "send":
         return Verdict("run", "granted") if f.granted.covers(a.what, a.to) else Verdict("card", "send")
-    if a.kind in ("type", "open", "search") and a.site and a.site in f.trusted:
+    # A search is its own rule, never a site's: trusting google.com is for typing there, not for every search's
+    # words (SPEC §5.2 rule 6).
+    if a.kind in ("type", "open") and a.site and a.site in f.trusted:
         return Verdict("run", "trusted")
     if a.kind == "read":
         return Verdict("run")
