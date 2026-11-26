@@ -303,15 +303,17 @@ async def test_an_answer_without_check_result_is_asked_again_and_never_closes_th
     (left,) = background.load(fe)
     assert left["last"] == "no reply from Leonard yet" and left["checks"] == 1
 
-    # Asked again and still without one: sent as news, and the task goes on.
+    # Asked again and still without one: it ended early, nothing is sent, and the next check tries again.
     left["next"] = time.time() - 1
     background.save(fe, [left])
     llm.answer("No reply from Leonard yet.")
     llm.answer("Still nothing from Leonard.")
     await runner.tick()
     await settle(agent)
-    assert chat.texts() == ["Still nothing from Leonard."] and chat.sent[0].task["kind"] == "update"
-    assert len(background.load(fe)) == 1
+    assert not chat.sent
+    (left,) = background.load(fe)
+    assert left["last_how"] == "ended_early" and left["last"] == "Still nothing from Leonard."
+    assert left["next"] > time.time()
 
 
 async def test_run_now_skips_the_idle_wait_but_not_a_busy_model(runner, agent, llm, chat, accounts):
@@ -338,8 +340,8 @@ async def test_run_now_skips_the_idle_wait_but_not_a_busy_model(runner, agent, l
 
 
 async def test_the_next_check_gets_the_last_result_whatever_it_was(runner, agent, llm, chat, accounts):
-    """Each check is told, whole, what the one before it ended with: WAITING, NOTIFY, or a check that didn't
-    finish or was stopped."""
+    """Each check is told, whole, what the one before it ended with: waiting, notify, or ended early (it didn't
+    finish, was stopped, or never reported)."""
     fe = person(accounts)
     background.save(fe, [task()])
     idle(agent)
@@ -368,7 +370,7 @@ async def test_the_next_check_gets_the_last_result_whatever_it_was(runner, agent
     await settle(agent)
     first = llm.requests[start]["messages"][-1]["content"]
     assert "reported news, and this was sent to the user:\nSam wrote: 'Lunch is off.'" in first
-    assert background.load(fe)[0]["last_how"] == "unfinished"
+    assert background.load(fe)[0]["last_how"] == "ended_early"
 
     # Stopped by someone's message: the next check is told so.
     again()
@@ -386,13 +388,13 @@ async def test_the_next_check_gets_the_last_result_whatever_it_was(runner, agent
     llm.answer("Hi!")
     await agent.inbound(fe, "hello")
     await settle(agent)
-    assert background.load(fe)[0]["last_how"] == "interrupted"
+    assert background.load(fe)[0]["last_how"] == "ended_early"
     llm.chat = real
     idle(agent)
     llm.call("check_result", outcome="waiting", message="nothing")
     await runner.tick()
     await settle(agent)
-    assert "was stopped before it finished" in llm.requests[-1]["messages"][-1]["content"]
+    assert "ended before it reported" in llm.requests[-1]["messages"][-1]["content"]
 
 
 async def test_the_person_edits_what_a_task_checks(runner, agent, llm, accounts):
@@ -541,3 +543,9 @@ async def test_check_result_is_only_for_a_check(agent, llm, chat):
         "Only a background task's check"
         in [m for m in llm.requests[-1]["messages"] if m["role"] == "tool"][-1]["content"]
     )
+
+
+def test_a_task_kept_before_the_merge_reads_as_ended_early():
+    for old in ("unfinished", "interrupted"):
+        assert background.how_it_went({"last_how": old, "last": "x"}) == "ended_early"
+    assert background.how_it_went({"last": "x"}) == "waiting" and background.how_it_went({}) == ""

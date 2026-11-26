@@ -74,9 +74,17 @@ LAST_TIME = "The last check ({when}) {how}:\n{note}\n\n"
 LAST_HOW = {
     "waiting": "reported waiting",
     "notify": "reported news, and this was sent to the user",
-    "unfinished": "didn't finish; what it had",
-    "interrupted": "was stopped before it finished (someone started using Aha!)",
+    "ended_early": "ended before it reported (stopped, interrupted, or no check_result); the last note",
 }
+ENDED_EARLY = {"unfinished", "interrupted", "ended_early"}  # kept before 2026-11-26 as two values
+
+
+def how_it_went(entry: dict) -> str:
+    """How the last check ended: waiting | notify | ended_early, or "" before the first."""
+    how = entry.get("last_how", "waiting" if entry.get("last") else "")
+    return "ended_early" if how in ENDED_EARLY else how
+
+
 EXPIRED = "I stopped waiting on {when}.{last}"
 HEADS = {"update": "Task update", "done": "Task done", "failed": "Task failed", "expired": "Task expired"}
 
@@ -127,13 +135,12 @@ class Entry(TypedDict, total=False):
     checks: int  # checks run so far
     updates: int  # of them, the ones that told the person
     last: str  # the last check's message, given whole to the next
-    last_how: str  # how the last check ended: waiting | notify | unfinished | interrupted
+    last_how: str  # how the last check ended: waiting | notify | ended_early (how_it_went)
     last_at: float
     card: str  # the approval card that started it (the app's fold-line icons)
     links: list[str]  # the addresses its checks may open (SPEC §5.2 "Made-up addresses")
     grant: dict  # what its checks may do without asking (grants.Grant.to_dict)
-    now: bool  # Run now: an extra check as soon as the model is free
-    manual: bool  # the running check is that extra one: the planned next check keeps its time
+    now: bool  # Run now: an extra check as soon as the model is free; the planned next check keeps its time
 
 
 def load(account: Account) -> list[Entry]:
@@ -546,50 +553,47 @@ def _last(text: str) -> str:
 
 
 def finish(account: Account, task_id: str, outcome: str, message: str, stopped: bool) -> Note | None:
-    """After a check: its note for the chat when there's news, else None (it waits, quietly). waiting and
-    notify keep the task; done and failed end it. Whatever it was, the check's message goes, whole, to the next
-    check (SPEC §3.4). A check that didn't finish waits; one that never reported (even when asked again) is sent
-    as news and the task goes on: never closed, and never silently dropped."""
+    """After a check: its note for the chat when there's news, else None. done and failed end the task; waiting
+    and notify keep it; a check that stopped or never reported (even when asked again) ended early: nothing is
+    sent, and the next planned check tries again. Whatever it was, its message goes, whole, to the next check
+    (SPEC §3.4)."""
     text = message.strip()
-    kind = "waiting" if stopped else outcome if outcome in OUTCOMES else "notify"
-    if kind in ("waiting", "notify"):
-        told = int(kind == "notify")
-        how = "unfinished" if stopped else kind
-
-        def checked(e: dict) -> dict:
-            now = time.time()
-            # A Run now check is an extra one: the planned next check keeps its time.
-            later = e["next"] if e.get("manual") else now + e["every"] * 60
-            return {
-                **{k: v for k, v in e.items() if k not in ("now", "manual")},
-                "last": _last(text),
-                "last_how": how,
-                "last_at": now,
-                "next": later,
-                "checks": e.get("checks", 0) + 1,
-                "updates": e.get("updates", 0) + told,
-            }
-
-        entry = update(account, task_id, checked)
-        if kind == "waiting" or entry is None:
-            return None  # nothing to tell, or cancelled while it ran
-    else:
+    kind = outcome if outcome in OUTCOMES and not stopped else "ended_early"
+    if kind in ("done", "failed"):
         entry = update(account, task_id, lambda e: None)
         if entry is None:
             return None  # cancelled while it ran
         account.audit({"background_task_closed": task_id, "outcome": kind})
-    return Note("update" if kind == "notify" else kind, entry["title"], text, entry["prompt"], entry["every"], task_id)
+        return Note(kind, entry["title"], text, entry["prompt"], entry["every"], task_id)
+
+    def checked(e: dict) -> dict:
+        now = time.time()
+        # A Run now check is an extra one: the planned next check keeps its time.
+        later = e["next"] if e.get("now") else now + e["every"] * 60
+        return {
+            **{k: v for k, v in e.items() if k not in ("now", "manual")},
+            "last": _last(text) if text else e.get("last", ""),
+            "last_how": kind,
+            "last_at": now,
+            "next": later,
+            "checks": e.get("checks", 0) + 1,
+            "updates": e.get("updates", 0) + int(kind == "notify"),
+        }
+
+    entry = update(account, task_id, checked)
+    if kind != "notify" or entry is None:
+        return None  # nothing to tell, or cancelled while it ran
+    return Note("update", entry["title"], text, entry["prompt"], entry["every"], task_id)
 
 
 def interrupted(account: Account, task_id: str) -> None:
-    """A check stopped by someone's input: the next one is told so (its result, whatever it was)."""
+    """A check stopped by someone's input or Stop: it ended early, and the next planned check tries again."""
     update(
         account,
         task_id,
         lambda e: {
-            **{k: v for k, v in e.items() if k != "manual"},
-            "last": e.get("last", ""),
-            "last_how": "interrupted",
+            **{k: v for k, v in e.items() if k not in ("now", "manual")},
+            "last_how": "ended_early",
             "last_at": time.time(),
         },
     )
@@ -643,7 +647,7 @@ def edit(account: Account, task_id: str, changes: dict) -> str:
 
 
 def _last_line(entry: Entry, tz: ZoneInfo) -> str:
-    how = entry.get("last_how", "waiting" if entry.get("last") else "")
+    how = how_it_went(entry)
     if not how:
         return ""
     when = dates.for_model(dt.datetime.fromtimestamp(entry.get("last_at") or entry["next"], tz))
@@ -676,7 +680,7 @@ def listing(account: Account) -> list[dict]:
             "checks": e.get("checks", 0),
             "updates": e.get("updates", 0),
             "now": bool(e.get("now")),
-            "last_how": e.get("last_how", "waiting" if e.get("last") else ""),
+            "last_how": how_it_went(e),
             "allowed": Grant.from_dict(e.get("grant")).labels(),
             "grant": Grant.from_dict(e.get("grant")).to_dict(),
         }
@@ -724,9 +728,7 @@ class Runner:
         if self.agent.busy() or not (asked or (due and self.agent.idle(now))):
             return
         _, account, entry = min(asked or due, key=lambda d: d[0])
-        manual = bool(entry.get("now"))  # an extra check: it leaves the planned next one where it is
         await self.agent.start_background(account, entry["id"], check_prompt(entry, now, self.tz))
-        update(account, entry["id"], lambda e: {**{k: v for k, v in e.items() if k != "now"}, "manual": manual})
 
     async def _expire(self, account: Account, entry: Entry) -> None:
         if update(account, entry["id"], lambda e: None) is None:
