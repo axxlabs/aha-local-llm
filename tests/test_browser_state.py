@@ -470,3 +470,15 @@ def test_a_whatsapp_web_page_makes_the_task_private(accounts):
     ctx = ToolContext(person(accounts), None, None, TaskState())
     note_page(ctx, "### Page\n- Page URL: https://web.whatsapp.com/\n")
     assert ctx.task.private  # their messages: new sites and searches now ask first (SPEC §5.2)
+
+
+def test_the_mouse_bends_inside_the_element_so_a_hover_button_stays():
+    """Seen 2026-11-26: WhatsApp's "Open message options" shows only while the mouse is over the message; a
+    swing 40-160 px out before the click made it go, and every click on it failed."""
+    import random
+    import re
+
+    for seed in range(50):
+        code = human.move_code("f66e2346", random.Random(seed))
+        first = re.search(r"page\.mouse\.move\(x \+ b\.width \* (-?[\d.]+), y \+ b\.height \* (-?[\d.]+)", code)
+        assert first and all(abs(float(v)) <= 0.35 for v in first.groups()), code

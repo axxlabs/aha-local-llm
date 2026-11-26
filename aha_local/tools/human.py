@@ -32,13 +32,17 @@ def _locator(ref: str) -> str:
 
 
 def _move_to_element(rng: random.Random) -> str:
-    """JS (inside the harness's async function, with `el` defined): bring the mouse to el's centre."""
-    dx, dy = rng.choice((-1, 1)) * rng.randint(40, 160), rng.choice((-1, 1)) * rng.randint(30, 120)
+    """JS (inside the harness's async function, with `el` defined): bring the mouse to el's centre.
+
+    The bend is a point inside the element, never beside it: a button that shows only while the mouse is over
+    its row (WhatsApp's "Open message options") went away when the mouse swung 40-160 px out first, and every
+    click on it failed (seen 2026-11-26, editing a sent message)."""
+    fx, fy = rng.uniform(-0.35, 0.35), rng.uniform(-0.35, 0.35)
     return (
         "await el.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {}); "
         "const b = await el.boundingBox({ timeout: 3000 }).catch(() => null); "
         "if (b) { const x = b.x + b.width / 2, y = b.y + b.height / 2; "
-        f"await page.mouse.move(x + {dx}, y + {dy}, {{ steps: {rng.randint(8, 18)} }}); "
+        f"await page.mouse.move(x + b.width * {fx:.3f}, y + b.height * {fy:.3f}, {{ steps: {rng.randint(8, 18)} }}); "
         f"await page.waitForTimeout({rng.randint(40, 120)}); "
         f"await page.mouse.move(x, y, {{ steps: {rng.randint(4, 9)} }}); "
         f"await page.waitForTimeout({rng.randint(60, 220)}); }} "
