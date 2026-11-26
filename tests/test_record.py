@@ -59,7 +59,7 @@ async def test_what_was_declined_or_only_read_is_not_in_the_record(agent, llm, c
     ask = await chat.next()
     await say(agent, "❌ Don't", button=ask.buttons[-1].id)
     await settle(agent)
-    assert "done" not in person(accounts).load_context()["turns"][-1]
+    assert "record" not in person(accounts).load_context()["turns"][-1]
 
     llm.answer("Hi.")
     await say(agent, "hi")
@@ -77,7 +77,7 @@ async def test_a_record_line_hides_what_was_typed_on_a_sign_in_card(agent, llm, 
     llm.answer("Done.")
     await say(agent, "do it")
     await settle(agent)
-    [line] = person(accounts).load_context()["turns"][-1]["done"]
+    [line] = person(accounts).load_context()["turns"][-1]["record"]
     assert line.startswith("act: Typed:") and "hunter22" not in line
 
 

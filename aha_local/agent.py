@@ -68,6 +68,23 @@ class AgentOut(Protocol):
     async def text(self, account: Account, text: str) -> None: ...
 
 
+@dataclass(frozen=True)
+class State:
+    """What runs for one person (SPEC §3.3): nothing, their request, or a background check; and whether it waits
+    on a card for them (then the model is free for others)."""
+
+    kind: str  # idle | request | check
+    card: bool = False  # waiting on a card
+
+    @property
+    def model_busy(self) -> bool:
+        return self.kind != "idle" and not self.card
+
+    @property
+    def owes_reply(self) -> bool:
+        return self.kind == "request" and not self.card
+
+
 @dataclass
 class Session:
     """One person's live state on this computer (SPEC §3.3): the task running for them and what waits for it.
@@ -75,7 +92,9 @@ class Session:
     Kept together so it's reset together (seen: Stop dropped the waiting messages but not a waiting photo, which
     then went with the next, unrelated request)."""
 
-    task: asyncio.Task | None = None
+    # The request or check running for them; while a check folds the chat before it starts, a bare Future holds
+    # the place, so nothing else starts meanwhile.
+    task: asyncio.Future | None = None
     inbox: list[str] = field(default_factory=list)  # their messages that came in while the task ran
     photos: list[Image] = field(default_factory=list)  # their photos, for the next model call
     sent: int = 0  # messages sent to them, to know whether they've heard back in a task
@@ -141,8 +160,7 @@ class _Counted:
         # Answered: working again, said now rather than at the next tick. Not for a background check, which
         # shows nothing while it works and never turns it off (seen: "Aha! is working…" stayed after a check's
         # note, once a card in it was answered).
-        live = self.agent.session(account)
-        if self.agent.is_running(account) and not live.background:
+        if self.agent.state(account.address).kind == "request":
             await self.agent._typing_frame(account, True, self.agent.queued(account))
 
     async def text(self, account: Account, text: str) -> None:
@@ -192,19 +210,26 @@ class Agent:
     def session(self, account: Account) -> Session:
         return self.sessions[account.address]
 
+    def state(self, address: str) -> State:
+        """One person's state, the one source for every "is it busy?" question (SPEC §3.3)."""
+        live = self.sessions.get(address)
+        if live is None or live.task is None:
+            return State("idle")
+        return State("check" if live.background else "request", self.approvals.pending_for(address) is not None)
+
     @property
-    def running(self) -> dict[str, asyncio.Task]:
-        """The people's tasks running now, by account address (a background check isn't one of them)."""
-        return {a: s.task for a, s in self.sessions.items() if s.task is not None and not s.background}
+    def running(self) -> dict[str, asyncio.Future]:
+        """The people's requests running now, by account address (a background check isn't one)."""
+        return {a: s.task for a, s in self.sessions.items() if s.task is not None and self.state(a).kind == "request"}
 
     def busy(self) -> bool:
-        """The model is at work: a task or a background check runs and isn't waiting on a card (one waiting for
-        the person, maybe for days, leaves the model free)."""
-        return any(s.task is not None and self.approvals.pending_for(a) is None for a, s in self.sessions.items())
+        """The model is at work for someone (a request or a check), not waiting on a card: one waiting for the
+        person, maybe for days, leaves the model free."""
+        return any(self.state(a).model_busy for a in self.sessions)
 
     def working(self) -> bool:
-        """A person's request is being worked on (the Tasks panel says so): not a check, not waiting on a card."""
-        return any(a in self.running and self.approvals.pending_for(a) is None for a in self.sessions)
+        """A person's request is being worked on (the Tasks panel says so)."""
+        return any(self.state(a).owes_reply for a in self.sessions)
 
     def idle(self, now: float | None = None) -> bool:
         """Nobody typed or answered a card for background.IDLE_AFTER seconds (SPEC §3.4 "Background tasks")."""
@@ -345,12 +370,12 @@ class Agent:
     # ---- tasks
 
     def is_running(self, account: Account) -> bool:
-        return self.session(account).task is not None
+        """A request or a check runs for this person (waiting on a card or not)."""
+        return self.state(account.address).kind != "idle"
 
     def owes_reply(self, account: Account) -> bool:
-        """What "typing…" shows (SPEC §3.3): a task is running and isn't waiting for the person's approval."""
-        live = self.session(account)
-        return self.is_running(account) and not live.background and self.approvals.pending_for(account.address) is None
+        """What "typing…" shows (SPEC §3.3): their request is running and isn't waiting for their approval."""
+        return self.state(account.address).owes_reply
 
     async def warm(self) -> None:
         """Load the chosen model and read the fixed start of every request (the system prompt and the tool
@@ -402,7 +427,7 @@ class Agent:
 
     async def _run(self, account: Account, text: str, job: Job | None = None) -> None:
         while True:
-            await self._task(account, text, job)
+            await self._request(account, text, job)
             job = None  # a follow-up is the person's own message
             self.session(account).background = ""
             # Messages that came in after the task's last model call: one follow-up task for all of them.
@@ -433,11 +458,11 @@ class Agent:
         except Exception:
             log.warning("couldn't send a typing message")
 
-    async def _task(self, account: Account, text: str, job: Job | None = None) -> None:
+    async def _request(self, account: Account, text: str, job: Job | None = None) -> None:
         # The task's records in the transcript carry its id, so a message's details can be found (SPEC §3.8).
         token = TASK.set(secrets.token_hex(6))
         try:
-            await self._task_body(account, text, job)
+            await self._request_body(account, text, job)
         finally:
             TASK.reset(token)
 
@@ -465,12 +490,12 @@ class Agent:
                 with contextlib.suppress(asyncio.CancelledError):
                     await solving
 
-    async def _task_body(self, account: Account, text: str, job: Job | None = None) -> None:
+    async def _request_body(self, account: Account, text: str, job: Job | None = None) -> None:
         sent_before = self.session(account).sent
         began = time.time()
         asked_at = 0 if job else account.seq  # the item of the message that started it (SPEC §7.4)
         quiet = job is not None and job.quiet
-        done: list[str] = []  # what it changed, kept with its answer (SPEC §4 "What a request did")
+        record: list[str] = []  # what it changed, kept with its answer (SPEC §4 "What a request did")
         report: dict = {}  # a background check's check_result: {"outcome", "message"} (SPEC §3.4)
         typing = asyncio.create_task(asyncio.sleep(0) if quiet else self._typing(account))
         # The model is this person's for the whole task, its title and summary included: its cache stays theirs
@@ -487,7 +512,7 @@ class Agent:
                         quiet,
                         job.grant(account) if job else None,
                         job.links(account) if job else None,
-                        done,
+                        record,
                         report if job else None,
                     ),
                 )
@@ -496,21 +521,22 @@ class Agent:
                 if job:
                     job.interrupted(account)
                 else:  # what it did before it stopped stays known (seen: a saved fact saved twice more)
-                    context.record_turn(account, text, messages.STOPPED, done=done)
+                    context.record_turn(account, text, messages.STOPPED, record=record)
                 await self._stop_typing(account, typing, quiet)
                 raise
             except TimeoutError:
-                answer, stopped = messages.TOO_LONG, True
+                answer, ended = messages.TOO_LONG, "time_limit"
             except ApprovalExpired:
-                answer, stopped = messages.APPROVAL_EXPIRED, True
+                answer, ended = messages.APPROVAL_EXPIRED, "card_expired"
             except ModelUnavailable as e:
                 log.error("model unavailable: %s", e)
-                answer, stopped = messages.MODEL_DOWN, True
+                answer, ended = messages.MODEL_DOWN, "model_down"
             except Exception:
                 log.exception("task failed")
-                answer, stopped = messages.FAILED, True
+                answer, ended = messages.FAILED, "failed"
             else:
-                stopped = answer.startswith(messages.TOO_MANY_STEPS)
+                ended = "step_limit" if answer.startswith(messages.TOO_MANY_STEPS) else ""
+            stopped = bool(ended)  # it didn't finish: the reason is `ended` (Stop raises CancelledError above)
             if not answer.strip() and not job:
                 # After "✅ Save" there may be nothing to add; if they've heard nothing at all, say something.
                 answer = "" if self.session(account).sent > sent_before else "…"
@@ -528,8 +554,8 @@ class Agent:
                 # Unfinished stays unfolded after a break (SPEC §7.4 "Folding"): a task that stopped.
                 await self.send(account, answer, open="stopped" if stopped else "")
                 answered = account.seq
-            account.transcript({"kind": "answer", "text": answer})
-            context.record_turn(account, text, answer, done)
+            account.transcript({"kind": "answer", "text": answer, **({"ended": ended} if ended else {})})
+            context.record_turn(account, text, answer, record)
             # The task's last request, still cached in the person's slot: the topic's title and memory entry are
             # asked at its end, so they cost only their own words (SPEC §3.2 "Cache slots", §5.4, §7.4).
             prompt, self.session(account).last_prompt = self.session(account).last_prompt, None
@@ -591,13 +617,13 @@ class Agent:
         quiet: bool = False,
         grant: Grant | None = None,
         links: list[str] | None = None,
-        done: list[str] | None = None,
+        record: list[str] | None = None,
         report: dict | None = None,
     ) -> tuple[str, str]:
         """Returns the answer and everything the person said during the task.
         `quiet` (a background check): no tool lines, and the person's messages wait for a task of their own.
         `grant`: a background task's own permissions (SPEC §5.2 "Allowed up front"); a request the person is
-        watching has none: each action asks as it happens. `done`: filled with what it changes, one line each
+        watching has none: each action asks as it happens. `record`: filled with what it changes, one line each
         (SPEC §4 "What a request did"), kept by the caller even if it stops. `report`: a background check's, filled
         by its check_result call (SPEC §3.4)."""
         today = dates.now(self.config).date()
@@ -629,7 +655,7 @@ class Agent:
         topic = folding.segment_start(account.recent_items())  # the topic going on (§4)
         state = TaskState(
             grant=grant if grant is not None else Grant(),
-            done=done if done is not None else [],
+            record=record if record is not None else [],
             report=report,
         )
         ctx = ToolContext(account, approvals, self.config, state, browser, send)
@@ -654,7 +680,8 @@ class Agent:
         # model wrote: only the links its task kept count (SPEC §5.2 "Made-up addresses").
         addresses.remember(ctx.task.seen_urls, " ".join(links or []) if quiet else text)
         tools = self.registry.specs()
-        retried: set[str] = set()  # the checks that already sent a draft back (SPEC §3.5.1): once each
+        retried: set[str] = set()  # the page-state checks that already sent a draft back (SPEC §3.5.1): once each
+        asked_report = False  # a background check was asked once to call check_result (SPEC §3.4)
         can_sign_in = "browser_login" in self.registry.names()
         unsent = False  # the model's last reply wasn't sent: the person wrote again (SPEC §3.3)
         for _ in range(self.config.max_model_calls):
@@ -702,9 +729,9 @@ class Agent:
                     task.append({"role": "assistant", "content": answer})
                     task.append({"role": "user", "content": failed.retry_for(draft)})
                     continue
-                if report is not None and not report and "report" not in retried:
+                if report is not None and not report and not asked_report:
                     # A check reports what it found with check_result (SPEC §3.4): a tool call, not words to parse.
-                    retried.add("report")
+                    asked_report = True
                     await record({"kind": "check", "name": "report"})
                     task.append({"role": "assistant", "content": answer})
                     task.append({"role": "user", "content": background.REPORT_RETRY})
@@ -749,7 +776,7 @@ class Agent:
                     task.append({"role": "user", "_kind": "image", "content": shot})
             if report:  # the check said what it found: it's over (SPEC §3.4)
                 return report.get("message", ""), text
-        return out_of_steps(ctx.task.done), text
+        return out_of_steps(ctx.task.record), text
 
 
 def with_images(text: str, images: list[Image]) -> list[dict]:
@@ -764,10 +791,10 @@ def after_task(prompt: list[dict], answer: str, question: str) -> list[dict]:
     return [*prompt, {"role": "assistant", "content": answer}, {"role": "user", "content": question}]
 
 
-def out_of_steps(done: list[str]) -> str:
+def out_of_steps(record: list[str]) -> str:
     """The answer when the step limit ends a task (SPEC §3.3): what it did, from the record of its actions, not the
     model's last words (seen: "Let me take a fresh snapshot to see the current state." sent as the answer)."""
-    did = [line.split(": ", 1)[-1] for line in done]
+    did = [line.split(": ", 1)[-1] for line in record]
     if not did:
         return f"{messages.TOO_MANY_STEPS} nothing was changed."
     return f"{messages.TOO_MANY_STEPS}\n" + "\n".join(f"- {d}" for d in did)

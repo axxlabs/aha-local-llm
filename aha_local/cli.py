@@ -37,6 +37,7 @@ SERVICES = ["aha-agent", "aha-browser", "aha-llm"]
 # Units of earlier versions, stopped and removed at install: the search proxy (SearXNG) went when web_search came
 # to read Google's own page in the browser (SPEC §3.4 "Web search").
 OLD_UNITS = {"aha-search.container": "aha-search.service"}
+OLD_FILES = (HOME_DATA / "keys" / "search-secret",)  # SearXNG's secret, from before web_search used Google
 BROWSER_IMAGE = "localhost/aha-browser:latest"
 PROFILES_KEY_CRED = HOME_CONFIG.parent / "profiles-key.cred"
 PROFILES_ENC = HOME_DATA / "browser-profiles.enc"  # each person's browser profile, encrypted (SPEC §3.4)
@@ -345,6 +346,8 @@ def install() -> None:
         if (QUADLET_DIR / unit).exists():
             subprocess.run(["systemctl", "--user", "stop", service], check=False)
             (QUADLET_DIR / unit).unlink()
+    for old in OLD_FILES:
+        old.unlink(missing_ok=True)
     for name, text in render_units(config).items():
         (QUADLET_DIR / name).write_text(text)
     BROWSER_CONFIG.write_text(render_browser_config(config))

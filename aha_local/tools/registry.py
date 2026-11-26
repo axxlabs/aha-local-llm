@@ -61,7 +61,9 @@ def redacted(value: Any, secrets: list[str]) -> Any:
 
 @dataclass
 class TaskState:
-    """What tools may remember during one task."""
+    """What tools may remember during one run: a request the person made, or one background task's check
+    (`ctx.task` in the tools). "Task" alone, elsewhere, means one of those runs; a background task (tasks.json)
+    is always called that."""
 
     opened_sites: set[str] = field(default_factory=set)  # sites opened in the task (SPEC §5.2)
     last_snapshot: str = ""  # the latest page snapshot, to label approvals from the page itself
@@ -89,7 +91,7 @@ class TaskState:
     grant: Grant = field(default_factory=Grant)
     # What the task changed, one line per action that worked, set by the registry from each result's `did`: kept
     # with the request's answer, so a later request knows, even when this one stopped before saying so (SPEC §4).
-    done: list[str] = field(default_factory=list)
+    record: list[str] = field(default_factory=list)
     # A background task's check (SPEC §3.4): where its check_result call puts {"outcome", "message"}. None: this
     # isn't a check, and check_result refuses.
     report: dict | None = None
@@ -165,5 +167,5 @@ class Registry:
         if not result.error:
             ctx.task.ran.add(name)
             if line := " ".join(result.did.split()):
-                ctx.task.done.append(redact(f"{name}: {line}", ctx.task.secrets)[:MAX_DID])
+                ctx.task.record.append(redact(f"{name}: {line}", ctx.task.secrets)[:MAX_DID])
         return result

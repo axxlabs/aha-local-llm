@@ -142,7 +142,6 @@ def _old_data_folder(root: Path) -> dict:
     )
     (root / "keys" / "e2e.json").write_text(json.dumps(fx["identity"]))
     (root / "keys" / "instance.key").write_bytes(b"\x07" * 32)
-    (root / "keys" / "search-secret").write_text("ab" * 32)
     (root / "browser" / "pinned-tools.json").write_text("{}")
     return fx
 
@@ -156,7 +155,6 @@ def test_a_plaintext_folder_from_the_previous_version_is_encrypted_and_still_wor
     for plain in (b"Test Person", b"fictional tea", b"hello 1", b'"ratchet"', b"\x07" * 32):
         assert plain not in blob, plain
     assert json.loads((tmp_path / "format.json").read_text()) == {"rest": 1}
-    assert (tmp_path / "keys" / "search-secret").read_text() == "ab" * 32  # host-side, left plain
     accounts = Accounts(v)
     acct = accounts.all()[0]
     assert (acct.name, acct.seq, list(acct.devices)) == ("Test Person", 7, ["DEV"])

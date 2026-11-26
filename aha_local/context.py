@@ -104,20 +104,21 @@ def build(
         {"role": "user", "content": context_block(account, timezone, household, now)},
         {"role": "assistant", "content": "Understood."},
     ]
-    shown = [{"role": t["role"], "content": t["content"] + did_note(t.get("done"))} for t in turns]
+    # A turn kept before 2026-11-26 has its record under "done".
+    shown = [{"role": t["role"], "content": t["content"] + did_note(t.get("record", t.get("done")))} for t in turns]
     return head + shown + shorten_task(task, context_tokens * TASK_SHARE)
 
 
-MAX_DONE = 40  # lines of a request's record kept: the latest
+MAX_RECORD = 40  # lines of a request's record kept: the latest
 
 
-def did_note(done: object) -> str:
+def did_note(record: object) -> str:
     """What an earlier request changed, after its answer (SPEC §4 "What a request did"). A later request sees only
     the messages, not the tool calls: without this, a fact saved in a request that then ran out of steps looked
     still to do, and was asked twice more (2026-11-26)."""
-    if not isinstance(done, list) or not done:
+    if not isinstance(record, list) or not record:
         return ""
-    return "\n\n[Aha!'s record of what this request did:\n" + "\n".join(f"- {d}" for d in done) + "]"
+    return "\n\n[Aha!'s record of what this request did:\n" + "\n".join(f"- {d}" for d in record) + "]"
 
 
 def shorten_task(task: list[dict], budget: float) -> list[dict]:
@@ -145,8 +146,8 @@ def strip(m: dict) -> dict:
     return {k: v for k, v in m.items() if not k.startswith("_")}
 
 
-def record_turn(account: Account, user_text: str, answer: str, done: list[str] | None = None) -> dict:
-    """`done`: what the request changed (SPEC §4 "What a request did"), shown with the answer to later requests."""
+def record_turn(account: Account, user_text: str, answer: str, record: list[str] | None = None) -> dict:
+    """`record`: what the request changed (SPEC §4 "What a request did"), shown with the answer to later requests."""
     conv = account.load_context()
     now = time.time()
     stamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -158,7 +159,7 @@ def record_turn(account: Account, user_text: str, answer: str, done: list[str] |
                 "content": answer,
                 "ts": stamp,
                 "t": now,
-                **({"done": done[-MAX_DONE:]} if done else {}),
+                **({"record": record[-MAX_RECORD:]} if record else {}),
             },
         ]
     )
