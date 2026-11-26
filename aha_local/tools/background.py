@@ -43,6 +43,7 @@ IDLE_AFTER = 5 * 60  # seconds without input from anyone before a check runs
 CHECK_EVERY = 30.0
 SITES = {"type": "array", "items": {"type": "string"}}
 MAX_ALLOWED = 20  # sites, and people, each, a new task may ask for
+FIRST_CHECK = "First check (blank: one interval from now)"
 NEVER = "never"
 OUTCOMES = ("waiting", "notify", "done", "failed")
 
@@ -387,7 +388,10 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
     fields = [
         Field("Waiting for", title),
         Field("How to check", prompt, "longtext"),
-        Field("First check", dates.editable(dt.datetime.fromtimestamp(first, tz))),
+        # Blank unless the model gave a start (SPEC §3.4): a start it made up then stands out on the card (seen: a
+        # wait-for-a-reply task, every 30 minutes, first checked the next morning), and blank is one interval
+        # from now.
+        Field(FIRST_CHECK, dates.editable(dt.datetime.fromtimestamp(first, tz)) if args.get("start") else ""),
         Field("Check every (minutes)", str(minutes)),
         Field("Until", _until_text(end, tz)),
     ]

@@ -58,13 +58,12 @@ async def test_creating_one_needs_a_card_with_every_detail(runner, agent, llm, c
     llm.answer("I'll watch for Sam's reply.")
     await agent.inbound(fe, "tell me when Sam answers")
     card = await chat.next()
-    first = time.strftime("%Y-%m-%d %H:%M", time.localtime(time.time() + 15 * 60))  # no start: every from now
     assert card.card["kind"] == "task" and card.card["icon"] == "⏳"
     assert card.card["buttons"] == ["Start", "Edit", "Don't"]
     assert [(f["label"], f["value"]) for f in card.card["fields"]] == [
         ("Waiting for", "Reply from Sam about Saturday"),
         ("How to check", "Search the email for a reply from sam@example.com about Saturday."),
-        ("First check", first),
+        (background.FIRST_CHECK, ""),  # no start: blank, one interval from now
         ("Check every (minutes)", "15"),
         ("Until", "never"),
     ]
@@ -438,7 +437,7 @@ async def test_something_at_a_time_starts_then(runner, agent, llm, chat, account
     llm.answer("OK.")
     await agent.inbound(fe, "remind me to call Sam at 6 every day")
     card = await chat.next()
-    assert ("First check", tomorrow) in [(f["label"], f["value"]) for f in card.card["fields"]]
+    assert (background.FIRST_CHECK, tomorrow) in [(f["label"], f["value"]) for f in card.card["fields"]]
     await agent.approval_reply(fe, card.card["id"], "approve")
     await settle(agent)
     (saved,) = background.load(fe)
