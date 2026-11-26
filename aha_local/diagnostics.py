@@ -2,23 +2,23 @@
 # Copyright (C) 2026 Axxlabs Limited
 """Live diagnostics for the app's header (SPEC §7.4 "Live diagnostics"): the computer's CPU load and
 temperature, memory, and the GPU's load, temperature and memory, read every few seconds while someone has the app
-open. Read from the host's own counters: /proc and /sys (the container sees the host's), and nvidia-smi for an
-NVIDIA GPU (the agent has the GPU device for that, as the model server does). Whatever can't be read is left
-out: a computer without an NVIDIA GPU shows the CPU and memory only."""
+open. Read from the host's own counters: /proc and /sys (the container sees the host's), and NVIDIA's library
+(NVML) for an NVIDIA GPU (the agent has the GPU device for that, as the model server does). The GPU's load is the
+average of every sample since the last reading: nvidia-smi's one figure covers only the last moment, and the
+model works in bursts, so it read 0% almost always (2026-11-26). Whatever can't be read is left out: a computer
+without an NVIDIA GPU shows the CPU and memory only."""
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
-import shutil
+import time
 from pathlib import Path
 
 log = logging.getLogger("aha.diagnostics")
 
 EVERY = 3.0  # seconds between readings while a device is online
 CPU_SENSORS = ("k10temp", "zenpower", "coretemp", "cpu_thermal", "cpu-thermal")  # AMD, Intel, ARM boards
-GPU_QUERY = "utilization.gpu,temperature.gpu,memory.used,memory.total"
 
 
 class Reader:
@@ -27,7 +27,8 @@ class Reader:
     def __init__(self, proc: Path = Path("/proc"), sys: Path = Path("/sys")) -> None:
         self.proc, self.sys = proc, sys
         self._cpu: tuple[int, int] | None = None
-        self._smi = shutil.which("nvidia-smi")
+        self._gpu = None  # NVML's handle for the first GPU, once it's opened; False: there's none
+        self._gpu_since = 0  # microseconds: the last GPU sample already counted
 
     def cpu_load(self) -> int | None:
         """Percent busy across all cores since the last reading (None the first time)."""
@@ -60,27 +61,41 @@ class Reader:
             return None
         return round((total - free) / 1024**2, 1), round(total / 1024**2, 1)
 
-    async def gpu(self) -> dict | None:
-        if not self._smi:
+    def _nvml(self):
+        if self._gpu is None:
+            try:
+                import pynvml
+
+                pynvml.nvmlInit()
+                self._gpu = pynvml.nvmlDeviceGetHandleByIndex(0)
+            except Exception:
+                log.info("no NVIDIA GPU readings: the panel shows the CPU and memory")
+                self._gpu = False
+        return self._gpu or None
+
+    def gpu(self) -> dict | None:
+        handle = self._nvml()
+        if handle is None:
             return None
+        import pynvml
+
         try:
-            run = await asyncio.create_subprocess_exec(
-                self._smi,
-                f"--query-gpu={GPU_QUERY}",
-                "--format=csv,noheader,nounits",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            out, _ = await asyncio.wait_for(run.communicate(), timeout=3)
-            load, temp, used, total = (float(v) for v in out.decode().splitlines()[0].split(","))
+            since = self._gpu_since or int((time.time() - EVERY) * 1_000_000)
+            _, samples = pynvml.nvmlDeviceGetSamples(handle, pynvml.NVML_GPU_UTILIZATION_SAMPLES, since)
+            values = [x.sampleValue.uiVal for x in samples if x.timeStamp > since]
+            if samples:
+                self._gpu_since = max(x.timeStamp for x in samples)
+            load = round(sum(values) / len(values)) if values else pynvml.nvmlDeviceGetUtilizationRates(handle).gpu
+            temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
+            mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
         except Exception:
-            log.debug("nvidia-smi gave no reading")
+            log.debug("no GPU reading this time")
             return None
         return {
-            "load": round(load),
-            "temp": round(temp),
-            "mem": round(used / 1024, 1),
-            "mem_total": round(total / 1024, 1),
+            "load": load,
+            "temp": temp,
+            "mem": round(mem.used / 1024**3, 1),
+            "mem_total": round(mem.total / 1024**3, 1),
         }
 
     async def read(self) -> dict:
@@ -91,6 +106,6 @@ class Reader:
             out["cpu"] = cpu
         if mem := self.memory():
             out["mem"] = {"used": mem[0], "total": mem[1]}
-        if gpu := await self.gpu():
+        if gpu := self.gpu():
             out["gpu"] = gpu
         return out

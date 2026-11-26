@@ -50,7 +50,7 @@ def test_the_readings_come_from_the_hosts_counters(tmp_path):
     (other / "name").write_text("nvme\n")
     (other / "temp1_input").write_text("39000\n")
     reader = Reader(proc, sys)
-    reader._smi = None  # no NVIDIA GPU here
+    reader._gpu = False  # no NVIDIA GPU here
     (proc / "stat").write_text("cpu  100 0 100 800 0 0 0 0 0 0\n")
     first = asyncio.run(reader.read())
     assert first == {"t": "stats", "cpu": {"temp": 54}, "mem": {"used": 8.0, "total": 16.0}}  # no load yet
@@ -60,5 +60,31 @@ def test_the_readings_come_from_the_hosts_counters(tmp_path):
 
 def test_what_cant_be_read_is_left_out(tmp_path):
     reader = Reader(tmp_path / "none", tmp_path / "none")
-    reader._smi = None
+    reader._gpu = False
     assert asyncio.run(reader.read()) == {"t": "stats"}
+
+
+def test_the_gpus_load_is_the_average_since_the_last_reading(monkeypatch):
+    """nvidia-smi's one figure is the last moment's: the model works in bursts, so it read 0% almost always."""
+    import sys
+    from types import SimpleNamespace
+
+    def sample(ts, v):
+        return SimpleNamespace(timeStamp=ts, sampleValue=SimpleNamespace(uiVal=v))
+
+    fake = SimpleNamespace(
+        NVML_GPU_UTILIZATION_SAMPLES=1,
+        NVML_TEMPERATURE_GPU=0,
+        nvmlDeviceGetSamples=lambda h, kind, since: (
+            0,
+            [s for s in (sample(10, 0), sample(20, 90), sample(30, 60)) if s.timeStamp > since],
+        ),
+        nvmlDeviceGetTemperature=lambda h, which: 61,
+        nvmlDeviceGetMemoryInfo=lambda h: SimpleNamespace(used=14 * 1024**3, total=16 * 1024**3),
+        nvmlDeviceGetUtilizationRates=lambda h: SimpleNamespace(gpu=0),
+    )
+    monkeypatch.setitem(sys.modules, "pynvml", fake)
+    reader = Reader()
+    reader._gpu, reader._gpu_since = "handle", 5
+    assert reader.gpu() == {"load": 50, "temp": 61, "mem": 14.0, "mem_total": 16.0}
+    assert reader._gpu_since == 30  # the next reading counts only newer samples

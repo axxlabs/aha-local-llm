@@ -700,4 +700,5 @@ class Runner:
         when = dates.for_model(dt.datetime.fromtimestamp(entry["until"], self.tz))
         last = f" The last check found: {entry['last']}" if entry.get("last") else ""
         text = EXPIRED.format(when=when, last=last)
-        await self.agent.task_note(account, Note("expired", entry["title"], text, entry["prompt"], entry["every"], entry["id"]))
+        note = Note("expired", entry["title"], text, entry["prompt"], entry["every"], entry["id"])
+        await self.agent.task_note(account, note)
