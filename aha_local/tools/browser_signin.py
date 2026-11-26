@@ -28,9 +28,6 @@ LOGIN_BOX = re.compile(r'^\s*- textbox "([^"]*)"[^\n]*?\[ref=((?:f\d+)?e\d+)\]',
 CODE_LABEL = re.compile(r"one[- ]time|verification|security code|\bcode\b|\botp\b|2fa", re.I)
 PASSWORD_LABEL = re.compile(r"pass ?word|passcode|passwort|mot de passe|senha|contrase|\bpin\b", re.I)
 USER_LABEL = re.compile(r"e-?mail|user ?name|user id|log ?in|sign ?in|phone|mobile|account", re.I)
-MAIL_NOTE = (
-    "This came up after Aha! read your email, calendar or an account page: sign in only if this is the site you meant."
-)
 SAVE_LABEL = "Save this login on this computer"
 WAIT_AFTER_SUBMIT = 2.5
 
@@ -103,8 +100,6 @@ async def browser_login(args: dict, ctx: ToolContext) -> ToolResult:
             username, password, keep = saved.get("username", ""), saved["password"], False
         else:
             card = [Field("Site", host, "info")]
-            if ctx.task.private:
-                card.append(Field("Check", MAIL_NOTE, "info"))
             first = len(card)
             card += [Field("Email or username", "", "text"), Field("Password", "", "secret")]
             card.append(Field(SAVE_LABEL, "false", "bool"))
@@ -159,7 +154,6 @@ async def browser_login(args: dict, ctx: ToolContext) -> ToolResult:
             log.exception("couldn't note a sign-in")
         if ctx.task.signed_in_sites is not None:
             ctx.task.signed_in_sites.add(site)
-        ctx.task.private = True  # the task now holds private data (SPEC §5.2)
     ctx.task.last_snapshot = redact(ctx.task.last_snapshot, ctx.task.secrets)
     said = f"Signed in on {host}." if signed else f"Not signed in on {host}: look at the page for why."
     page.text = said + " The page now:\n\n" + page.text  # the registry hides what they typed (SPEC §5.8)

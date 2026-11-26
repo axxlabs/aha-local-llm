@@ -13,7 +13,6 @@ import pytest
 
 from aha_local import approvals
 from aha_local.tools import human, signins
-from aha_local.tools.registry import TaskState
 
 from .conftest import person, settle
 from .test_signin import PASSWORD, setup, start_sign_in  # noqa: F401
@@ -61,31 +60,31 @@ async def test_clear_browser_deletes_the_whole_profile(setup, llm, chat, account
     assert fake.contexts[-1].cookies == []  # a new, empty profile
 
 
-async def test_after_a_signed_in_page_a_new_site_is_a_card(setup, llm, chat, accounts):
-    """SPEC §5.2 "Private data": from then on in the task, a site not opened yet needs the person's approval."""
+@pytest.mark.open_rule
+async def test_a_site_new_to_the_task_is_a_card(setup, llm, chat, accounts):
+    """SPEC §5.2 rule 7: a site the task hasn't opened yet needs the person's approval; once opened, its pages
+    don't."""
     agent, _, _ = setup
     fe = person(accounts)
-    card = await start_sign_in(agent, llm, chat, fe)
-    await agent.approval_reply(fe, card.card["id"], "approve", ["waitrose.com", "fe@example.com", PASSWORD, "false"])
+    llm.call("browser_navigate", url="https://www.waitrose.com/")
+    llm.call("browser_navigate", url="https://www.waitrose.com/basket")
+    llm.answer("Done.")
+    await agent.inbound(fe, "open my basket")
+    card = await chat.next()
+    assert card.card and card.card["title"] == "Open waitrose.com?"
+    await agent.approval_reply(fe, card.card["id"], "approve", [card.card["fields"][0]["value"]])
     await settle(agent)
+    assert not any(m.card for m in chat.sent[chat.read :])  # the same site again: no card
 
     chat.read = len(chat.sent)
-    llm.call("browser_navigate", url="https://www.waitrose.com/orders")  # signed in: its own pages stay auto
-    llm.call("browser_navigate", url="https://www.waitrose.com/basket")
-    llm.call("browser_navigate", url="https://evil.example/")
-    llm.answer("Done.")
-    await agent.inbound(fe, "what did I order last week?")
+    llm.call("browser_navigate", url="https://www.ocado.com/")
+    llm.answer("Opened.")
+    await agent.inbound(fe, "open ocado")
     card = await chat.next()
-    assert card.card and card.card["title"] == "Open evil.example?"
+    assert card.card and card.card["title"] == "Open ocado.com?"
     await agent.approval_reply(fe, card.card["id"], "decline")
     await settle(agent)
     assert "the user stopped it" in tool_results(llm)[-1]
-
-    llm.call("browser_navigate", url="https://news.example/")  # a new task that never saw a signed-in page
-    llm.answer("Opened.")
-    await agent.inbound(fe, "open the news")
-    await settle(agent)
-    assert not any(m.card for m in chat.sent[chat.read :])
 
 
 async def test_typing_and_clicks_go_at_human_pace(setup, llm, chat, accounts):
@@ -430,15 +429,6 @@ async def test_a_message_box_on_any_site_is_a_signed_card(setup, llm, chat, acco
     await agent.approval_reply(fe, card.card["id"], "approve")
     await settle(agent)
     assert fake.contexts[-1].fields == {"e1": "Sam", "e2": signed}
-
-
-def test_a_whatsapp_web_page_makes_the_task_private(accounts):
-    from aha_local.tools.browser_page import note_page
-    from aha_local.tools.registry import ToolContext
-
-    ctx = ToolContext(person(accounts), None, None, TaskState())
-    note_page(ctx, "### Page\n- Page URL: https://web.whatsapp.com/\n")
-    assert ctx.task.private  # their messages: new sites and searches now ask first (SPEC §5.2)
 
 
 def test_the_mouse_bends_inside_the_element_so_a_hover_button_stays():

@@ -78,9 +78,6 @@ MESSAGE_BOX = re.compile(
     re.I,
 )
 SEARCH_BOX = re.compile(r"\bsearch\b|\bpesquis|\bbusca|\bbuscar\b|\bsuche\b|\brecherch", re.I)
-# Sites whose pages are the person's own messages, signed in by a QR code rather than browser_login: a page of one
-# makes the task hold private data (SPEC §5.6), as a site they signed in on does.
-PRIVATE_SITES = {"whatsapp.com"}
 
 
 def is_message_box(label: str) -> bool:

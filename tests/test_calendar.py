@@ -96,12 +96,11 @@ def cal(monkeypatch):
     return fake
 
 
-async def test_reading_reaches_only_the_running_persons_calendar_and_marks_the_task(cal, two, config):  # noqa: F811
+async def test_reading_reaches_only_the_running_persons_calendar(cal, two, config):  # noqa: F811
     fe, hb = two
     ctx = ctx_for(fe, config)
     found = await call("calendar_list", {"start": "2026-11-26"}, ctx)
     assert "[ev1] Dentist" in found.text and "at High St" in found.text and "Haibo" not in found.text
-    assert ctx.task.private  # new sites and searches now ask first (SPEC §5.2)
     other = await call("calendar_list", {"start": "2026-11-26"}, ctx_for(hb, config))
     assert "Haibo's private thing" in other.text and "Dentist" not in other.text
     assert (await call("calendar_list", {"start": "next tuesday"}, ctx)).error

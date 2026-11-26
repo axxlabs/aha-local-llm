@@ -46,8 +46,8 @@ async def web_search(args: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult("Give a search query.", error=True)
     if ctx.browser is None:
         return ToolResult("Searching needs the browser, which isn't available right now.", error=True)
-    # Its own rule (SPEC §5.2 rule 6): one "Search Google for this?" card with the words, only while the task holds
-    # private data; never google.com's site cards, and trusting google.com doesn't skip it.
+    # Its own rule (SPEC §5.2 rule 6): one "Search Google for this?" card with the words; never google.com's site
+    # cards, and trusting google.com doesn't skip it.
     verdict = guard.check(ctx, Action("search"), "web_search")
     if verdict.outcome == "block":
         return guard.blocked(verdict.why)

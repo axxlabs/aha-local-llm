@@ -69,9 +69,6 @@ class TaskState:
     blank_page: bool = False  # the last page the model saw is a new window's blank page (SPEC §3.4)
     ref_lines: dict[str, str] = field(default_factory=dict)  # elements seen on the current page: ref → its line
     page_parts: list[str] = field(default_factory=list)  # the current page as the model reads it, part by part
-    # The task holds private data (SPEC §5.2): set by the registry after any tool declared `private` ran, and by
-    # the browser when a page of a signed-in site shows. Tools never set it themselves.
-    private: bool = False
     ran: set[str] = field(default_factory=set)  # tools that ran without error in this task (set by the registry)
     # Values the person typed on a sign-in card: never shown again. The registry hides them in every tool result,
     # and the agent in every transcript record of the task (SPEC §5.8): tools add them, nothing else reads them.
@@ -117,7 +114,6 @@ class Tool:
     description: str
     parameters: dict
     handler: Handler
-    private: bool = False  # what it returns is the person's private data: the task then holds it (SPEC §5.2)
 
     def spec(self) -> dict:
         return {
@@ -168,8 +164,6 @@ class Registry:
             result.text = redact(result.text, ctx.task.secrets)
         if not result.error:
             ctx.task.ran.add(name)
-            if tool.private:  # it read the person's private data (SPEC §5.2): declared, not set
-                ctx.task.private = True
             if line := " ".join(result.did.split()):
                 ctx.task.done.append(redact(f"{name}: {line}", ctx.task.secrets)[:MAX_DID])
         return result

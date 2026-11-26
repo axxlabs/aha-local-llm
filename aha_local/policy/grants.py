@@ -28,9 +28,9 @@ class Grant:
     """Each read kept apart from its write (2026-11-26: "one is read the other is write action"): opening a
     site's pages isn't typing on it, saving a draft isn't sending, adding an event isn't changing one."""
 
-    open: set[str] = field(default_factory=set)  # open its pages (no data in the address), even holding private data
+    open: set[str] = field(default_factory=set)  # open its pages (no data in the address)
     type: set[str] = field(default_factory=set)  # type and fill in forms there, and addresses carrying data; opens too
-    search: bool = False  # web searches even while the task holds private data
+    search: bool = False  # web searches
     email: set[str] = field(default_factory=set)  # who it may send email to (and invite)
     drafts: bool = False  # save drafts in their own mailbox, to anyone: nothing goes out
     calendar_add: bool = False  # add new events; guests only among `email`
@@ -117,14 +117,14 @@ class Grant:
         )
 
 
-SEARCH_LABEL = "Search the web, even after reading your email or private pages"
+SEARCH_LABEL = "Search the web"
 DRAFTS_LABEL = "Save email drafts in your mailbox (nothing is sent)"
 CALENDAR_ADD_LABEL = "Add new events to your calendar (guests only among the people above)"
 CALENDAR_CHANGE_LABEL = "Change events already in your calendar (guests only among the people above)"
 
 
 def open_label(site: str) -> str:
-    return f"Open pages on {site} (read only), even after reading your email or private pages"
+    return f"Open pages on {site} (read only)"
 
 
 def type_label(site: str) -> str:

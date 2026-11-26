@@ -12,7 +12,6 @@ from urllib.parse import urlsplit
 import mcp.types as mt
 
 from ..items import Image
-from ..policy.browser import PRIVATE_SITES
 from ..policy.urls import site_of
 from . import human, signins
 from .page_view import for_model
@@ -210,7 +209,6 @@ def annotate(ctx: ToolContext, result: ToolResult) -> None:
         ctx.task.last_snapshot = m.group(1)
         note_sign_in_form(ctx, result, m.group(1))
         note_challenge(ctx, result, m.group(1))
-    note_page(ctx, result.text)
 
 
 def note_blank(ctx: ToolContext, result: ToolResult) -> None:
@@ -279,19 +277,6 @@ def note_sign_in_form(ctx: ToolContext, result: ToolResult, snapshot: str) -> No
         f"[Aha!: this page is a sign-in form on {site}. {before}If the task needs their account, call "
         "browser_login now; don't tell them they're signed in.]\n\n" + result.text
     )
-
-
-def note_page(ctx: ToolContext, text: str) -> None:
-    """SPEC §5.6: has this task had a page of a site the person signed in on? From the browser's own address."""
-    if ctx.task.private or not (m := PAGE_URL.search(text)):
-        return
-    host = urlsplit(m.group(1)).hostname or ""
-    if not host:
-        return
-    if ctx.task.signed_in_sites is None:
-        ctx.task.signed_in_sites = signins.signed_in_sites(ctx.account)
-    if site_of(host) in ctx.task.signed_in_sites or site_of(host) in PRIVATE_SITES:
-        ctx.task.private = True  # the person's account pages, or their messages
 
 
 async def run_code(session, code: str) -> bool:

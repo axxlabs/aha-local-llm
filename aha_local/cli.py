@@ -742,7 +742,7 @@ def main(argv: list[str] | None = None) -> None:
         sub.add_parser(action, help=f"{action} aha").set_defaults(fn=lambda a, x=action: systemctl(x))
     sub.add_parser("status", help="what's running").set_defaults(fn=cmd_status)
     s = sub.add_parser("logs", help="follow a service's log")
-    s.add_argument("service", nargs="?", default="agent", choices=["agent", "llm", "browser", "search"])
+    s.add_argument("service", nargs="?", default="agent", choices=["agent", "llm", "browser"])
     s.set_defaults(fn=cmd_logs)
     s = sub.add_parser("pair", help="pair a person's device: shows a QR code to scan")
     s.add_argument("name", help="the person, e.g. Ana (a new name creates their account)")

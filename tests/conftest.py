@@ -33,6 +33,24 @@ def every_address_shown(request, monkeypatch):
         monkeypatch.setattr(addresses, "made_up", lambda url, seen: False)
 
 
+class EverySite(set):
+    def __contains__(self, item) -> bool:
+        return True
+
+
+@pytest.fixture(autouse=True)
+def every_site_opened(request, monkeypatch):
+    """Tests of other things open the sites they need without a card; the rule that a site new to the task asks
+    (SPEC §5.2 rule 7) has its own tests, marked open_rule."""
+    if "open_rule" not in request.keywords:
+        import dataclasses
+
+        from aha_local.tools import guard
+
+        real = guard.facts
+        monkeypatch.setattr(guard, "facts", lambda ctx: dataclasses.replace(real(ctx), opened=EverySite()))
+
+
 class FakeLLM:
     """Returns scripted replies in order and records every request."""
 

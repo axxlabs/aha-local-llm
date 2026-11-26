@@ -3,7 +3,7 @@
 """Google Calendar through its REST API (SPEC §3.4 "Calendar").
 
 The same Google connection as email (tools/google.py): one OAuth client per computer, one token per person, looked
-up from the account running the task. Reading marks the task as holding private data (SPEC §5.2); adding,
+up from the account running the task. Reading is `read`; adding,
 changing and deleting events are `send` actions, always shown to the person with the exact event.
 """
 
@@ -415,7 +415,6 @@ def register(reg: Registry) -> None:
                 calendar=CALENDAR_ARG,
             ),
             calendar_list,
-            private=True,
         )
     )
     reg.add(
@@ -451,7 +450,6 @@ def register(reg: Registry) -> None:
                 calendar=string("The calendar the event is on, if not the user's own (as in calendar_list)"),
             ),
             calendar_update,
-            private=True,
         )
     )
     reg.add(
@@ -464,6 +462,5 @@ def register(reg: Registry) -> None:
                 calendar=string("The calendar the event is on, if not the user's own (as in calendar_list)"),
             ),
             calendar_delete,
-            private=True,
         )
     )

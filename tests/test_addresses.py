@@ -87,15 +87,17 @@ async def test_the_browser_opens_only_addresses_it_has(accounts, config):
         assert "Open the site's home page, https://" in result.text
         assert ("browser_navigate", {"url": url}) not in ctx.browser.calls
     assert not approvals.asked  # refused: no card to approve a guess
-    # A home page, a search, and links the task was shown open as before: no card.
+    # A home page and links the task was shown open as before: no card.
     addresses.remember(ctx.task.seen_urls, SNAPSHOT)
     for url in (
         "https://www.fedex.com/",
-        "https://www.google.com/search?q=fedex+tracking",
         "https://www.waitrose.com/ecom/shop/search?searchTerm=rice&sortBy=RELEVANCE",
     ):
         assert not (await make_handler("browser_navigate")({"url": url}, ctx)).error, url
     assert not approvals.asked
+    # A search isn't refused as made up: it's its own card (declined here).
+    await make_handler("browser_navigate")({"url": "https://www.google.com/search?q=fedex+tracking"}, ctx)
+    assert [a.title for a in approvals.asked] == ["Search google.com for this?"]
 
 
 @pytest.mark.made_up_rule

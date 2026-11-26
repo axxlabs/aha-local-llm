@@ -15,7 +15,7 @@ from .conftest import person, settle
 
 def test_the_gate_runs_what_was_allowed_and_nothing_else():
     g = Grant(open={"linkedin.com"}, type={"thefork.co.uk"}, search=True, email={"sam@example.com"}, calendar_add=True)
-    f = Facts(private=True, granted=g)
+    f = Facts(granted=g)
     assert decide(Action("type", site="thefork.co.uk"), f).why == "granted"
     assert decide(Action("open", site="thefork.co.uk", url="https://thefork.co.uk/?name=Fe"), f).why == "granted"
     assert decide(Action("open", site="thefork.co.uk", url="https://thefork.co.uk/r/1"), f).why == "granted"
@@ -44,7 +44,7 @@ def test_the_gate_runs_what_was_allowed_and_nothing_else():
     for what in ("memory", "task", "calendar_delete"):  # nothing allows these: always their own card
         assert decide(Action("send", what=what, to=()), f).outcome == "card"
     assert decide(Action("send", site="whatsapp.com"), f).outcome == "card"  # a message typed on a site
-    assert decide(Action("search"), Facts(private=True)).outcome == "card"
+    assert decide(Action("search"), Facts()).outcome == "card"
 
 
 class Asked:
@@ -98,7 +98,7 @@ async def test_a_task_asks_on_its_own_card_and_its_checks_keep_what_stays_ticked
     ticks = [(f["label"], f["value"]) for f in card.card["fields"] if f["kind"] == "bool"]
     assert ticks == [  # typing on fedex.com includes opening it: one tick
         ("Type and fill in forms on fedex.com (searches, sign-ups, bookings)", "true"),
-        ("Open pages on royalmail.com (read only), even after reading your email or private pages", "true"),
+        ("Open pages on royalmail.com (read only)", "true"),
         ("Send email to sam@example.com", "true"),
     ]
     values = [f["value"] for f in card.card["fields"]]

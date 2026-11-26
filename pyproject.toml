@@ -38,7 +38,10 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "-ra --strict-markers"
-markers = ["made_up_rule: the real made-up address rule (other tests treat every address as shown)"]
+markers = [
+    "made_up_rule: the real made-up address rule (other tests treat every address as shown)",
+    "open_rule: the real rule for a site new to the task (other tests treat every site as opened)",
+]
 
 [tool.ruff]
 line-length = 120

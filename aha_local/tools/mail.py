@@ -3,7 +3,7 @@
 """Email through the Gmail REST API (SPEC §3.4 "Email", §5.5).
 
 Each account connects its own mailbox; the token is looked up from the account running the task, never from
-the model's arguments. Reading marks the task as holding private data (SPEC §5.2); sending and drafts are `send`
+the model's arguments. Reading is `read`; sending and drafts are `send`
 actions, always shown to the person with the exact email (§5.5).
 """
 
@@ -307,7 +307,6 @@ def register(reg: Registry) -> None:
                 mailbox=string("Optional: search only this address of theirs, e.g. their work one"),
             ),
             email_search,
-            private=True,
         )
     )
     reg.add(
@@ -316,7 +315,6 @@ def register(reg: Registry) -> None:
             "Read one email in full by its id from email_search.",
             params(["id"], id=string("Message id")),
             email_read,
-            private=True,
         )
     )
     reg.add(

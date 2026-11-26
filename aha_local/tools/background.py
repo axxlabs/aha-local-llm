@@ -490,10 +490,9 @@ def register(reg: Registry) -> None:
                 type={**SITES, "description": "Sites its checks type on (a search box, a form), like fedex.com"},
                 open={
                     **SITES,
-                    "description": "Sites whose pages its checks only read, after reading the user's email or a "
-                    "signed-in page (reading needs nothing otherwise)",
+                    "description": "Sites whose pages its checks open and only read",
                 },
-                search={"type": "boolean", "description": "Its checks search the web after reading private things"},
+                search={"type": "boolean", "description": "Its checks search the web"},
                 email={**SITES, "description": "Email addresses of the people its checks send email to or invite"},
                 drafts={"type": "boolean", "description": "Its checks save email drafts (nothing is sent)"},
                 calendar_add={"type": "boolean", "description": "Its checks add new events to the calendar"},

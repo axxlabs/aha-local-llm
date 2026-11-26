@@ -36,7 +36,6 @@ class Facts:
     """What the harness itself knows about the task, never the model's words."""
 
     trusted: set[str] = field(default_factory=set)  # the person's trusted sites (§5.7)
-    private: bool = False  # the task read mail or had a page of a signed-in site (§5.2 "Private data")
     shown: set[tuple] = field(default_factory=set)  # addresses shown to the task (addresses.key)
     opened: set[str] = field(default_factory=set)  # sites opened in the task
     allow_all_sites: bool = True
@@ -63,13 +62,9 @@ def decide(a: Action, f: Facts) -> Verdict:
     if a.kind == "read":
         return Verdict("run")
     if a.kind == "type":
-        if f.granted.types(a.site):
-            return Verdict("run", "granted")
-        return Verdict("card", "type_private" if f.private else "type")
-    if a.kind == "search":
-        if f.private and f.granted.search:
-            return Verdict("run", "granted")
-        return Verdict("card", "search_private") if f.private else Verdict("run")
+        return Verdict("run", "granted") if f.granted.types(a.site) else Verdict("card", "type")
+    if a.kind == "search":  # the words go to the search engine
+        return Verdict("run", "granted") if f.granted.search else Verdict("card", "search")
     if a.kind == "open":
         # Opening its pages allowed up front covers the reading rules; an address that carries data hands it to
         # the site, a write, so only typing there allowed covers that.
@@ -80,38 +75,27 @@ def decide(a: Action, f: Facts) -> Verdict:
         if addresses.key(a.url) in f.shown:
             return Verdict("run")
         if addresses.data_pairs(a.url):
-            if f.granted.types(a.site):
-                return Verdict("run", "granted")
-            return Verdict("card", "data_private" if f.private else "data")
-        if f.private and a.site not in f.opened:
-            return Verdict("run", "granted") if reads else Verdict("card", "open_private")
-        return Verdict("run", "granted" if new_site else "")
+            return Verdict("run", "granted") if f.granted.types(a.site) else Verdict("card", "data")
+        if a.site not in f.opened:
+            return Verdict("run", "granted") if reads else Verdict("card", "open")
+        return Verdict("run")
     return Verdict("card", "other")  # not classified yet
 
 
 # Why a card is shown: the rule that asked, for the person (the (i) on the card, SPEC §7.4). Code decides cards
 # (SPEC §5.2), so code says why. `{site}`: the action's site.
-PRIVATE = (
-    "This task has read your email, or a page you're signed in on (your bank, your shop, your WhatsApp), so it holds "
-    "private information. "
-)
 TRUST_HINT = " Add {site} to your trusted sites in Settings and it won't ask again."
 WHY = {
     "send": "Sending a message to someone always asks first, on every site, trusted or not: nothing goes out in "
     "your name without your OK. You can change the text before it goes.",
     "type": "{site} isn't one of your trusted sites, so whatever Aha! types into it (a search, a form, an answer) "
     "is shown to you first." + TRUST_HINT,
-    "type_private": PRIVATE + "{site} isn't one of your trusted sites, so whatever Aha! types into it is shown to "
-    "you first: it could carry that information out." + TRUST_HINT,
-    "search_private": PRIVATE + "A web search sends its words to the search engine, so each search is shown to you "
-    "first until the task ends.",
-    "open_private": PRIVATE + "Opening a site it hasn't opened yet in this task could carry that information out "
-    "in the address, so it's shown to you first. Your trusted sites, and sites already opened in this task, don't "
-    "ask." + TRUST_HINT,
+    "search": "A web search sends its words to the search engine, so each search is shown to you first.",
+    "open": "Opening a site the task hasn't opened yet could carry information out in the address, so it's shown "
+    "to you first. Your trusted sites, links on pages it read, and sites already opened in this task don't ask."
+    + TRUST_HINT,
     "data": "This address carries information after the site's name (in the part after '?': a name, an email, a "
     "code…), which {site} would receive. Check it before it opens; you can change it." + TRUST_HINT,
-    "data_private": PRIVATE + "This address carries information after the site's name (in the part after '?'), "
-    "which {site} would receive: check that none of it is private before it opens." + TRUST_HINT,
     "new_site": "Opening sites is set to ask first (Settings), so each new site in a task is shown to you before "
     "it opens.",
     "other": "Aha! doesn't know yet whether this action sends anything out, so it asks first.",

@@ -39,8 +39,8 @@ class Approvals:
         return self.answer
 
 
-def ctx(answer: Decision, private: bool = False):
-    task = TaskState(private=private)
+def ctx(answer: Decision):
+    task = TaskState()
     return SimpleNamespace(
         account=None, approvals=Approvals(answer), config=SimpleNamespace(allow_all_sites=True), task=task
     )
@@ -54,7 +54,7 @@ async def test_a_send_always_shows_a_card():
 
 async def test_opening_an_edited_address_is_checked_again():
     """The person may change the address on the card: what they approved goes through the rules again."""
-    c = ctx(Decision(True, ["http://127.0.0.1/admin"]), private=True)
+    c = ctx(Decision(True, ["http://127.0.0.1/admin"]))
     _, action, refused = await guard.open_address(c, "https://example.com/?email=a@b.com", "fetch_url")
     assert c.approvals.asked and action.kind == "block"
     assert refused is not None and refused.text.startswith("Blocked by aha's safety policy")

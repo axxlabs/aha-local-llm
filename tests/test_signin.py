@@ -397,7 +397,7 @@ async def test_show_screenshot_sends_the_page_to_the_persons_chat(setup, llm, ch
     agent, _, _ = setup
     fe = person(accounts)
     llm.call("show_screenshot")  # nothing open yet
-    llm.call("browser_navigate", url="https://www.google.com/search?q=fictional+bistro")
+    llm.call("browser_navigate", url="https://www.fictional-bistro.example/")
     llm.call("show_screenshot", caption="Search results")
     llm.answer("There you go.")
     await agent.inbound(fe, "show me a screenshot of the search")
