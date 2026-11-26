@@ -118,6 +118,11 @@ class Job:
         """What the person allowed up front when the task was started: its checks keep it (SPEC §3.4)."""
         return background.grant_of(account, self.id)
 
+    def links(self, account: Account) -> list[str]:
+        """The addresses its instructions may open: what the request that started it was shown, or the person wrote
+        in it (SPEC §5.2 "Made-up addresses")."""
+        return background.links_of(account, self.id)
+
     def interrupted(self, account: Account) -> None:
         """Stopped before it finished (someone's input, Stop): the next check is told."""
         background.interrupted(account, self.id)
@@ -477,7 +482,10 @@ class Agent:
         try:
             try:
                 answer, checked, text = await self._within_limit(
-                    account, self.solve(account, text, quiet, job.grant(account) if job else None)
+                    account,
+                    self.solve(
+                        account, text, quiet, job.grant(account) if job else None, job.links(account) if job else None
+                    ),
                 )
             except asyncio.CancelledError:
                 account.transcript({"kind": "stopped"})
@@ -565,7 +573,12 @@ class Agent:
             await self.out.title(account, first[0], title or "", new=new)
 
     async def solve(
-        self, account: Account, text: str, quiet: bool = False, grant: Grant | None = None
+        self,
+        account: Account,
+        text: str,
+        quiet: bool = False,
+        grant: Grant | None = None,
+        links: list[str] | None = None,
     ) -> tuple[str, bool, str]:
         """Returns the answer, whether it passed the checks, and everything the person said during the task.
         `quiet` (a background check): no tool lines, and the person's messages wait for a task of their own.
@@ -609,7 +622,9 @@ class Agent:
             """The task's transcript: what the person typed on a sign-in card never shows (SPEC §5.8)."""
             account.transcript(redacted(entry, ctx.task.secrets))
 
-        addresses.remember(ctx.task.seen_urls, text)  # a link the person sent is theirs, not the model's
+        # A link the person sent is theirs, not the model's. A check's text is its task's instructions, which the
+        # model wrote: only the links its task kept count (SPEC §5.2 "Made-up addresses").
+        addresses.remember(ctx.task.seen_urls, " ".join(links or []) if quiet else text)
         tools = self.registry.specs()
         last = ""
         retried: set[str] = set()  # the checks that already sent a draft back (SPEC §3.5.1): once each

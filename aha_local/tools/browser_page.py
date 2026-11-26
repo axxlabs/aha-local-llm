@@ -47,8 +47,10 @@ REJECT_NAME = re.compile(
 )
 COOKIE_NEAR = 40  # lines around the button where the banner says "cookie"
 CANT_TELL = (
-    "From here you can't tell why: tell the person you couldn't load the page and give the link; "
-    "don't guess at a cause (region, IP, outage) the page didn't state."
+    "From here you can't tell why: don't guess at a cause (region, IP, outage) the page didn't state, and don't "
+    "try another address you put together. Open the site's home page and find the page from there (its menus, "
+    "links or search box), or search the web for it. Only if that fails too, tell the person you couldn't load "
+    "it and give the link."
 )
 
 

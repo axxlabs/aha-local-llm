@@ -24,8 +24,9 @@ from zoneinfo import ZoneInfo
 from .. import dates
 from ..accounts import Account
 from ..approvals import Field
-from ..policy.grants import Grant
-from . import guard
+from ..policy import addresses
+from ..policy.grants import Grant, emails_in
+from . import guard, trusted
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
 log = logging.getLogger("aha.background")
@@ -53,7 +54,10 @@ CHECK = (
     "NOTIFY: the message for the user, when there's news and the task goes on (it reports each time "
     "something happens). Only what's new since last time: the message is kept for the next check.\n"
     "DONE: the message for the user, when it has happened (and what was to be done then is done).\n"
-    "FAILED: the message for the user, when it can't happen any more or can't be checked.\n"
+    "FAILED: the message for the user, when it can't happen any more (cancelled, delivered elsewhere, sold out "
+    "for good). A page that didn't load or that you couldn't find isn't that: answer WAITING with what went "
+    "wrong, and the next check tries again (from the site's home page). Only if the last check couldn't read it "
+    "either, answer FAILED.\n"
     "NOTIFY, DONE and FAILED send the message to the chat; DONE and FAILED end the task."
 )
 # Told whenever an account's tasks change (created, checked, cancelled, ended): the channel sends the Tasks panel
@@ -124,6 +128,38 @@ def run_now(account: Account, task_id: str) -> bool:
     """The person's Run now (SPEC §3.4): an extra check, as soon as the model is free, without waiting for the
     idle time. The planned next check keeps its time. False if there's no such task."""
     return update(account, task_id, lambda e: {**e, "now": True}) is not None
+
+
+def _urls(text: str) -> list[str]:
+    return list(dict.fromkeys(u.rstrip(".,;:!?") for u in addresses.URL_IN_TEXT.findall(text or "")))
+
+
+def links_of(account: Account, task_id: str) -> list[str]:
+    """The addresses a task's checks may open as given (SPEC §5.2 "Made-up addresses"): what the request that
+    started it was shown, or the person wrote in it. A task kept before tasks kept them has none."""
+    entry = next((e for e in load(account) if e.get("id") == task_id), None)
+    return [u for u in (entry or {}).get("links", []) if isinstance(u, str)]
+
+
+def clean_grant(data: object) -> Grant | None:
+    """A grant the person edited in the Tasks panel (SPEC §7.4): sites by name, one address each; None when any
+    isn't one."""
+    if not isinstance(data, dict):
+        return None
+    g = Grant.from_dict(data)
+    sites = {s: trusted.valid(s) for s in g.open | g.type}
+    people = {p: emails_in(p) for p in g.email}
+    if not all(sites.values()) or any(len(v) != 1 for v in people.values()):
+        return None
+    return Grant(
+        {sites[s] for s in g.open},
+        {sites[s] for s in g.type},
+        g.search,
+        {people[p][0] for p in g.email},
+        g.drafts,
+        g.calendar_add,
+        g.calendar_change,
+    )
 
 
 def grant_of(account: Account, task_id: str) -> Grant:
@@ -253,6 +289,17 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
             f"Not created: there are already {MAX_TASKS} background tasks: cancel some first.", error=True
         )
     title, prompt, minutes, end, first = got
+    # Its checks open only addresses this request was shown (SPEC §5.2 "Made-up addresses"): one written from
+    # memory into the task would be trusted by every check (seen: a tracking address, a 404, the task ended).
+    model_urls, made_up = _urls(prompt), [u for u in _urls(prompt) if addresses.made_up(u, ctx.task.seen_urls)]
+    if made_up:
+        return ToolResult(
+            f"Not created: {', '.join(made_up)} isn't in anything you read in this request or the user sent, so you "
+            "put it together yourself, and such addresses are usually wrong. Write the site's name instead (like "
+            "fedex.com) and how to find the page there (its tracking box, with the number), then call task_create "
+            "again.",
+            error=True,
+        )
     # It checks later on its own, without the person watching, so they approve it (SPEC §3.4).
     fields = [
         Field("Waiting for", title),
@@ -290,6 +337,17 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
         "created": int(now),
         "checks": 0,
         **({"card": d.card} if d.card else {}),
+        # What its checks may open: the prompt's addresses this request was shown, and any the person wrote in it
+        # on the card (their own words).
+        **(
+            {"links": links}
+            if (
+                links := [
+                    u for u in _urls(prompt) if u not in model_urls or not addresses.made_up(u, ctx.task.seen_urls)
+                ]
+            )
+            else {}
+        ),
         **({"grant": ctx.task.grant.to_dict()} if ctx.task.grant else {}),
     }
     save(ctx.account, [*entries, entry])
@@ -326,7 +384,10 @@ def register(reg: Registry) -> None:
             "summarise my email'): `start` at that time, `every_minutes` for the repeat (1440 for daily), and the "
             "check does it and answers DONE (once) or NOTIFY (repeating). Each check runs `prompt` as a new "
             "request, with only your memory: write it so it makes sense on its own later, with what to look at "
-            "(addresses, names, tracking codes), how, and what counts as done. Don't say in it what to answer: "
+            "(the site by its name, like fedex.com, and how to find the page there; names, tracking codes), how, "
+            "and what counts as done. Put an address in it only if you opened it or the user sent it in this "
+            "request: never one you put together. Ask permissions_request first for what its checks will need "
+            "(typing the tracking number on fedex.com). Don't say in it what to answer: "
             "each check is told how to answer. Checks run only while nobody is using Aha!, so timing isn't exact.",
             params(
                 ["title", "prompt", "every_minutes", "until"],
@@ -430,7 +491,7 @@ def interrupted(account: Account, task_id: str) -> None:
     )
 
 
-EDITABLE = ("title", "prompt", "every", "until", "next")
+EDITABLE = ("title", "prompt", "every", "until", "next", "grant")  # what the panel sends
 
 
 def edit(account: Account, task_id: str, changes: dict) -> str:
@@ -448,6 +509,12 @@ def edit(account: Account, task_id: str, changes: dict) -> str:
         new["prompt"] = _prompt(changes["prompt"])
         if not new["prompt"]:
             return "what it checks can't be empty"
+        new["links"] = _urls(new["prompt"])  # the person's own words: its addresses are theirs
+    if "grant" in changes:
+        grant = clean_grant(changes["grant"])
+        if grant is None:
+            return "a site or an email address isn't valid"
+        new["grant"] = grant.to_dict()
     if "every" in changes:
         if not isinstance(changes["every"], int | float):
             return "how often must be a number"
@@ -466,7 +533,8 @@ def edit(account: Account, task_id: str, changes: dict) -> str:
         new["next"] = max(float(changes["next"]), now)
     if new["until"] is not None and new["next"] >= new["until"]:
         return "the next check is after until"
-    update(account, task_id, lambda e: {**e, **{k: new[k] for k in EDITABLE}})
+    kept = (*EDITABLE, "links")
+    update(account, task_id, lambda e: {**e, **{k: new[k] for k in kept if k in new}})
     return ""
 
 
@@ -494,6 +562,7 @@ def check_prompt(entry: dict, now: float, tz: ZoneInfo) -> str:
 def listing(account: Account) -> list[dict]:
     """For the app's Tasks panel, newest first (SPEC §6.5)."""
     keys = ("id", "title", "prompt", "until", "next", "created", "card")
+    # "grant": what it allows, for the panel's editor; "allowed": the same in the person's words
     rows = sorted(load(account), key=lambda e: e.get("created", 0), reverse=True)
     return [
         {
@@ -505,6 +574,7 @@ def listing(account: Account) -> list[dict]:
             "now": bool(e.get("now")),
             "last_how": e.get("last_how", "waiting" if e.get("last") else ""),
             "allowed": Grant.from_dict(e.get("grant")).labels(),
+            "grant": Grant.from_dict(e.get("grant")).to_dict(),
         }
         for e in rows
     ]

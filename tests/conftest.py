@@ -24,6 +24,16 @@ from aha_local.tools.registry import Registry
 from aha_local.vault import Vault
 
 
+@pytest.fixture(autouse=True)
+def every_address_shown(request, monkeypatch):
+    """Tests of other things open the addresses they need; the made-up address rule (SPEC §5.2) has its own tests,
+    marked made_up_rule."""
+    if "made_up_rule" not in request.keywords:
+        from aha_local.policy import addresses
+
+        monkeypatch.setattr(addresses, "made_up", lambda url, seen: False)
+
+
 class FakeLLM:
     """Returns scripted replies in order and records every request."""
 

@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
+import pytest
+
 from aha_local.policy.gate import Action, Facts, decide
 
 
@@ -55,9 +57,9 @@ def test_an_html_emails_links_keep_their_addresses():
     assert "Email us" in text and "mailto" not in text
 
 
-def test_a_made_up_address_is_flagged_on_its_card():
+@pytest.mark.made_up_rule
+def test_what_counts_as_a_made_up_address():
     from aha_local.policy import addresses
-    from aha_local.policy.browser import MADE_UP, open_form
 
     seen: set[tuple] = set()
     addresses.remember(seen, "Cancel (https://www.sevenrooms.com/direct/cancel-reservation/ahNzfX?lang=en)")
@@ -66,5 +68,4 @@ def test_a_made_up_address_is_flagged_on_its_card():
     assert not addresses.made_up("https://www.sevenrooms.com/direct/cancel-reservation/ahNzfX?lang=en", seen)
     assert not addresses.made_up("https://www.sevenrooms.com/", seen)  # a home page is fine
     assert not addresses.made_up("https://www.google.com/search?q=flat+iron", seen)  # a search
-    fields = open_form(guessed, made_up=True).fields
-    assert ("Note", MADE_UP, "info") in [(f.label, f.value, f.kind) for f in fields]
+    assert addresses.home(guessed) == "https://www.sevenrooms.com/"

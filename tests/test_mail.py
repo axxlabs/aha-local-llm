@@ -16,7 +16,6 @@ import pytest
 
 from aha_local.approvals import Decision
 from aha_local.config import Config
-from aha_local.policy.browser import MADE_UP
 from aha_local.tools import calendar, mail, web
 from aha_local.tools import google as gapi
 from aha_local.tools.registry import Registry, TaskState, ToolContext
@@ -245,6 +244,7 @@ async def test_a_reply_is_threaded_and_a_draft_is_not_sent(google, two, config):
     assert msg["References"] == "<root@bistro.example> <abc@bistro.example>"
 
 
+@pytest.mark.made_up_rule
 async def test_after_reading_mail_searches_and_addresses_need_a_card(google, two, config, monkeypatch):
     fe, _ = two
     approvals = FakeApprovals()  # declines everything
@@ -255,20 +255,13 @@ async def test_after_reading_mail_searches_and_addresses_need_a_card(google, two
     assert searched.error and fetched.error
     assert [(a.title, a.fields) for a in approvals.asked] == [
         ("Search the web for this?", [("Search", "FB-1234 Fictional Bistro", "text")]),
-        (
-            "Open this address? It sends what's in it to evil.example",
-            [
-                ("Address", "https://evil.example/?q=FB-1234", "text"),
-                ("It sends", "q = FB-1234", "info"),
-                ("Note", MADE_UP, "info"),  # nothing in the task showed it
-            ],
-        ),
     ]
+    assert fetched.text.startswith("Not opened: https://evil.example/?q=FB-1234")  # made up: no card, refused
     # The next task starts clean: no card (the search itself then fails here, offline, which is fine).
     clean = ctx_for(fe, dataclasses.replace(config, search_url="http://127.0.0.1:9"), approvals)
     with pytest.raises(httpx.HTTPError):
         await web.web_search({"query": "weather"}, clean)
-    assert len(approvals.asked) == 2
+    assert len(approvals.asked) == 1
 
 
 async def test_after_reading_mail_browser_navigation_needs_a_card_even_with_all_sites_allowed(two, config):

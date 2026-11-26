@@ -37,6 +37,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "-ra --strict-markers"
+markers = ["made_up_rule: the real made-up address rule (other tests treat every address as shown)"]
 
 [tool.ruff]
 line-length = 120

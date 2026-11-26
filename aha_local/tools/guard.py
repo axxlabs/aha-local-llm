@@ -119,9 +119,12 @@ async def open_address(ctx: ToolContext, url: str, tool: str) -> tuple[str, Acti
     verdict = check(ctx, action, tool)
     if verdict.outcome == "block":
         return url, action, blocked(verdict.why)
+    # Only addresses it has (SPEC §5.2 "Made-up addresses"): a site's home page, a link it was shown, one the person
+    # sent, a search. Seen: a tracking page's address written from memory, a 404, and the task given up.
+    if addresses.made_up(url, ctx.task.seen_urls):
+        return url, action, ToolResult(made_up(url), error=True)
     if verdict.outcome == "card":
-        made_up = addresses.made_up(url, ctx.task.seen_urls)
-        form = open_form(url, data=verdict.why.startswith("data"), made_up=made_up)
+        form = open_form(url, data=verdict.why.startswith("data"))
         decision, refused = await ask(ctx, "action", form.title, form.fields, why=explain(verdict.why, action.site))
         if refused:
             return url, action, refused
@@ -130,6 +133,15 @@ async def open_address(ctx: ToolContext, url: str, tool: str) -> tuple[str, Acti
         if action.kind == "block":
             return url, action, blocked(action.reason)
     return url, action, None
+
+
+def made_up(url: str) -> str:
+    home = addresses.home(url)
+    return (
+        f"Not opened: {url} isn't in anything you read in this task or the user sent, so you put it together "
+        f"yourself, and such addresses are usually wrong. Open the site's home page, {home}, and find the page from "
+        "there (its menus, links or search box), or search the web for it. Never write another address yourself."
+    )
 
 
 def opened(ctx: ToolContext, url: str) -> None:

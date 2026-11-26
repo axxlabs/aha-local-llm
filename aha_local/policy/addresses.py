@@ -81,6 +81,15 @@ def made_up(url: str, seen: set[tuple]) -> bool:
     return k is not None and k not in seen and (k[1] != "/" or bool(k[2])) and not is_search(url)
 
 
+def home(url: str) -> str:
+    """The site's home page for an address: scheme and host, nothing after."""
+    try:
+        p = urlsplit(url.strip())
+    except ValueError:
+        return ""
+    return f"{p.scheme or 'https'}://{p.netloc}/" if p.netloc else ""
+
+
 def data_pairs(url: str) -> list[tuple[str, str]]:
     """The `key=value` pairs an address carries, in its query and its fragment (a page's script reads both)."""
     try:
