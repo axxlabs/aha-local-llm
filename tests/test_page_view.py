@@ -84,3 +84,16 @@ async def test_the_harness_reads_the_whole_snapshot_and_the_model_the_compact_on
 
 def test_the_model_may_give_a_reference_as_the_view_writes_it():
     assert normalise_targets({"target": "(e26)"})["target"] == "e26"
+    # The element's whole line, as the view or a snapshot shows it (seen: a WhatsApp message box, refused 3 times)
+    for line, ref in (
+        ('textbox "Type a message to Meta AI" (f146e910)', "f146e910"),
+        ("Meta AI (f146e65)", "f146e65"),
+        ("[Meta AI](f146e65)", "f146e65"),
+        ('checkbox "Gift wrap" (e27) [checked]', "e27"),
+        ('textbox "Email" (e1): typed', "e1"),
+        ('- button "Send" [ref=e5]', "e5"),
+    ):
+        assert normalise_targets({"target": line})["target"] == ref, line
+    assert normalise_targets({"fields": [{"target": 'textbox "Name" (e3)'}]})["fields"][0]["target"] == "e3"
+    css = "getByRole('button', { name: 'Submit' })"
+    assert normalise_targets({"target": css})["target"] == css  # not a page line: left as it is

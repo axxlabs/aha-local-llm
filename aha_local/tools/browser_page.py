@@ -93,17 +93,24 @@ async def current_site(session) -> str:
 SNAPSHOT_LINK = re.compile(r"### Snapshot\s*\n- \[Snapshot\]\([^)]*\)")
 # The model writes references as "e23", "[ref=e23]", "ref=f8e31"…: the browser wants "e23" / "f8e31".
 REF_TARGET = re.compile(r"^[\[(]?\s*(?:ref\s*[=:]\s*)?((?:f\d+)?e\d+)\s*[\])]?$")
+# A whole line of the page view, or of a snapshot, given as the target: its reference, in brackets after the name
+# (seen: `textbox "Type a message to Meta AI" (f146e910)` sent three times, refused each time).
+REF_AT_END = re.compile(r"[\[(]\s*(?:ref\s*[=:]\s*)?((?:f\d+)?e\d+)\s*[\])]")
 # A field only the sign-in card may fill: its page label says password or code (SPEC §3.4 "Signing in").
 SECRET_FIELD = re.compile(r"pass ?word|passcode|\bpin\b|one[- ]time|verification code|security code|\botp\b|2fa", re.I)
 YAML_BLOCK = re.compile(r"```yaml\n(.*?)(?:```|\Z)", re.S)  # tolerant of a snapshot cut to fit
 
 
 def normalise_targets(args: dict) -> dict:
-    """The model often writes "[ref=e23]" where the browser wants "e23"."""
+    """The model often writes "[ref=e23]", or the element's whole line, where the browser wants "e23"."""
 
     def fix(v):
-        m = REF_TARGET.match(v.strip()) if isinstance(v, str) else None
-        return m.group(1) if m else v
+        if not isinstance(v, str):
+            return v
+        if m := REF_TARGET.match(v.strip()):
+            return m.group(1)
+        refs = REF_AT_END.findall(v)
+        return refs[-1] if refs else v
 
     out = {k: fix(v) if k in ("target", "ref") else v for k, v in args.items()}
     if isinstance(out.get("fields"), list):
