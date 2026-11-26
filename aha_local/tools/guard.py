@@ -83,13 +83,20 @@ async def ask(
 
 
 async def send(
-    ctx: ToolContext, kind: str, title: str, fields: list[Field], then: str = "", to: list[str] | None = None
+    ctx: ToolContext,
+    kind: str,
+    title: str,
+    fields: list[Field],
+    then: str = "",
+    to: list[str] | None = None,
+    what: str = "",
 ) -> tuple[Decision, ToolResult | None]:
     """Something that goes out in the person's name or changes what they keep (an email, an event, a memory, a
     background task): a `send` for the gate (SPEC §5.2 rule 2), which shows it on a card, trusted or not, unless
-    the person allowed it up front for who receives it (`to`: the addresses; None when nothing can allow it).
+    the person allowed it up front for who receives it (`to`: the addresses; None when nothing can allow it;
+    `what`: the grant it needs, when not the card's kind, as changing an event).
     Then it runs as it is, and the chat says what went (the person still sees every send)."""
-    verdict = check(ctx, Action("send", what=kind, to=None if to is None else tuple(to)), kind)
+    verdict = check(ctx, Action("send", what=what or kind, to=None if to is None else tuple(to)), kind)
     if verdict.outcome == "block":
         return Decision(False, reason="blocked"), blocked(verdict.why)
     if verdict.outcome == "run":

@@ -58,26 +58,32 @@ def decide(a: Action, f: Facts) -> Verdict:
         return Verdict("run", "granted") if f.granted.covers(a.what, a.to) else Verdict("card", "send")
     if a.kind in ("type", "open", "search") and a.site and a.site in f.trusted:
         return Verdict("run", "trusted")
-    if a.kind in ("type", "open") and a.site and a.site in f.granted.sites:
-        return Verdict("run", "granted")
     if a.kind == "read":
         return Verdict("run")
     if a.kind == "type":
+        if f.granted.types(a.site):
+            return Verdict("run", "granted")
         return Verdict("card", "type_private" if f.private else "type")
     if a.kind == "search":
         if f.private and f.granted.search:
             return Verdict("run", "granted")
         return Verdict("card", "search_private") if f.private else Verdict("run")
     if a.kind == "open":
-        if not f.allow_all_sites and a.site not in f.opened:
+        # Opening its pages allowed up front covers the reading rules; an address that carries data hands it to
+        # the site, a write, so only typing there allowed covers that.
+        reads = f.granted.opens(a.site)
+        new_site = not f.allow_all_sites and a.site not in f.opened
+        if new_site and not reads:
             return Verdict("card", "new_site")
         if addresses.key(a.url) in f.shown:
             return Verdict("run")
         if addresses.data_pairs(a.url):
+            if f.granted.types(a.site):
+                return Verdict("run", "granted")
             return Verdict("card", "data_private" if f.private else "data")
         if f.private and a.site not in f.opened:
-            return Verdict("card", "open_private")
-        return Verdict("run")
+            return Verdict("run", "granted") if reads else Verdict("card", "open_private")
+        return Verdict("run", "granted" if new_site else "")
     return Verdict("card", "other")  # not classified yet
 
 

@@ -51,7 +51,8 @@ async def test_one_card_allows_what_stays_ticked_for_the_topic(agent, llm, chat,
     llm.permissions_first = False
     llm.call(
         "permissions_request",
-        sites=["https://www.thefork.co.uk/booking"],
+        type=["https://www.thefork.co.uk/booking"],
+        open=["thefork.co.uk", "linkedin.com"],
         email=["Sam@Example.com"],
         search=True,
     )
@@ -61,22 +62,24 @@ async def test_one_card_allows_what_stays_ticked_for_the_topic(agent, llm, chat,
     assert card.card["kind"] == "permissions" and card.card["icon"] == "🔓"
     assert card.card["buttons"] == ["Allow", "Ask each time"]
     labels = [f["label"] for f in card.card["fields"]]
-    assert labels == [
-        "Open pages and type on thefork.co.uk",
+    assert labels == [  # typing on thefork.co.uk includes opening it: once
+        "Type and fill in forms on thefork.co.uk (searches, sign-ups, bookings)",
+        "Open pages on linkedin.com (read only), even after reading your email or private pages",
         "Search the web, even after reading your email or private pages",
-        "Email sam@example.com (send, or save a draft)",
+        "Send email to sam@example.com",
     ]
     assert all(f["kind"] == "bool" and f["value"] == "true" for f in card.card["fields"])
-    await agent.approval_reply(fe, card.card["id"], "approve", ["true", "false", "true"])
+    await agent.approval_reply(fe, card.card["id"], "approve", ["true", "true", "false", "true"])
     await settle(agent)
     (result,) = tool_results(llm)
-    assert result.startswith("Allowed up front: Open pages and type on thefork.co.uk; Email sam@example.com")
+    assert result.startswith("Allowed up front: Type and fill in forms on thefork.co.uk")
     assert "Not allowed (asked when it happens): Search the web" in result
     grant = agent.session(fe).grant
-    assert grant.sites == {"thefork.co.uk"} and grant.email == {"sam@example.com"} and not grant.search
+    assert grant.type == {"thefork.co.uk"} and grant.open == {"linkedin.com"}
+    assert grant.email == {"sam@example.com"} and not grant.search
 
     # The next message in the same topic: what's allowed isn't asked again.
-    llm.call("permissions_request", sites=["thefork.co.uk"])
+    llm.call("permissions_request", type=["thefork.co.uk"], open=["linkedin.com", "thefork.co.uk"])
     llm.answer("Done.")
     await agent.inbound(fe, "make it 8pm")
     await settle(agent)
@@ -87,7 +90,7 @@ async def test_one_card_allows_what_stays_ticked_for_the_topic(agent, llm, chat,
 async def test_declining_allows_nothing_and_a_new_topic_starts_clean(agent, llm, chat, accounts):
     fe = person(accounts)
     llm.permissions_first = False
-    llm.call("permissions_request", calendar=True)
+    llm.call("permissions_request", calendar_add=True)
     llm.answer("OK.")
     await agent.inbound(fe, "put it in my calendar")
     card = await chat.next()
@@ -95,7 +98,7 @@ async def test_declining_allows_nothing_and_a_new_topic_starts_clean(agent, llm,
     await settle(agent)
     assert tool_results(llm)[-1].startswith(permissions.DECLINED)
     assert not agent.session(fe).grant
-    agent.session(fe).grant.add(Grant(sites={"x.com"}))
+    agent.session(fe).grant.add(Grant(type={"x.com"}))
     assert not agent.session(fe).grant_for(("another", "topic"))
 
 
@@ -105,9 +108,9 @@ async def test_trusted_sites_and_bad_names_are_never_on_the_card(agent, llm, cha
     fe = person(accounts)
     trusted.set_trusted(fe, "waitrose.com", True)
     llm.permissions_first = False
-    llm.call("permissions_request", sites=["not a site"])
-    llm.call("permissions_request", sites=["waitrose.com"], email=["two@a.com three@b.com"])
-    llm.call("permissions_request", sites=["waitrose.com"])
+    llm.call("permissions_request", type=["not a site"])
+    llm.call("permissions_request", type=["waitrose.com"], email=["two@a.com three@b.com"])
+    llm.call("permissions_request", type=["waitrose.com"], open=["waitrose.com"])
     llm.answer("OK.")
     await agent.inbound(fe, "order the usual")
     await settle(agent)
@@ -117,11 +120,19 @@ async def test_trusted_sites_and_bad_names_are_never_on_the_card(agent, llm, cha
 
 
 def test_the_gate_runs_what_was_allowed_and_nothing_else():
-    g = Grant(sites={"thefork.co.uk"}, search=True, email={"sam@example.com"}, calendar=True)
+    g = Grant(open={"linkedin.com"}, type={"thefork.co.uk"}, search=True, email={"sam@example.com"}, calendar_add=True)
     f = Facts(private=True, granted=g)
     assert decide(Action("type", site="thefork.co.uk"), f).why == "granted"
     assert decide(Action("open", site="thefork.co.uk", url="https://thefork.co.uk/?name=Fe"), f).why == "granted"
+    assert decide(Action("open", site="thefork.co.uk", url="https://thefork.co.uk/r/1"), f).why == "granted"
     assert decide(Action("type", site="opentable.com"), f).outcome == "card"
+    # Opening allowed is reading only: no typing there, and no address that carries data to it.
+    assert decide(Action("open", site="linkedin.com", url="https://linkedin.com/in/sam"), f).why == "granted"
+    assert decide(Action("type", site="linkedin.com"), f).outcome == "card"
+    assert decide(Action("open", site="linkedin.com", url="https://linkedin.com/?q=Fe"), f).outcome == "card"
+    closed = Facts(allow_all_sites=False, granted=g)
+    assert decide(Action("open", site="linkedin.com", url="https://linkedin.com/"), closed).why == "granted"
+    assert decide(Action("open", site="bbc.co.uk", url="https://bbc.co.uk/"), closed).outcome == "card"
     assert decide(Action("search"), f).why == "granted"
     email = lambda *to: Action("send", what="email", to=to)  # noqa: E731
     assert decide(email("sam@example.com"), f).why == "granted"
@@ -129,6 +140,13 @@ def test_the_gate_runs_what_was_allowed_and_nothing_else():
     assert decide(email(), f).outcome == "card"
     assert decide(Action("send", what="calendar", to=()), f).why == "granted"
     assert decide(Action("send", what="calendar", to=("ana@example.com",)), f).outcome == "card"
+    # Adding isn't changing, and a draft isn't a send.
+    assert decide(Action("send", what="calendar_change", to=()), f).outcome == "card"
+    assert decide(Action("send", what="draft", to=("ana@example.com",)), f).outcome == "card"
+    assert decide(Action("send", what="draft", to=("sam@example.com",)), f).why == "granted"
+    drafts = Facts(granted=Grant(drafts=True))
+    assert decide(Action("send", what="draft", to=("ana@example.com",)), drafts).why == "granted"
+    assert decide(Action("send", what="email", to=("ana@example.com",)), drafts).outcome == "card"
     for what in ("memory", "task", "calendar_delete"):  # nothing allows these: always their own card
         assert decide(Action("send", what=what, to=()), f).outcome == "card"
     assert decide(Action("send", site="whatsapp.com"), f).outcome == "card"  # a message typed on a site
@@ -171,7 +189,7 @@ async def test_a_background_task_keeps_what_was_allowed(agent, llm, chat, accoun
     fe = person(accounts)
     agent.session(fe).grant_for(None)
     llm.permissions_first = False
-    llm.call("permissions_request", sites=["royalmail.com"])
+    llm.call("permissions_request", open=["royalmail.com"])
     llm.call(
         "task_create", title="Parcel", prompt="Open royalmail.com tracking for AB123.", every_minutes=60, until="never"
     )
@@ -183,15 +201,15 @@ async def test_a_background_task_keeps_what_was_allowed(agent, llm, chat, accoun
     assert card.card["kind"] == "task"
     assert card.card["fields"][-1] == {
         "label": "Allowed up front",
-        "value": "Open pages and type on royalmail.com",
+        "value": "Open pages on royalmail.com (read only), even after reading your email or private pages",
         "editable": False,
         "kind": "info",
     }
     await agent.approval_reply(fe, card.card["id"], "approve")
     await settle(agent)
     (entry,) = background.load(fe)
-    assert background.grant_of(fe, entry["id"]).sites == {"royalmail.com"}
-    assert background.listing(fe)[0]["allowed"] == ["Open pages and type on royalmail.com"]
+    assert background.grant_of(fe, entry["id"]).open == {"royalmail.com"}
+    assert background.listing(fe)[0]["allowed"] == [card.card["fields"][-1]["value"]]
 
 
 @pytest.mark.parametrize(
@@ -213,7 +231,7 @@ def test_a_plan_isnt_a_claim_of_work_done(answer, plan):
 async def test_change_the_plan_allows_nothing_and_sends_it_back_to_its_plan(agent, llm, chat, accounts):
     fe = person(accounts)
     llm.permissions_first = False
-    llm.call("permissions_request", sites=["thefork.co.uk"], email=["sam@example.com"])
+    llm.call("permissions_request", type=["thefork.co.uk"], email=["sam@example.com"])
     llm.answer("What would you like to change?")
     await agent.inbound(fe, "book us a table and tell Sam")
     card = await chat.next()
@@ -236,3 +254,18 @@ async def test_only_a_card_that_offers_it_can_be_sent_back_to_its_plan(agent, ll
     assert agent.approvals.pending_for(fe.address) is not None
     await agent.approval_reply(fe, card.card["id"], "decline")
     await settle(agent)
+
+
+def test_a_task_stored_before_the_split_keeps_what_it_allowed():
+    g = Grant.from_dict({"sites": ["royalmail.com"], "email": ["sam@example.com"], "calendar": True})
+    assert g.type == {"royalmail.com"} and g.email == {"sam@example.com"} and g.calendar_add and g.calendar_change
+    assert Grant.from_dict(g.to_dict()) == g
+
+
+async def test_changing_an_event_needs_its_own_permission(accounts, config):
+    asked = Asked()
+    ctx = ToolContext(person(accounts), asked, config, TaskState(grant=Grant(calendar_add=True)), None, None)  # type: ignore[arg-type]
+    fields = [Field("Title", "Dinner")]
+    await guard.send(ctx, "calendar", "Add this?", fields, to=[])
+    await guard.send(ctx, "calendar", "Change “Dinner”?", fields, to=[], what="calendar_change")
+    assert asked.cards == ["calendar"]

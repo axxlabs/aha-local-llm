@@ -360,7 +360,8 @@ async def calendar_update(args: dict, ctx: ToolContext) -> ToolResult:
     )
     fields += [Field("Calendar", cal.name, "info"), day_field(fields[1].value)]
     title = f"Change “{event.get('summary', 'this event')}”?"
-    decision, refused = await guard.send(ctx, "calendar", title, fields, to=grants.emails_in(fields[5].value))
+    guests = grants.emails_in(fields[5].value)
+    decision, refused = await guard.send(ctx, "calendar", title, fields, to=guests, what="calendar_change")
     if refused:
         return refused
     body = event_body(decision.values, tz)
