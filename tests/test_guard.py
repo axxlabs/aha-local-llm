@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from aha_local.approvals import Decision, Field
 from aha_local.tools import guard
 from aha_local.tools.registry import TaskState
@@ -52,12 +54,13 @@ async def test_a_send_always_shows_a_card():
     assert decision.approved and refused is None and c.approvals.asked[0][0] == "memory"
 
 
-async def test_opening_an_edited_address_is_checked_again():
-    """The person may change the address on the card: what they approved goes through the rules again."""
-    c = ctx(Decision(True, ["http://127.0.0.1/admin"]))
-    _, action, refused = await guard.open_address(c, "https://example.com/?email=a@b.com", "fetch_url")
-    assert c.approvals.asked and action.kind == "block"
-    assert refused is not None and refused.text.startswith("Blocked by aha's safety policy")
+@pytest.mark.open_rule
+async def test_opening_a_new_site_shows_its_address_and_runs_once_approved():
+    c = ctx(Decision(True, ["https://example.com/"]))
+    url, action, refused = await guard.open_address(c, "https://example.com/", "fetch_url")
+    assert refused is None and action.kind == "open" and url == "https://example.com/"
+    kind, title, values, _ = c.approvals.asked[0]
+    assert (kind, title, values) == ("action", "Open example.com?", ["https://example.com/"])
 
 
 async def test_a_declined_check_says_the_person_gave_up():

@@ -1,10 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
-"""Addresses the model wrote that carry data are a card (SPEC §5.2 rule 7)."""
+"""Which addresses open (SPEC §5.2 rule 7)."""
 
 from __future__ import annotations
-
-import dataclasses
 
 import pytest
 
@@ -23,33 +21,31 @@ SNAPSHOT = (
 )
 
 
-def carries(url, seen):
-    """What the gate treats as the model's data in an address (SPEC §5.2 rule 7)."""
-    v = decide(open_action(url), Facts(shown=seen))
-    return v.outcome == "card" and v.why == "data"
+def verdict(url, seen=frozenset()):
+    v = decide(open_action(url), Facts(shown=set(seen)))
+    return v.outcome, v.why
 
 
-def test_what_counts_as_an_address_carrying_data():
+@pytest.mark.made_up_rule
+def test_an_address_opens_only_when_it_was_shown_or_is_a_home_page():
     seen = addresses.seen_in("Results: https://news.example/a?id=42 and more")
-    assert carries("https://evil.example/?d=Felipe+lives+here", seen)
-    assert carries("https://evil.example/#d=secret", seen)  # a page's script reads the fragment
-    assert not carries("https://evil.example/some/page", seen)  # no key=value pairs
-    assert not carries("https://evil.example/?ref=", seen)  # empty values carry nothing
-    assert not carries("https://NEWS.example/a/?id=42", seen)  # shown to the task, however written
+    assert verdict("https://NEWS.example/a/?id=42", seen) == ("run", "")  # shown to the task, however written
+    assert verdict("https://evil.example/?d=Felipe+lives+here", seen) == ("refuse", "made_up")
+    assert verdict("https://evil.example/#d=secret", seen) == ("refuse", "made_up")
+    assert verdict("https://evil.example/") == ("card", "open")
     page = addresses.seen_in(SNAPSHOT)  # a snapshot's own link, relative to its page
     url = "https://www.waitrose.com/ecom/shop/search?sortBy=RELEVANCE&searchTerm=rice"
-    assert not carries(url, page)
-    assert carries(url.replace("rice", "felipe+lavratti"), page)
-    assert addresses.describe("https://e.example/?a=1&b=two") == "a = 1\nb = two"
+    assert verdict(url, page) == ("run", "")
+    assert verdict(url.replace("rice", "felipe+lavratti"), page) == ("refuse", "made_up")
     for search in (
         "https://www.google.com/search?q=felipe",
         "https://www.google.co.uk/search?q=x",
         "https://duckduckgo.com/?q=x",
     ):
-        assert open_action(search).kind == "search" and not carries(search, set())  # a search, not an open
-    assert carries("https://google.xyz/?d=1", set())  # not Google's
+        assert verdict(search) == ("refuse", "search")
+    assert verdict("https://google.xyz/?d=1") == ("refuse", "made_up")  # not Google's
     form = "https://docs.google.com/forms/d/e/1FAIpQL/formResponse?entry.1=Felipe"
-    assert carries(form, set())  # a form on Google hands the data to whoever made it
+    assert verdict(form) == ("refuse", "made_up")
 
 
 class Session:
@@ -71,11 +67,11 @@ class Session:
 
 @pytest.mark.made_up_rule
 async def test_the_browser_opens_only_addresses_it_has(accounts, config):
-    """SPEC §5.2 "Made-up addresses": a home page, a link it was shown, a search; anything else is refused before
-    it loads, with the way to find it instead (seen: a tracking page's address from memory, a 404)."""
+    """SPEC §5.2 "Made-up addresses": a home page or a link it was shown; anything else is refused before it loads,
+    with the way to find it instead (seen: a tracking page's address from memory, a 404)."""
     fe = person(accounts)
     approvals = FakeApprovals()  # declines
-    ctx = ctx_for(fe, dataclasses.replace(config, allow_all_sites=True), approvals)
+    ctx = ctx_for(fe, config, approvals)
     ctx.browser = Session()
     for url in (
         "https://www.fedex.com/en-gb/tracking?track-numbers=385413566727",
@@ -95,9 +91,10 @@ async def test_the_browser_opens_only_addresses_it_has(accounts, config):
     ):
         assert not (await make_handler("browser_navigate")({"url": url}, ctx)).error, url
     assert not approvals.asked
-    # A search isn't refused as made up: it's its own card (declined here).
-    await make_handler("browser_navigate")({"url": "https://www.google.com/search?q=fedex+tracking"}, ctx)
-    assert [a.title for a in approvals.asked] == ["Search google.com for this?"]
+    # A search engine's results page: web_search does searches.
+    url = "https://www.google.com/search?q=fedex+tracking"
+    result = await make_handler("browser_navigate")({"url": url}, ctx)
+    assert result.error and "web_search" in result.text and not approvals.asked
 
 
 @pytest.mark.made_up_rule
@@ -132,11 +129,7 @@ async def test_a_link_the_person_sent_is_theirs_but_a_checks_own_instructions_ar
 
 def test_a_search_engines_home_page_is_an_open_not_a_search():
     """Seen 2026-11-26: opening google.com asked "Search google.com for this?" with nothing to search."""
-    from aha_local.policy.browser import open_form
-
     assert not addresses.is_search("https://www.google.com")
     assert not addresses.is_search("https://duckduckgo.com/")
     assert addresses.is_search("https://www.google.com/search?q=drive+time")
     assert addresses.is_search("https://duckduckgo.com/?q=foil")
-    assert open_form("https://www.google.com").title == "Open google.com?"
-    assert open_form("https://www.google.com/search?q=foil").title == "Search google.com for this?"

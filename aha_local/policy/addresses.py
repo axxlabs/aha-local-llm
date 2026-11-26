@@ -76,11 +76,17 @@ def remember(seen: set[tuple], text: str) -> None:
         seen |= seen_in(text)
 
 
+def is_home(url: str) -> bool:
+    """A site's home page: its address with nothing after the host."""
+    k = key(url)
+    return k is not None and k[1] == "/" and not k[2] and not k[3]
+
+
 def made_up(url: str, seen: set[tuple]) -> bool:
     """An address past a site's home page that nothing in the task showed (a page, an email, a search result, the
     person's message): the model put it together itself. Seen: a guessed booking-management address."""
     k = key(url)
-    return k is not None and k not in seen and (k[1] != "/" or bool(k[2])) and not is_search(url)
+    return k is not None and k not in seen and not is_home(url)
 
 
 def home(url: str) -> str:
@@ -90,17 +96,3 @@ def home(url: str) -> str:
     except ValueError:
         return ""
     return f"{p.scheme or 'https'}://{p.netloc}/" if p.netloc else ""
-
-
-def data_pairs(url: str) -> list[tuple[str, str]]:
-    """The `key=value` pairs an address carries, in its query and its fragment (a page's script reads both)."""
-    try:
-        p = urlsplit(url.strip())
-    except ValueError:
-        return []
-    return [(k, v) for k, v in parse_qsl(p.query) + parse_qsl(p.fragment) if v]
-
-
-def describe(url: str, limit: int = 300) -> str:
-    text = "\n".join(f"{k} = {v}" for k, v in data_pairs(url))
-    return text if len(text) <= limit else text[: limit - 1] + "…"

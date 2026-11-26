@@ -28,8 +28,8 @@ class Grant:
     """Each read kept apart from its write (2026-11-26: "one is read the other is write action"): opening a
     site's pages isn't typing on it, saving a draft isn't sending, adding an event isn't changing one."""
 
-    open: set[str] = field(default_factory=set)  # open its pages (no data in the address)
-    type: set[str] = field(default_factory=set)  # type and fill in forms there, and addresses carrying data; opens too
+    open: set[str] = field(default_factory=set)  # open its home page without asking
+    type: set[str] = field(default_factory=set)  # type and fill in forms there; opens too
     search: bool = False  # web searches
     email: set[str] = field(default_factory=set)  # who it may send email to (and invite)
     drafts: bool = False  # save drafts in their own mailbox, to anyone: nothing goes out

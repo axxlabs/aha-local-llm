@@ -15,7 +15,6 @@ from dataclasses import dataclass
 
 from .. import messages
 from ..approvals import Field
-from . import addresses
 from .gate import Action
 from .urls import check_url
 
@@ -207,12 +206,10 @@ def classify(name: str, args: dict, page_site: str = "", labels: list[str] | Non
 
 
 def open_action(url: str) -> Action:
-    """Opening an address: blocked, a search engine's results page (a search), or an open."""
+    """Opening an address: blocked, or an open (the gate decides which opens run, SPEC §5.2 rule 7)."""
     site, why = check_url(url)
     if why:
         return Action("block", reason=why)
-    if addresses.is_search(url):
-        return Action("search", site or "", url)
     return Action("open", site or "", url)
 
 
@@ -225,8 +222,6 @@ class Form:
         """The approved values, placed back into the tool's arguments."""
         if name in TYPING:
             return TYPING[name].apply(args, values)
-        if opens(name, args):
-            return {**args, "url": values[0].strip()}
         return json.loads(values[0])
 
 
@@ -242,20 +237,4 @@ def form_for(name: str, args: dict, site: str, signer: str = "") -> Form:
                 if f.label == "Text" or MESSAGE_BOX.search(f.label):
                     f.value = messages.signed(f.value, signer, medium="chat")
         return form
-    if opens(name, args):
-        return open_form(str(args.get("url", "")))
     return Form(f"Run “{name}”{where}?", [Field("Arguments", json.dumps(args, ensure_ascii=False))])
-
-
-def open_form(url: str, data: bool = False) -> Form:
-    """The card for opening an address; with what it sends when it carries data (SPEC §5.2 rule 7). An address the
-    model made up never gets here: it's refused (tools/guard.open_address)."""
-    site, _ = check_url(url)
-    if data:
-        return Form(
-            f"Open this address? It sends what's in it to {site}",
-            [Field("Address", url), Field("It sends", addresses.describe(url), "info")],
-        )
-    if addresses.is_search(url):
-        return Form(f"Search {site} for this?", [Field("Address", url)])
-    return Form(f"Open {site}?", [Field("Address", url)])

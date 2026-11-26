@@ -15,7 +15,7 @@ from __future__ import annotations
 from ..approvals import KINDS, Decision, Field
 from ..items import Image
 from ..policy import addresses
-from ..policy.browser import open_action, open_form
+from ..policy.browser import open_action
 from ..policy.gate import Action, Facts, Verdict, decide, explain
 from ..policy.urls import check_url
 from . import trusted
@@ -29,7 +29,6 @@ def facts(ctx: ToolContext) -> Facts:
         trusted=set(trusted.sites(ctx.account)) if ctx.account is not None else set(),
         shown=ctx.task.seen_urls,
         opened=ctx.task.opened_sites,
-        allow_all_sites=ctx.config.allow_all_sites,
         granted=ctx.task.grant,
     )
 
@@ -111,26 +110,23 @@ def allowed_note(kind: str, title: str, fields: list[Field]) -> str:
 
 
 async def open_address(ctx: ToolContext, url: str, tool: str) -> tuple[str, Action, ToolResult | None]:
-    """Opening an address, in the browser or by fetch_url, through the gate (SPEC §5.2 rules 5–7): the address to
-    open (as the person may have changed it on the card) and its action, or the result to return instead."""
+    """Opening an address, in the browser or by fetch_url, through the gate (SPEC §5.2 rule 7): its action, and the
+    result to return instead when it doesn't open."""
     action = open_action(url)
     verdict = check(ctx, action, tool)
     if verdict.outcome == "block":
         return url, action, blocked(verdict.why)
-    # Only addresses it has (SPEC §5.2 "Made-up addresses"): a site's home page, a link it was shown, one the person
-    # sent, a search. Seen: a tracking page's address written from memory, a 404, and the task given up.
-    if addresses.made_up(url, ctx.task.seen_urls):
-        return url, action, ToolResult(made_up(url), error=True)
+    if verdict.outcome == "refuse":
+        return url, action, ToolResult(SEARCH_INSTEAD if verdict.why == "search" else made_up(url), error=True)
     if verdict.outcome == "card":
-        form = open_form(url, data=verdict.why.startswith("data"))
-        decision, refused = await ask(ctx, "action", form.title, form.fields, why=explain(verdict.why, action.site))
+        fields = [Field("Address", url, "info")]
+        _, refused = await ask(ctx, "action", f"Open {action.site}?", fields, why=explain(verdict.why, action.site))
         if refused:
             return url, action, refused
-        url = decision.values[0].strip()
-        action = open_action(url)  # what the person approved, checked again
-        if action.kind == "block":
-            return url, action, blocked(action.reason)
     return url, action, None
+
+
+SEARCH_INSTEAD = "Not opened: that's a search engine's results page. Search with web_search instead."
 
 
 def made_up(url: str) -> str:

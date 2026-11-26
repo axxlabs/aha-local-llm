@@ -17,16 +17,12 @@ def test_the_gate_runs_what_was_allowed_and_nothing_else():
     g = Grant(open={"linkedin.com"}, type={"thefork.co.uk"}, search=True, email={"sam@example.com"}, calendar_add=True)
     f = Facts(granted=g)
     assert decide(Action("type", site="thefork.co.uk"), f).why == "granted"
-    assert decide(Action("open", site="thefork.co.uk", url="https://thefork.co.uk/?name=Fe"), f).why == "granted"
-    assert decide(Action("open", site="thefork.co.uk", url="https://thefork.co.uk/r/1"), f).why == "granted"
+    assert decide(Action("open", site="thefork.co.uk", url="https://thefork.co.uk/"), f).why == "granted"
     assert decide(Action("type", site="opentable.com"), f).outcome == "card"
-    # Opening allowed is reading only: no typing there, and no address that carries data to it.
-    assert decide(Action("open", site="linkedin.com", url="https://linkedin.com/in/sam"), f).why == "granted"
+    # Opening allowed is reading only: no typing there.
+    assert decide(Action("open", site="linkedin.com", url="https://linkedin.com/"), f).why == "granted"
     assert decide(Action("type", site="linkedin.com"), f).outcome == "card"
-    assert decide(Action("open", site="linkedin.com", url="https://linkedin.com/?q=Fe"), f).outcome == "card"
-    closed = Facts(allow_all_sites=False, granted=g)
-    assert decide(Action("open", site="linkedin.com", url="https://linkedin.com/"), closed).why == "granted"
-    assert decide(Action("open", site="bbc.co.uk", url="https://bbc.co.uk/"), closed).outcome == "card"
+    assert decide(Action("open", site="bbc.co.uk", url="https://bbc.co.uk/"), f).outcome == "card"
     assert decide(Action("search"), f).why == "granted"
     email = lambda *to: Action("send", what="email", to=to)  # noqa: E731
     assert decide(email("sam@example.com"), f).why == "granted"

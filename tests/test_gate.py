@@ -16,8 +16,6 @@ def test_every_card_says_why_in_code():
         (Action("type", "waitrose.com"), plain, "type"),
         (Action("search", "google.com", "https://www.google.com/search?q=x"), plain, "search"),
         (Action("open", "x.com", "https://x.com/"), plain, "open"),
-        (Action("open", "x.com", "https://x.com/?email=a@b.com"), plain, "data"),
-        (Action("open", "x.com", "https://x.com/"), Facts(allow_all_sites=False), "new_site"),
         (Action("other", "x.com"), plain, "other"),
     ]
     for action, facts, why in cases:
@@ -64,7 +62,7 @@ def test_what_counts_as_a_made_up_address():
     assert addresses.made_up(guessed, seen)
     assert not addresses.made_up("https://www.sevenrooms.com/direct/cancel-reservation/ahNzfX?lang=en", seen)
     assert not addresses.made_up("https://www.sevenrooms.com/", seen)  # a home page is fine
-    assert not addresses.made_up("https://www.google.com/search?q=flat+iron", seen)  # a search
+    assert addresses.made_up("https://www.google.com/search?q=flat+iron", seen)  # web_search does searches
     assert addresses.home(guessed) == "https://www.sevenrooms.com/"
 
 

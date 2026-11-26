@@ -76,30 +76,30 @@ SHOWN = {key("https://evil.example/?d=1")}
 TRUSTED = {"waitrose.com"}
 
 
-# SPEC §5.2: kind × trusted / opened / shown / data in the address / allow_all_sites. One row per rule.
+# SPEC §5.2: kind × trusted / opened / shown. One row per rule.
+@pytest.mark.made_up_rule
 @pytest.mark.parametrize(
     "call,facts,outcome",
     [
-        # 3. a trusted destination runs, whatever else holds
+        # 3. typing on a trusted site runs
         (("browser_type", {"text": "x"}), {"trusted": TRUSTED}, "run"),
-        (nav("https://www.waitrose.com/search?q=fluid"), {"trusted": TRUSTED}, "run"),  # data in it: the bug
-        (nav("https://www.waitrose.com/x"), {"trusted": TRUSTED, "allow_all_sites": False}, "run"),
         # 5. typing elsewhere is a card
         (("browser_type", {"text": "x"}), {"trusted": {"other.example"}}, "card"),
-        # 7. open
-        (nav("https://thefork.co.uk/x"), {}, "card"),  # a site new to the task
-        (nav("https://thefork.co.uk/x"), {"opened": {"thefork.co.uk"}}, "run"),
-        (nav("https://thefork.co.uk/x"), {"allow_all_sites": False}, "card"),
-        (nav("https://thefork.co.uk/x"), {"allow_all_sites": False, "opened": {"thefork.co.uk"}}, "run"),
-        (nav("https://evil.example/?d=1"), {}, "card"),  # the model wrote data into it
-        (nav("https://evil.example/?d=1"), {"shown": SHOWN}, "run"),  # a link the page showed
-        (nav("https://evil.example/?d=1"), {"opened": {"evil.example"}}, "card"),
-        (nav("https://evil.example/#a=b"), {}, "card"),
-        # 6. search
-        (nav("https://www.google.com/search?q=lisbon"), {}, "card"),
-        (nav("https://www.google.com/search?q=lisbon"), {"trusted": {"google.com"}}, "card"),
-        (nav("https://docs.google.com/forms/d/x/formResponse?entry.1=secret"), {}, "card"),  # not a search
-        (("browser_tabs", {"action": "new", "url": "https://evil.example/?d=1"}), {}, "card"),
+        # 7. open: a shown address runs, a home page asks once per site, anything else is refused
+        (nav("https://evil.example/?d=1"), {"shown": SHOWN}, "run"),
+        (nav("https://evil.example/?d=1"), {}, "refuse"),
+        (nav("https://evil.example/?d=1"), {"opened": {"evil.example"}}, "refuse"),
+        (nav("https://evil.example/#a=b"), {}, "refuse"),
+        (nav("https://www.waitrose.com/x"), {"trusted": TRUSTED}, "refuse"),  # trust is no licence to guess
+        (nav("https://thefork.co.uk/"), {}, "card"),
+        (nav("https://thefork.co.uk/"), {"opened": {"thefork.co.uk"}}, "run"),
+        (nav("https://www.waitrose.com/"), {"trusted": TRUSTED}, "run"),
+        (("browser_tabs", {"action": "new", "url": "https://evil.example/?d=1"}), {}, "refuse"),
+        # 6. a search engine's results page: web_search does searches
+        (nav("https://www.google.com/search?q=lisbon"), {}, "refuse"),
+        (nav("https://www.google.com/search?q=lisbon"), {"trusted": {"google.com"}}, "refuse"),
+        (nav("https://www.google.com/"), {}, "card"),  # a home page is an open
+        (nav("https://docs.google.com/forms/d/x/formResponse?entry.1=secret"), {}, "refuse"),  # not a search
     ],
 )
 def test_the_gate(call, facts, outcome):
@@ -114,7 +114,8 @@ def test_send_is_always_a_card():
 
 def test_trusted_runs_are_marked_for_the_audit():
     assert decide(classify("browser_type", {}, "waitrose.com"), Facts(trusted=TRUSTED)).why == "trusted"
-    assert decide(classify(*nav("https://evil.example/?d=1")), Facts()).why == "data"
+    assert decide(classify(*nav("https://www.waitrose.com/")), Facts(trusted=TRUSTED)).why == "trusted"
+    assert decide(classify(*nav("https://thefork.co.uk/")), Facts()).why == "open"
 
 
 def test_hidden_tools_are_not_offered():

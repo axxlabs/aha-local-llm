@@ -172,7 +172,7 @@ async def ran(session, name: str, args: dict, action, ctx: ToolContext) -> ToolR
     words either way (SPEC §5.1)."""
     what = entered(name, args, ctx)  # before the page changes: its labels are this page's
     result = await run_approved(session, name, args, ctx)
-    if action.kind in ("open", "search"):
+    if action.kind == "open":
         if not result.error:
             guard.opened(ctx, str(args.get("url", "")))
         return result
