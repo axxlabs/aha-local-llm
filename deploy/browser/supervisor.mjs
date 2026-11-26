@@ -25,7 +25,7 @@ const freePorts = [];
 let nextPort = FIRST_PORT;
 
 // The browsers never open aha's own services: the search, the model, this supervisor, each other.
-const BLOCKED = ["http://aha-search:8080", "http://aha-llm:8081", "http://aha-browser:8930"]
+const BLOCKED = ["http://aha-llm:8081", "http://aha-browser:8930"]
   .concat(Array.from({ length: 32 }, (_, i) => `http://aha-browser:${FIRST_PORT + i}`))
   .join(";");
 

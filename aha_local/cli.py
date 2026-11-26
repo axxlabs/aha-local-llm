@@ -30,11 +30,13 @@ UNITS = [
     "aha-internal.network",
     "aha-egress.network",
     "aha-llm.container",
-    "aha-search.container",
     "aha-browser.container",
     "aha-agent.container",
 ]
-SERVICES = ["aha-agent", "aha-browser", "aha-search", "aha-llm"]
+SERVICES = ["aha-agent", "aha-browser", "aha-llm"]
+# Units of earlier versions, stopped and removed at install: the search proxy (SearXNG) went when web_search came
+# to read Google's own page in the browser (SPEC §3.4 "Web search").
+OLD_UNITS = {"aha-search.container": "aha-search.service"}
 BROWSER_IMAGE = "localhost/aha-browser:latest"
 PROFILES_KEY_CRED = HOME_CONFIG.parent / "profiles-key.cred"
 PROFILES_ENC = HOME_DATA / "browser-profiles.enc"  # each person's browser profile, encrypted (SPEC §3.4)
@@ -246,13 +248,7 @@ def render_units(config: Config) -> dict[str, str]:
         # Mount the socket's folder, not the socket: a restarted gateway makes a new socket file.
         folder = str(Path(config.gateway_url[5:]).parent)
         gateway_volume = f"Volume={folder}:{folder}"
-    secret_file = HOME_DATA / "keys" / "search-secret"
-    if not secret_file.exists():
-        secret_file.parent.mkdir(parents=True, exist_ok=True)
-        secret_file.write_text(os.urandom(32).hex())
-        secret_file.chmod(0o600)
     values = {
-        "@SEARCH_SECRET@": secret_file.read_text().strip(),
         "@DATA@": str(HOME_DATA),
         "@CONFIG@": str(HOME_CONFIG),
         "@MODELS@": str(config.models_dir),
@@ -345,6 +341,10 @@ def install() -> None:
     if OLD_PROFILES_UNIT.exists():  # the host mount of an earlier version: the browser mounts them itself now
         subprocess.run(["systemctl", "--user", "stop", "aha-profiles.service"], check=False)
         OLD_PROFILES_UNIT.unlink()
+    for unit, service in OLD_UNITS.items():
+        if (QUADLET_DIR / unit).exists():
+            subprocess.run(["systemctl", "--user", "stop", service], check=False)
+            (QUADLET_DIR / unit).unlink()
     for name, text in render_units(config).items():
         (QUADLET_DIR / name).write_text(text)
     BROWSER_CONFIG.write_text(render_browser_config(config))
@@ -355,7 +355,7 @@ def install() -> None:
 
 def cmd_uninstall(a) -> None:
     subprocess.run(["systemctl", "--user", "stop", *[f"{s}.service" for s in SERVICES]], check=False)
-    for unit in UNITS:
+    for unit in [*UNITS, *OLD_UNITS]:
         (QUADLET_DIR / unit).unlink(missing_ok=True)
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
     print(f"Removed the units. Your data stays in {HOME_DATA}.")

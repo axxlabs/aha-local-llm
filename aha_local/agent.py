@@ -645,7 +645,7 @@ class Agent:
         retried: set[str] = set()  # the checks that already sent a draft back (SPEC §3.5.1): once each
         can_sign_in = "browser_login" in self.registry.names()
         # Where numbers in the answer may come from: what the person said or saved, earlier answers, and pages
-        # opened in this task. Search snippets don't count (SPEC §3.5).
+        # opened in this task, Google's results page (web_search) among them (SPEC §3.5).
         conv = account.load_context()
         sources = [
             text,
@@ -732,7 +732,7 @@ class Agent:
                         "error": result.error,
                     }
                 )
-                if call.name not in UNSOURCED_TOOLS and not result.error:
+                if not result.error:
                     sources.append(result.text)
                 task.append(
                     {
@@ -758,9 +758,6 @@ def after_task(prompt: list[dict], answer: str, question: str) -> list[dict]:
     """A question asked at the end of the task's own last request (its title, a summary): the model server's
     cached prompt still matches, so it costs only the new words (SPEC §3.2 "Cache slots")."""
     return [*prompt, {"role": "assistant", "content": answer}, {"role": "user", "content": question}]
-
-
-UNSOURCED_TOOLS = {"web_search"}  # snippets are leads, not sources
 
 
 def finish(answer: str, sources: list[str], retried: bool = False, today: dt.date | None = None) -> tuple[str, bool]:

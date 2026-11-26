@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
-"""web_search (SearXNG) and fetch_url (SPEC §3.4)."""
+"""web_search (Google's results page, in the browser) and fetch_url (SPEC §3.4)."""
 
 from __future__ import annotations
 
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 import trafilatura
@@ -16,7 +16,6 @@ from ..policy.urls import check_url, resolves_publicly
 from . import guard
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
-MAX_RESULTS = 6
 MAX_PAGE_BYTES = 5_000_000
 MAX_PAGE_CHARS = 12_000
 MAX_REDIRECTS = 5
@@ -39,31 +38,36 @@ async def gated_open(ctx: ToolContext, url: str) -> tuple[str, ToolResult | None
 
 
 async def web_search(args: dict, ctx: ToolContext) -> ToolResult:
-    query = str(args.get("query", "")).strip()
+    """Google's own results page, read in the person's browser (SPEC §3.4 "Web search"): its answer box first
+    (directions, weather, opening hours, prices…), then the results. A list of links from a search proxy never
+    had those (seen: a drive time took three cards and a typed search on google.com)."""
+    query = " ".join(str(args.get("query", "")).split())
     if not query:
         return ToolResult("Give a search query.", error=True)
-    verdict = guard.check(ctx, Action("search"), "web_search")
-    if verdict.outcome == "card":  # SPEC §5.2 rule 6
+    if ctx.browser is None:
+        return ToolResult("Searching needs the browser, which isn't available right now.", error=True)
+    verdict = guard.check(ctx, Action("search", "google.com", google_url(query)), "web_search")
+    if verdict.outcome == "block":
+        return guard.blocked(verdict.why)
+    if verdict.outcome == "card":  # SPEC §5.2 rule 6: the words that would go out, shown first
         decision, refused = await guard.ask(
-            ctx, "action", "Search the web for this?", [Field("Search", query)], why=explain(verdict.why)
+            ctx, "action", "Search Google for this?", [Field("Search", query)], why=explain(verdict.why)
         )
         if refused:
             return refused
-        query = decision.values[0].strip()
-    async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.get(f"{ctx.config.search_url}/search", params={"q": query, "format": "json"})
-        r.raise_for_status()
-        results = r.json().get("results", [])[:MAX_RESULTS]
-    if not results:
-        return ToolResult(f"No results for: {query}")
-    lines = []
-    for i, x in enumerate(results, 1):
-        date = f" ({x['publishedDate'][:10]})" if x.get("publishedDate") else ""
-        snippet = " ".join((x.get("content") or "").split())[:300]
-        lines.append(f"{i}. {x.get('title', '').strip()}{date}\n   {x.get('url')}\n   {snippet}")
-    return ToolResult(
-        "Search results (snippets can be old or cut off; open a page before quoting numbers):\n" + "\n".join(lines)
-    )
+        query = " ".join(decision.values[0].split()) or query
+    from .browser_page import call_with_snapshot
+
+    url = google_url(query)
+    result = await call_with_snapshot(ctx.browser, "browser_navigate", {"url": url}, ctx)
+    if not result.error:
+        guard.opened(ctx, url)
+    result.text = f"Google's results for “{query}” (its answer box, when it has one, comes first):\n{result.text}"
+    return result
+
+
+def google_url(query: str) -> str:
+    return "https://www.google.com/search?" + urlencode({"q": query})
 
 
 class Fetched:
@@ -152,8 +156,9 @@ def register(reg: Registry) -> None:
     reg.add(
         Tool(
             "web_search",
-            "Search the web. Returns titles, links, dates and short snippets. Snippets are "
-            "often old: open the page with fetch_url before relying on a number or a fact.",
+            "Search the web with Google. Returns Google's results page: its answer box first when it has one "
+            "(directions and travel times, weather, opening hours, prices, flights, scores, conversions), then "
+            "the results with their links. Click a result or open it with fetch_url for the details.",
             params(["query"], query=string("Specific search words, e.g. 'Flat Iron Kings Cross opening hours'")),
             web_search,
         )

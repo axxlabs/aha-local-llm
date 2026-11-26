@@ -33,8 +33,8 @@ LOG = b"AHAL1"
 NONCE = 24
 KEY_BYTES = 32
 FORMAT_FILE = "format.json"
-# Not encrypted (SPEC §3.8.1): the format marker, the socket, public tool hashes, the SearXNG secret the host's
-# `aha install` writes into a unit file, exports (the person's own plaintext copy), temporary files.
+# Not encrypted (SPEC §3.8.1): the format marker, the socket, public tool hashes, an earlier version's SearXNG
+# secret (`aha install` wrote it into a unit file), exports (the person's own plaintext copy), temporary files.
 PLAIN = {FORMAT_FILE, "agent.sock", "browser/pinned-tools.json", "keys/search-secret"}
 PLAIN_DIRS = ("exports/",)
 LOGS = (".jsonl",)

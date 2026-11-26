@@ -29,32 +29,31 @@ def test_plain_counts_and_years_are_not_checked():
     assert checks.numbers_in("2 people on 27 Nov 2026, 3 options") == []
 
 
-async def test_snippet_numbers_are_flagged_but_page_numbers_are_not(agent, llm, chat, registry, monkeypatch):
+async def test_numbers_read_on_googles_page_count_but_others_are_flagged(agent, llm, chat, registry, monkeypatch):
+    """web_search is Google's own results page, read in the browser (SPEC §3.4): its answer box is a page read.
+    A number no page showed is still flagged."""
     from aha_local.tools import web
     from aha_local.tools.registry import ToolResult
 
     async def search(args, ctx):
-        return ToolResult("1. Visit | British Museum (snippet: open 10:00–17:00)")
-
-    async def fetch(args, ctx):
-        return ToolResult("British Museum. Open daily 10:00–17:00, Fridays until 20:30.", kind="page")
+        return ToolResult(
+            "Google's results for “british museum hours”:\nBritish Museum · Open ⋅ Closes 17:00", kind="page"
+        )
 
     monkeypatch.setattr(web, "web_search", search)
-    monkeypatch.setattr(web, "fetch_url", fetch)
     web.register(registry)
 
     llm.call("web_search", query="british museum hours")
-    llm.answer("It opens at **10:00** and closes at 17:00.")
-    llm.answer("It opens at **10:00** and closes at 17:00.")  # after the check's retry, the model insists
-    await say(agent, "when does the British Museum open?")
+    llm.answer("It closes at **17:00** today.")
+    await say(agent, "when does the British Museum close?")
     await settle(agent)
-    assert chat.texts()[-1].startswith("It opens at **10:00** and closes at 17:00.\n\n⚠️ _Not confirmed on a page")
+    assert chat.texts()[-1] == "It closes at **17:00** today."
 
-    llm.call("fetch_url", url="https://britishmuseum.org/visit")
     llm.answer("Fridays it's open until 20:30.")
+    llm.answer("Fridays it's open until 20:30.")  # after the check's retry, the model insists
     await say(agent, "and on Fridays?")
     await settle(agent)
-    assert chat.texts()[-1] == "Fridays it's open until 20:30."
+    assert chat.texts()[-1].startswith("Fridays it's open until 20:30.\n\n⚠️ _Not confirmed on a page")
 
 
 async def test_an_earlier_unconfirmed_answer_is_not_a_source(agent, llm, chat):

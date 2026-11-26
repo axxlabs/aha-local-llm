@@ -227,6 +227,6 @@ def test_every_image_is_pinned_by_digest():
     for f in [*(deploy / "quadlet").glob("*.container"), deploy / "Containerfile", deploy / "browser/Containerfile"]:
         refs += re.findall(r"^(?:Image=|FROM |COPY --from=)(\S+)", f.read_text(), re.M)
     refs = [r for r in refs if r not in ("@AGENT_IMAGE@", "@BROWSER_IMAGE@")]  # built locally from pinned bases
-    assert len(refs) >= 5
+    assert len(refs) >= 4  # the model server, the agent's and the browser's bases
     for r in refs:
         assert re.search(r"@sha256:[0-9a-f]{64}$", r), r

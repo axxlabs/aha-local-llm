@@ -1,8 +1,8 @@
 # The agent: the only container on both networks. Holds the data volume; no other host folders.
 [Unit]
 Description=aha agent
-Wants=aha-llm.service aha-search.service aha-browser.service
-After=aha-llm.service aha-search.service aha-browser.service
+Wants=aha-llm.service aha-browser.service
+After=aha-llm.service aha-browser.service
 
 [Container]
 ContainerName=aha-agent
