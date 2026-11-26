@@ -107,7 +107,8 @@
       "ts",
       "from",
       "text",
-      "new?"
+      "new?",
+      "waiting?"
     ],
     "approval": [
       "seq",
@@ -223,8 +224,5 @@
       "ok",
       "error"
     ]
-  },
-  "rules": {
-    "fold_break_seconds": 7200
   }
 }

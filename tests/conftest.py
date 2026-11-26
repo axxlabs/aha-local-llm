@@ -107,6 +107,7 @@ class Chat:
         self.typed: list[bool] = []  # typing on/off, in order
         self.states: list[tuple[str, str]] = []
         self.titles: list[tuple[int, str]] = []
+        self.waiting: list[int] = []  # answers the topic call said wait for the person
         self.tools: list[str] = []  # the tools' labels its Details line shows, as they happened (SPEC §7.4)
         self.events: list[dict] = []  # the records sent live, for the Details line
         self.details = 0  # Details lines
@@ -126,8 +127,10 @@ class Chat:
         if event.get("kind") == "tool" and event.get("label") and (not self.tools or self.tools[-1] != event["label"]):
             self.tools.append(event["label"])  # what the Details line says it used, in order
 
-    async def title(self, account, start, text, new=False) -> None:
+    async def title(self, account, start, text, new=False, waiting=0) -> None:
         self.titles.append((start, text) if not new else (start, text, "new"))
+        if waiting:
+            self.waiting.append(waiting)
 
     async def text(self, account, text) -> None:
         await self.message(account, text)

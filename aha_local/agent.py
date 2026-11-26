@@ -59,7 +59,7 @@ class AgentOut(Protocol):
         self, account: Account, text: str, image: Image | None = None, open: str = "", task: dict | None = None
     ) -> None: ...
     async def cut(self, account: Account) -> None: ...
-    async def title(self, account: Account, start: int, text: str, new: bool = False) -> None: ...
+    async def title(self, account: Account, start: int, text: str, new: bool = False, waiting: int = 0) -> None: ...
     async def steps(self, account: Account) -> None: ...  # the request's Details line (SPEC §7.4 "Details")
     async def step(self, account: Account, event: dict) -> None: ...  # one of its records, as it happens
     async def typing(self, account: Account, on: bool, queued: bool = False) -> None: ...
@@ -522,9 +522,11 @@ class Agent:
                     return  # nothing to tell yet: say nothing, keep the chat clean
                 await self.task_note(account, result, job.start)
                 answer, noted = result.as_text(), True
+            answered = 0  # the answer's chat item: the topic call says whether it waits for the person
             if answer and not noted:
-                # Unfinished stays unfolded after a break (SPEC §7.4 "Folding"): a task that stopped, or a question.
-                await self.send(account, answer, open="stopped" if stopped else "asks" if folding.asks(answer) else "")
+                # Unfinished stays unfolded after a break (SPEC §7.4 "Folding"): a task that stopped.
+                await self.send(account, answer, open="stopped" if stopped else "")
+                answered = account.seq
             account.transcript({"kind": "answer", "text": answer})
             context.record_turn(account, text, answer, done)
             # The task's last request, still cached in the person's slot: the topic's title and memory entry are
@@ -532,7 +534,7 @@ class Agent:
             prompt, self.session(account).last_prompt = self.session(account).last_prompt, None
             if answer:
                 titled = not stopped and not noted  # a note keeps the task's title; its memory entry is still asked
-                await self._topic(account, answer, prompt, asked_at, text, titled=titled, began=began)
+                await self._topic(account, answer, prompt, asked_at, text, titled, began, answered)
         finally:
             await turn.__aexit__(None, None, None)
 
@@ -545,23 +547,26 @@ class Agent:
         asked: str = "",
         titled: bool = True,
         began: float = 0,
+        answered: int = 0,
     ) -> None:
         """Name the topic going on, for when the app folds it (SPEC §7.4 "Folding"), and write its memory entry,
         what the model will know of it once its messages leave the context (§5.4). `titled`: False for a task that
-        stopped, which stays unfolded (§7.4) but still leaves its memory.
+        stopped, which stays unfolded (§7.4) but still leaves its memory. `answered`: the answer's chat item, kept
+        open when the model says it waits for the person's reply.
 
         Asked at the end of the task's own last request, so the model server's cached prompt still matches and
         it costs only the new words; the question and the reply are never part of the conversation."""
         asked = asked.split("\n\n", 1)[0]  # the message that started the task, not later notes
         tz = dates.tz(self.config)
         items = account.recent_items()
-        found = folding.segment_start(items, tz)
+        found = folding.segment_start(items)
         if prompt is None:
             return
         # No chat items (a task without the app): one topic, since the first turn kept.
         first_turn = min((turn_time(t) for t in account.load_context()["turns"]), default=began)
         start = found or (0, min(first_turn, began))
-        since = dt.datetime.fromtimestamp(start[1], tz).strftime("%H:%M")
+        began_at = dt.datetime.fromtimestamp(start[1], tz)
+        since = began_at.strftime("%H:%M" if began_at.date() == dates.now(self.config).date() else "%d/%m/%Y %H:%M")
         request = after_task(prompt, answer, folding.ask(since, asked))
         try:
             reply = await self.llm.chat(
@@ -569,13 +574,14 @@ class Agent:
             )
         except ModelUnavailable:
             return
-        new, title, entry = folding.parse(reply.content or "")
-        new = (new or (bool(asked_at) and folding.says_new(asked))) and asked_at > start[0]
+        topic = folding.parse(reply.content or "")
+        new, title, entry = topic.new and asked_at > start[0], topic.title, topic.memory
+        waiting = answered if topic.waiting else 0
         # A new subject: a new topic starts at the person's message (SPEC §7.4).
         first = (asked_at, next((it["ts"] for it in items if it.get("seq") == asked_at), start[1])) if new else start
         context.save_topic(account, first[0], first[1], title, entry)
-        if found and (new or (titled and title)):  # where a new topic starts is said even for a task that stopped
-            await self.out.title(account, first[0], title or "", new=new)
+        if found and (new or (titled and title) or waiting):  # a new topic is said even for a task that stopped
+            await self.out.title(account, first[0], title or "", new=new, waiting=waiting)
 
     async def solve(
         self,
@@ -619,7 +625,7 @@ class Agent:
         # The browser is reached only through this account's own context (SPEC §3.4).
         browser = self.browser.for_account(account.id) if self.browser else None
         approvals = _Pausing(self.approvals, self.llm, account.address)  # a card frees the model meanwhile
-        topic = folding.segment_start(account.recent_items(), dates.tz(self.config))  # the topic going on (§4)
+        topic = folding.segment_start(account.recent_items())  # the topic going on (§4)
         state = TaskState(
             grant=grant if grant is not None else Grant(),
             done=done if done is not None else [],

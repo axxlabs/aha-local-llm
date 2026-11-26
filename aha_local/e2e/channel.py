@@ -221,10 +221,12 @@ class Channel:
         if any(it.get("t") in folding.SHOWN and it["seq"] > last_cut for it in items):
             await self.publish(account, {"t": "cut"})
 
-    async def title(self, account: Account, start: int, text: str, new: bool = False) -> None:
+    async def title(self, account: Account, start: int, text: str, new: bool = False, waiting: int = 0) -> None:
         """The title of the conversation since item `start`, shown when the app folds it (SPEC §7.4); `new`: a new
-        subject starts there, so the part before it folds now."""
-        await self.publish(account, {"t": "title", "from": start, "text": text, **({"new": True} if new else {})})
+        subject starts there, so the part before it folds now; `waiting`: Aha!'s message (its seq) that waits for
+        the person's reply, so it stays open."""
+        extra = {**({"new": True} if new else {}), **({"waiting": waiting} if waiting else {})}
+        await self.publish(account, {"t": "title", "from": start, "text": text, **extra})
 
     async def steps(self, account: Account) -> None:
         """The request's Details line (SPEC §7.4 "Details"): a chat item, no push, once per task, where its work

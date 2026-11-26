@@ -504,8 +504,6 @@ async def test_settings_show_and_disconnect_the_persons_email(tmp_path, monkeypa
 
 def test_collapse_publishes_a_cut_and_the_next_part_starts_after_it():
     """[collapse] in the app: a cut item for every device; the computer's titles start after it (SPEC §7.4)."""
-    from zoneinfo import ZoneInfo
-
     from aha_local import folding
 
     items = [
@@ -513,9 +511,9 @@ def test_collapse_publishes_a_cut_and_the_next_part_starts_after_it():
         {"t": "msg", "seq": 2, "ts": 1060},
         {"t": "cut", "seq": 3, "ts": 1100},
     ]
-    assert folding.segment_start(items, ZoneInfo("UTC")) is None  # nothing going on after the cut
+    assert folding.segment_start(items) is None  # nothing going on after the cut
     items.append({"t": "msg", "seq": 4, "ts": 1200})
-    assert folding.segment_start(items, ZoneInfo("UTC")) == (4, 1200)
+    assert folding.segment_start(items) == (4, 1200)
 
 
 async def test_a_fold_with_nothing_open_since_the_last_one_is_skipped(tmp_path):
