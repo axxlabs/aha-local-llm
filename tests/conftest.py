@@ -108,12 +108,15 @@ class Chat:
         self.states: list[tuple[str, str]] = []
         self.titles: list[tuple[int, str]] = []
         self.waiting: list[int] = []  # answers the topic call said wait for the person
+        self.acts: list[str] = []  # what requests did, in the chat as it happened
+        self.order: list[tuple[str, str]] = []  # messages, cards and actions, as they reached the chat
         self.tools: list[str] = []  # the tools' labels its Details line shows, as they happened (SPEC §7.4)
         self.events: list[dict] = []  # the records sent live, for the Details line
         self.details = 0  # Details lines
         self.cuts: list[int] = []  # the folds Aha! made (a background task's note starts a topic)
 
     async def message(self, account, text, image=None, open="", task=None, record=None, run="") -> None:
+        self.order.append(("msg", text))
         self.sent.append(
             SimpleNamespace(
                 text=text, buttons=[], image=image, card=None, open=open, task=task, record=record or [], run=run
@@ -122,6 +125,10 @@ class Chat:
 
     async def cut(self, account) -> None:
         self.cuts.append(len(self.sent))  # where it folded: before the next message
+
+    async def act(self, account, text) -> None:
+        self.acts.append(text)
+        self.order.append(("act", text))
 
     async def steps(self, account) -> None:
         self.details += 1
@@ -143,6 +150,7 @@ class Chat:
         self.typed.append("queued" if on and queued else on)
 
     async def card(self, account, card) -> None:
+        self.order.append(("card", card["title"]))
         icon = "🧠" if card["kind"] in ("memory", "forget") else "✋"
         lines = [f"{icon} {card['title']}"] + [f"{f['label']}: {f['value']}" for f in card["fields"]]
         actions = ["yes", "edit", "no"] if len(card["buttons"]) == 3 else ["yes", "no"]

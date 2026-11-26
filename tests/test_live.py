@@ -30,9 +30,9 @@ async def test_a_requests_records_go_live_under_one_details_line(agent, llm, cha
     assert chat.texts() == ["Found it."]  # the answer is still a message of its own
 
 
-async def test_what_aha_did_comes_as_it_happens_and_the_answer_names_its_request(agent, llm, chat, accounts):
-    """SPEC §7.4 "What Aha! did": each action's line is in its tool record, live, before the answer; the answer
-    carries the request's id, so its box and its Details line find each other."""
+async def test_each_thing_done_is_in_the_chat_where_it_happened(agent, llm, chat, accounts):
+    """SPEC §7.4 "What Aha! did": each action is a chat item of its own, as it happens, between the cards and
+    messages around it, never moved to the end; reads aren't actions."""
 
     async def act(args, ctx):
         return ToolResult("done", did="Sent a message on whatsapp.com")
@@ -44,15 +44,18 @@ async def test_what_aha_did_comes_as_it_happens_and_the_answer_names_its_request
     agent.registry.add(Tool("look", "", params(), look))
     llm.call("look")
     llm.call("act")
+    llm.call("memory_add", text="Likes tea")
     llm.answer("Sent.")
     await say(agent, "message her")
+    card = await chat.next()
+    while card.card is None:
+        card = await chat.next()
+    await say(agent, "ok", button=card.buttons[0].id)
     await settle(agent)
-    tools = [e for e in chat.events if e["kind"] == "tool"]
-    assert "did" not in tools[0] and tools[1]["did"] == ["Sent a message on whatsapp.com"]  # reads aren't actions
-    answer = chat.sent[-1]
-    assert answer.text == "Sent." and answer.record == ["Sent a message on whatsapp.com"]
-    [tool] = [e for e in person(accounts).read_transcript() if e.get("kind") == "tool" and e.get("name") == "act"]
-    assert answer.run and answer.run == tool["task"]  # the request's records are tagged with it
+    [saved] = person(accounts).load_memory()
+    assert [k for k, _ in chat.order] == ["act", "card", "act", "msg"]
+    assert chat.acts == ["Sent a message on whatsapp.com", f"Saved [{saved['id']}]: Likes tea"]
+    assert chat.order[-1] == ("msg", "Sent.")
 
 
 async def test_a_plain_answer_has_its_details_too(agent, llm, chat):

@@ -209,6 +209,11 @@
       "cpu?",
       "mem?",
       "gpu?"
+    ],
+    "act": [
+      "seq",
+      "ts",
+      "text"
     ]
   },
   "pairing": {

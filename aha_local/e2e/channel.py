@@ -223,6 +223,11 @@ class Channel:
             item["task"] = task
         await self.publish(account, item, notify=True)
 
+    async def act(self, account: Account, text: str) -> None:
+        """One thing a request did, as it happened (SPEC §7.4 "What Aha! did"): a chat item of its own, where it
+        happened among the messages and cards, written by the code from the tool call, never by the model."""
+        await self.publish(account, {"t": "act", "text": text})
+
     async def cut(self, account: Account) -> None:
         """What's going on folds now, on every device, as with the person's [collapse] (SPEC §7.4 "Folding"). Not
         when nothing is open since the last cut: a background check folds before each run, and quiet ones would

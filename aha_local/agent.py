@@ -68,6 +68,7 @@ class AgentOut(Protocol):
     async def cut(self, account: Account) -> None: ...
     async def title(self, account: Account, start: int, text: str, new: bool = False, waiting: int = 0) -> None: ...
     async def steps(self, account: Account) -> None: ...  # the request's Details line (SPEC §7.4 "Details")
+    async def act(self, account: Account, text: str) -> None: ...  # one thing a request did, as it happens
     async def step(self, account: Account, event: dict) -> None: ...  # one of its records, as it happens
     async def typing(self, account: Account, on: bool, queued: bool = False) -> None: ...
     async def card(self, account: Account, card: dict) -> None: ...
@@ -709,10 +710,13 @@ class Agent:
                         "args": _short(call.arguments),
                         "result": result.text[:4000],
                         "error": result.error,
-                        # What it changed, as the record has it: the app's "what Aha! did" box, live (SPEC §7.4)
+                        # What it changed, as the record has it (SPEC §4 "What a request did")
                         **({"did": receipt(ctx.task.record[before:])} if len(ctx.task.record) > before else {}),
                     }
                 )
+                if not quiet:  # each thing it did, in the chat where it happened (SPEC §7.4 "What Aha! did")
+                    for line in receipt(ctx.task.record[before:]):
+                        await self.out.act(account, line)
                 task.append(
                     {
                         "role": "tool",
