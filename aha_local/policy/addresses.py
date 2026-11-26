@@ -27,9 +27,11 @@ SEARCH_PATHS = {"/", "/search", "/html", "/sp/search", "/do/search"}
 
 
 def is_search(url: str) -> bool:
-    """A search engine's own results page: opening it is a search, not an open (SPEC §5.2)."""
+    """A search engine's own results page: opening it is a search, not an open (SPEC §5.2). Only with words to
+    search for: its home page sends nothing, so it's an open (seen 2026-11-26: opening google.com asked "Search
+    google.com for this?" with nothing to search)."""
     k = key(url)
-    return k is not None and search_engine(k[0], k[1])
+    return k is not None and search_engine(k[0], k[1]) and bool(k[2] or k[3])
 
 
 def search_engine(host: str, path: str) -> bool:

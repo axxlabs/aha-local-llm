@@ -126,3 +126,15 @@ async def test_a_link_the_person_sent_is_theirs_but_a_checks_own_instructions_ar
         await settle(agent)
         result = [m["content"] for m in llm.requests[-1]["messages"] if m.get("role") == "tool"][-1]
         assert result.startswith(f"Not opened: {url}") is (job is not None)
+
+
+def test_a_search_engines_home_page_is_an_open_not_a_search():
+    """Seen 2026-11-26: opening google.com asked "Search google.com for this?" with nothing to search."""
+    from aha_local.policy.browser import open_form
+
+    assert not addresses.is_search("https://www.google.com")
+    assert not addresses.is_search("https://duckduckgo.com/")
+    assert addresses.is_search("https://www.google.com/search?q=drive+time")
+    assert addresses.is_search("https://duckduckgo.com/?q=foil")
+    assert open_form("https://www.google.com").title == "Open google.com?"
+    assert open_form("https://www.google.com/search?q=foil").title == "Search google.com for this?"
