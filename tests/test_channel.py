@@ -55,11 +55,7 @@ class FakeBrowser(actions.Browser):
     """What the person's browser keeps data for (the real one reads it from the browser)."""
 
     async def sites(self, account):
-        from aha_local.tools import signins
-
-        signed = signins.signed_in_sites(account)
-        names = self.agent.remembered.get(account.id, set()) | signed
-        return [{"site": s, "signed_in": s in signed} for s in sorted(names)]
+        return sorted(self.agent.remembered.get(account.id, set()))
 
     async def forget_site(self, account, site, via):
         from aha_local.tools import signins
@@ -315,14 +311,13 @@ async def test_settings_show_and_forget_what_the_browser_remembers(tmp_path):
     phone.inbox()
     acct = rig.accounts.find("Ana")
     rig.agent.remembered[acct.id] = {"waitrose.com", "news.example"}
-    signins.signed_in(acct, "waitrose.com", "waitrose.com")
     await phone.send({"t": "browser_request"})
     assert phone.inbox() == [
         {
             "t": "browser",
             "sites": [
-                {"site": "news.example", "signed_in": False, "trusted": False, "login_saved": False},
-                {"site": "waitrose.com", "signed_in": True, "trusted": False, "login_saved": False},
+                {"site": "news.example", "trusted": False, "login_saved": False},
+                {"site": "waitrose.com", "trusted": False, "login_saved": False},
             ],
         }
     ]
@@ -330,15 +325,10 @@ async def test_settings_show_and_forget_what_the_browser_remembers(tmp_path):
     await phone.send({"t": "browser_request"})
     sent = phone.inbox()[0]["sites"]
     assert sent[1]["login_saved"] and "pw-not-shown" not in json.dumps(sent) and "ana@" not in json.dumps(sent)
-    await phone.send({"t": "login_forget", "site": "waitrose.com"})  # Forget login: the sign-in stays
-    assert phone.inbox()[0]["sites"][1] == {
-        "site": "waitrose.com",
-        "signed_in": True,
-        "trusted": False,
-        "login_saved": False,
-    }
+    await phone.send({"t": "login_forget", "site": "waitrose.com"})  # the Login saved toggle: the site stays
+    assert phone.inbox()[0]["sites"][1] == {"site": "waitrose.com", "trusted": False, "login_saved": False}
     await phone.send({"t": "browser_forget", "site": "waitrose.com"})
-    left = [{"site": "news.example", "signed_in": False, "trusted": False, "login_saved": False}]
+    left = [{"site": "news.example", "trusted": False, "login_saved": False}]
     assert phone.inbox()[0]["sites"] == left
     await phone.send({"t": "browser_forget", "site": 5})  # malformed: nothing forgotten
     assert phone.inbox()[0]["sites"] == left
@@ -402,7 +392,7 @@ async def test_settings_trust_sites_and_forget_memories(tmp_path):
     acct = rig.accounts.find("Ana")
     await phone.send({"t": "browser_trust", "site": "www.waitrose.com", "trusted": True})
     assert phone.inbox() == [
-        {"t": "browser", "sites": [{"site": "waitrose.com", "signed_in": False, "trusted": True, "login_saved": False}]}
+        {"t": "browser", "sites": [{"site": "waitrose.com", "trusted": True, "login_saved": False}]}
     ]
     await phone.send({"t": "browser_trust", "site": "192.168.1.1", "trusted": True})
     assert phone.inbox()[0] == {"t": "error", "code": "bad_site"}

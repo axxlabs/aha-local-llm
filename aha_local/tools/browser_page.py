@@ -125,6 +125,15 @@ def element_label(snapshot: str, ref: str) -> str:
 async def call_with_snapshot(session, name: str, args: dict, ctx: ToolContext) -> ToolResult:
     """Run a browser tool; when the result only links to its snapshot file, fetch the snapshot inline."""
     result = to_result(await session.call(name, args))
+    if name != "browser_navigate" and (last := blank_window(ctx, result)):
+        # A new window starts blank (the browser restarted): the page that was open goes back, in code (SPEC §3.4).
+        from . import guard
+
+        reopened = await call_with_snapshot(session, "browser_navigate", {"url": last}, ctx)
+        if not reopened.error:
+            guard.opened(ctx, last)
+            reopened.text = f"The browser had restarted, so Aha! opened the page that was open last.\n\n{reopened.text}"
+            return reopened
     if SNAPSHOT_LINK.search(result.text):
         snap = to_result(await session.call("browser_snapshot", {}))
         if not snap.error:
@@ -204,32 +213,22 @@ def remember_refs(ctx: ToolContext, text: str) -> None:
 def annotate(ctx: ToolContext, result: ToolResult) -> None:
     """What the harness tells the model about a page it opened, in code (SPEC §3.4, §5.6)."""
     remember_refs(ctx, result.text)
-    note_blank(ctx, result)
     if m := YAML_BLOCK.search(result.text):
         ctx.task.last_snapshot = m.group(1)
         note_sign_in_form(ctx, result, m.group(1))
         note_challenge(ctx, result, m.group(1))
 
 
-def note_blank(ctx: ToolContext, result: ToolResult) -> None:
-    """A new window's blank page: nothing was lost, open the site again (SPEC §3.4 "A new window starts blank")."""
+def blank_window(ctx: ToolContext, result: ToolResult) -> str:
+    """The page that was open last, when this result is a new window's blank page; "" otherwise."""
     m = PAGE_URL.search(result.text)
-    if not m:
-        return
-    ctx.task.blank_page = m.group(1) == "about:blank"
-    if not ctx.task.blank_page:
-        return
-    last = signins.last_page(ctx.account) if ctx.account is not None else ""
-    where = f" The last page open was {last}." if last else ""
-    result.text = (
-        "[Aha!: this is a new browser window: the browser closes when it isn't used for a while and opens again "
-        "blank. It still has the user's cookies and sign-ins, so nothing was lost and no session ended because of "
-        f"it. Open the site again with browser_navigate and carry on.{where}]\n\n" + result.text
-    )
+    if not m or m.group(1) != "about:blank" or ctx.account is None:
+        return ""
+    return signins.last_page(ctx.account)
 
 
 def note_challenge(ctx: ToolContext, result: ToolResult, snapshot: str) -> None:
-    """An "are you human?" check on the page: say so, and that the person does it on a card (SPEC §3.4)."""
+    """An "are you human?" check on the page: noted for the end-of-request check (SPEC §3.5.1)."""
     m = PAGE_URL.search(result.text)
     host = urlsplit(m.group(1)).hostname or "" if m else ""
     if not host or not CHALLENGE.search(snapshot):
@@ -239,11 +238,6 @@ def note_challenge(ctx: ToolContext, result: ToolResult, snapshot: str) -> None:
     # Challenge pages often answer 403 or 429: that's the check, not a page that won't load.
     result.text = re.sub(r"^The site answered HTTP \d{3}\. " + re.escape(CANT_TELL) + "\n", "", result.text)
     result.error = False
-    result.text = (
-        '[Aha!: this page shows an "are you human?" check. If one click on an "I\'m not a robot" box doesn\'t '
-        "pass it (or there's no box), call browser_human_check now: the user does it themselves. Don't just tell "
-        "them about it, and never solve a picture puzzle yourself.]\n\n" + result.text
-    )
 
 
 def is_sign_in_form(snapshot: str, url: str) -> bool:
@@ -255,28 +249,12 @@ def is_sign_in_form(snapshot: str, url: str) -> bool:
 
 
 def note_sign_in_form(ctx: ToolContext, result: ToolResult, snapshot: str) -> None:
-    """Say in code, not leave to the model, that the page asks the person to sign in (SPEC §3.4 "Signing in").
-
-    A session the browser remembered can have ended: the page is what counts, not an earlier sign-in."""
+    """A sign-in form on the page: noted for the end-of-request check (SPEC §3.5.1). The page is what counts,
+    not an earlier sign-in: a session the browser remembered can have ended."""
     m = PAGE_URL.search(result.text)
     url = m.group(1) if m else ""
     host = urlsplit(url).hostname or ""
-    if not host or not is_sign_in_form(snapshot, url):
-        ctx.task.sign_in_page = ""
-        return
-    site = site_of(host)
-    ctx.task.sign_in_page = site
-    if ctx.task.signed_in_sites is None:
-        ctx.task.signed_in_sites = signins.signed_in_sites(ctx.account)
-    before = (
-        f"They signed in on {site} before, but that session has ended: they are NOT signed in there now. "
-        if site in ctx.task.signed_in_sites
-        else ""
-    )
-    result.text = (
-        f"[Aha!: this page is a sign-in form on {site}. {before}If the task needs their account, call "
-        "browser_login now; don't tell them they're signed in.]\n\n" + result.text
-    )
+    ctx.task.sign_in_page = site_of(host) if host and is_sign_in_form(snapshot, url) else ""
 
 
 async def run_code(session, code: str) -> bool:

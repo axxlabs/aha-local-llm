@@ -194,11 +194,6 @@
     "error": [
       "code"
     ],
-    "tool": [
-      "seq",
-      "ts",
-      "label"
-    ],
     "steps": [
       "seq",
       "ts",

@@ -172,7 +172,6 @@ def config(tmp_path: Path) -> Config:
         gateway_url="unix:/nowhere",
         gateway_pin="x",
         data_dir=tmp_path / "data",
-        approval_expiry=5,
         context_tokens=131072,
     )
 
@@ -216,7 +215,7 @@ async def say(agent: Agent, text: str = "", button: str | None = None) -> None:
     account = person(agent.accounts)
     if button is not None:
         _, approval_id, action = button.split("-")
-        decision = {"yes": "approve", "no": "decline", "edit": "edit"}[action]
+        decision = {"yes": "approve", "no": "decline"}[action]
         await agent.approval_reply(account, approval_id, decision)
     else:
         await agent.inbound(account, text)

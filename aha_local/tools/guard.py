@@ -52,8 +52,6 @@ def blocked(why: str) -> ToolResult:
 def stopped(decision: Decision, then: str = "", declined: str = "") -> ToolResult:
     """A card the person said no to (or stopped): the same words for every kind of card. `declined`: what a
     card that isn't an action (a check the person does) says instead."""
-    if decision.reason == "expired":
-        return ToolResult("", error=True, kind="expired")
     if decision.reason == "message":  # they wrote instead of answering: their message comes next
         return ToolResult(f"{declined or STOPPED_FOR_MESSAGE} {MESSAGE_FOLLOWS}", error=True)
     if declined:

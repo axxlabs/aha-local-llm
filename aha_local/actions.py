@@ -103,7 +103,7 @@ class Browser:
         pool = self.agent.browser
         return pool.for_account(account.id) if pool is not None else None
 
-    async def sites(self, account: Account) -> list[dict]:
+    async def sites(self, account: Account) -> list[str]:
         """The sites the person's browser keeps data for, read from it."""
         try:
             return await signins.sites(account, self._session(account))
@@ -113,12 +113,8 @@ class Browser:
 
     async def listing(self, account: Account) -> list[dict]:
         """Settings → Your browser: the sites it remembers, the trusted ones, and saved logins (SPEC §5.7, §5.8)."""
-        known = await self.sites(account)
-        trust, saved = set(trusted.sites(account)), logins.sites(account)
-        listed = {s["site"]: {**s, "trusted": s["site"] in trust} for s in known}
-        for site in (trust | saved) - set(listed):
-            listed[site] = {"site": site, "signed_in": False, "trusted": site in trust}
-        return [{**listed[s], "login_saved": s in saved} for s in sorted(listed)]
+        known, trust, saved = set(await self.sites(account)), set(trusted.sites(account)), logins.sites(account)
+        return [{"site": s, "trusted": s in trust, "login_saved": s in saved} for s in sorted(known | trust | saved)]
 
     async def forget_site(self, account: Account, site: str, via: str) -> bool:
         """Forget everything about one site (SPEC §3.4): the browser's cookies and storage, its saved logins

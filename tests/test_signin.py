@@ -266,8 +266,8 @@ class FakeBrowser:
 @pytest.fixture
 async def setup(config, accounts, llm, registry, chat, tmp_path):
     fake = FakeBrowser()
-    pool = BrowserPool("http://aha-browser:8930", idle_seconds=1800, session=fake.Session, supervise=fake.supervise)
-    assert await browser.register(registry, pool, tmp_path / "pins.json", wait=2) == len(TOOLS)
+    pool = BrowserPool("http://aha-browser:8930", session=fake.Session, supervise=fake.supervise)
+    assert await browser.register(registry, pool, wait=2) == len(TOOLS)
     agent = Agent(config, accounts, llm, registry, chat, pool)
     yield agent, pool, fake
     await pool.stop()
@@ -319,7 +319,7 @@ async def test_the_person_types_the_password_and_the_model_never_sees_it(setup, 
     assert "••••" in json.dumps(llm.requests[-1]["messages"], ensure_ascii=False)
     assert "Signed in on waitrose.com." in recorded
     assert not (fe.dir / logins.FILE).exists()  # the box wasn't ticked: nothing saved
-    assert await signins.sites(fe, pool.for_account(fe.id)) == [{"site": "waitrose.com", "signed_in": True}]
+    assert await signins.sites(fe, pool.for_account(fe.id)) == ["waitrose.com"]
     raw = (fe.dir / signins.FILE).read_bytes()
     assert b"s3ss10n" not in raw and b"waitrose" not in raw and PASSWORD.encode() not in raw  # encrypted at rest
 
@@ -346,10 +346,8 @@ async def test_a_declined_sign_in_types_nothing(setup, llm, chat, accounts):
 async def test_typed_text_never_fills_a_sign_in_card(setup, llm, chat, accounts):
     agent, _, fake = setup
     fe = person(accounts)
-    card = await start_sign_in(agent, llm, chat, fe)
-    await agent.approval_reply(fe, card.card["id"], "edit")
-    assert "card in the app" in (await chat.next()).text
-    await agent.inbound(fe, "2: hunter2")  # the text fallback: declines with a note, never types
+    await start_sign_in(agent, llm, chat, fe)
+    await agent.inbound(fe, "2: hunter2")  # a message cancels the card: nothing is typed
     await settle(agent)
     assert fake.contexts[-1].fields == {}
 
@@ -383,14 +381,11 @@ async def test_sign_ins_come_back_only_for_the_same_person_and_can_be_forgotten(
     await pool.for_account(hb.id).call("browser_tabs", {"action": "list"})
     assert fake.contexts[-1].cookies == []  # never into another person's browser
 
-    await agent.inbound(fe, "sign-ins")
-    assert "- waitrose.com (signed in)" in chat.sent[-1].text
-    await agent.inbound(fe, "forget sign-in www.waitrose.com")
-    assert "forgotten waitrose.com" in chat.sent[-1].text
+    assert await signins.sites(fe, pool.for_account(fe.id)) == ["waitrose.com"]
+    assert await agent.browser_actions.forget_site(fe, "www.waitrose.com", via="settings")
     assert await signins.sites(fe, pool.for_account(fe.id)) == [] and not (fe.dir / signins.FILE).exists()
     assert fake.profiles[fe.id].cookies == []  # forgotten in the browser itself, its storage too
-    await agent.inbound(fe, "forget sign-in waitrose.com")
-    assert "doesn't remember waitrose.com" in chat.sent[-1].text
+    assert not await agent.browser_actions.forget_site(fe, "waitrose.com", via="settings")
 
 
 async def test_show_screenshot_sends_the_page_to_the_persons_chat(setup, llm, chat, accounts):

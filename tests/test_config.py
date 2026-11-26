@@ -23,8 +23,8 @@ def test_every_setting_has_one_default_the_template_the_loader_and_config_agree(
     for s in SETTINGS:
         assert f"{s.key} = " in text, s.key
         assert getattr(loaded, s.field) == getattr(built, s.field), s.key
-    path.write_text(text.replace("max_task_minutes = 0", "max_task_minutes = 15"))
-    assert Config.load(path).max_task_seconds == 900
+    path.write_text(text.replace("max_model_calls_per_task = 40", "max_model_calls_per_task = 15"))
+    assert Config.load(path).max_model_calls == 15
 
 
 def test_install_when_idle_waits_for_quiet_and_only_one_waits(tmp_path, monkeypatch, capsys):

@@ -68,14 +68,12 @@ class TaskState:
     opened_sites: set[str] = field(default_factory=set)  # sites opened in the task (SPEC §5.2)
     last_snapshot: str = ""  # the latest page snapshot, to label approvals from the page itself
     page_url: str = ""  # the current page's address, from the browser
-    blank_page: bool = False  # the last page the model saw is a new window's blank page (SPEC §3.4)
     ref_lines: dict[str, str] = field(default_factory=dict)  # elements seen on the current page: ref → its line
     page_parts: list[str] = field(default_factory=list)  # the current page as the model reads it, part by part
     ran: set[str] = field(default_factory=set)  # tools that ran without error in this task (set by the registry)
     # Values the person typed on a sign-in card: never shown again. The registry hides them in every tool result,
     # and the agent in every transcript record of the task (SPEC §5.8): tools add them, nothing else reads them.
     secrets: list[str] = field(default_factory=list)
-    signed_in_sites: set[str] | None = None  # the sites the person signed in on (read once per task)
     sign_in_page: str = ""  # the site, when the latest page is a sign-in form (SPEC §3.4 "Signing in")
     login_tried: bool = False  # browser_login ran in this task (whatever happened)
     saved_login_failed: set[str] = field(default_factory=set)  # hosts whose saved login led back to a form

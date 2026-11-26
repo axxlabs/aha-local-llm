@@ -5,7 +5,6 @@
 import asyncio
 import json
 
-from aha_local.approvals import Field, apply_edit
 from aha_local.tools.registry import Tool, params
 
 from .conftest import person, say, settle
@@ -64,18 +63,10 @@ async def test_approve_runs_exactly_what_was_shown(agent, llm, chat, registry):
     assert chat.texts()[-1] == "Booked."
 
 
-async def test_edit_numbered_fields_then_approve(agent, llm, chat, registry):
+async def test_values_edited_in_the_card_are_what_runs(agent, llm, chat, registry, accounts):
     ran = []
     msg = await start_form_task(agent, llm, chat, registry, ran)
-    await say(agent, "✏️ Edit", button=msg.buttons[1].id)
-    prompt = await chat.next()
-    assert "1: Felipe" in prompt.text
-    await say(agent, "2: 07700 900456")
-    again = await chat.next()
-    assert "Phone: 07700 900456" in again.text
-    await say(agent, "✅ Approve", button=msg.buttons[0].id)  # the old buttons no longer apply
-    assert (await chat.next()).text == "That approval isn't open any more."
-    await say(agent, "✅ Approve", button=again.buttons[0].id)
+    await agent.approval_reply(person(accounts), msg.card["id"], "approve", ["Felipe", "07700 900456"])
     await settle(agent)
     assert ran[0]["fields"][1]["value"] == "07700 900456"
     assert ran[0]["fields"][0]["value"] == "Felipe"
@@ -111,14 +102,6 @@ async def test_stop_cancels_the_task_and_its_approval(agent, llm, chat, registry
     assert agent.approvals.pending_for(person(agent.accounts).address) is None
 
 
-async def test_expiry_declines(agent, llm, chat, registry):
-    agent.approvals.expiry = 0.05
-    ran = []
-    await start_form_task(agent, llm, chat, registry, ran)
-    await settle(agent)
-    assert ran == [] and chat.texts()[-1] == "I stopped waiting for your approval, so I didn't do it."
-
-
 async def test_every_approval_is_audited(agent, llm, chat, registry, accounts):
     ran = []
     msg = await start_form_task(agent, llm, chat, registry, ran)
@@ -127,15 +110,6 @@ async def test_every_approval_is_audited(agent, llm, chat, registry, accounts):
     lines = [json.loads(x) for x in accounts.vault.records(person(accounts).dir / "audit.jsonl")]
     assert lines[0]["asked"] == ["Felipe", "07700 900123"]
     assert lines[1]["decision"] == "approved" and lines[1]["final"] == ["Felipe", "07700 900123"]
-
-
-def test_apply_edit():
-    one = [Field("Text", "a")]
-    assert apply_edit(one, "  new text ")[0].value == "new text"
-    two = [Field("A", "1"), Field("B", "2")]
-    assert [f.value for f in apply_edit(two, "2: x\n1) y")] == ["y", "x"]
-    assert apply_edit(two, "just words") is None
-    assert apply_edit(two, "9: out of range") is None
 
 
 async def test_unrelated_button_with_no_approval_open(agent, chat):

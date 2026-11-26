@@ -3,7 +3,6 @@
 """The agent: memory approvals, context layers, commands, queueing (SPEC §3.3, §4, §5.4, §11.3–11.4)."""
 
 import asyncio
-import dataclasses
 import time
 from types import SimpleNamespace
 
@@ -30,12 +29,7 @@ async def test_memory_save_needs_approval_and_lands_in_context(agent, llm, chat,
     assert ask.card["kind"] == "memory" and ask.card["title"] == "Remember this?"
     assert [f["value"] for f in ask.card["fields"]] == ["Name is Felipe"]
     assert [b.label for b in ask.buttons] == ["Save", "Edit", "Don't"]
-    await say(agent, "✏️ Edit", button=ask.buttons[1].id)
-    assert (await chat.next()).text == "Send the corrected value."
-    await say(agent, "Prefers to be called Fe")
-    again = await chat.next()
-    assert "Prefers to be called Fe" in again.text
-    await say(agent, "✅ Save", button=again.buttons[0].id)
+    await agent.approval_reply(person(accounts), ask.card["id"], "approve", ["Prefers to be called Fe"])  # edited
     await settle(agent)
     assert [m["text"] for m in person(accounts).load_memory()] == ["Prefers to be called Fe"]
     tool_result = [m for m in llm.requests[-1]["messages"] if m["role"] == "tool"][-1]["content"]
@@ -156,18 +150,16 @@ async def test_each_task_leaves_its_topic_memory_and_a_new_topic_starts_from_mem
 
 
 async def test_commands(agent, llm, chat, accounts):
+    """Two commands: stop and help. The rest is in the app's Settings (2026-11-26)."""
     await say(agent, "help")
-    assert "Commands" in chat.texts()[-1]
+    assert "**stop**" in chat.texts()[-1]
     assert "Open source (AGPL-3.0): https://github.com/axxlabs/aha-local-llm" in chat.texts()[-1]
-    await say(agent, "memories")
-    assert chat.texts()[-1] == "I don't remember anything about you yet."
     await say(agent, "stop")
     assert chat.texts()[-1] == "Nothing is running."
-    llm.answer("a")
-    await say(agent, "q")
+    llm.answer("You haven't saved anything yet.")
+    await say(agent, "memories")  # no longer a command: a request like any other
     await settle(agent)
-    await say(agent, "forget last")
-    assert person(accounts).load_context()["turns"] == []
+    assert chat.texts()[-1] == "You haven't saved anything yet."
 
 
 async def test_messages_during_a_task_reach_the_running_task(agent, llm, chat, registry):
@@ -323,7 +315,6 @@ async def test_whoever_has_a_task_running_hears_when_aha_restarts(accounts):
     """A task cut short by a restart isn't a mystery; nobody else is told (SPEC §3.3)."""
     from types import SimpleNamespace
 
-    from aha_local import messages
     from aha_local.service import Service
 
     fe, hb = person(accounts), accounts.create("Hb")
@@ -382,54 +373,14 @@ async def test_typing_says_queued_while_the_task_waits_for_another_persons_reque
     assert "queued" in chat.typed and chat.typed[-1] is False
 
 
-async def test_the_time_limit_stops_while_a_card_waits_for_the_person(agent, llm, chat, accounts, monkeypatch):
-    """SPEC §3.3: the 15 minutes are the task's working time (seen: they ran out on the Evri sign-in card)."""
-    import aha_local.agent as agent_module
-
-    monkeypatch.setattr(agent_module, "LIMIT_TICK", 0.01)
-    agent.config = dataclasses.replace(agent.config, max_task_seconds=0.2)
-    llm.call("memory_add", text="Name is Felipe")
-    llm.answer("Saved.")
-    await say(agent, "I'm Felipe")
-    ask = await chat.next()
-    await asyncio.sleep(0.5)  # longer than the limit, reading the card
-    await say(agent, "✅ Save", button=ask.buttons[0].id)
-    await settle(agent)
-    assert chat.texts()[-1] == "Saved." and messages.TOO_LONG not in chat.texts()
-
-
-async def test_a_task_that_keeps_working_past_the_limit_is_stopped(agent, llm, chat, monkeypatch):
-    import aha_local.agent as agent_module
-
-    monkeypatch.setattr(agent_module, "LIMIT_TICK", 0.01)
-    agent.config = dataclasses.replace(agent.config, max_task_seconds=0.1)
-    real_chat = llm.chat
-
-    async def slow(messages_, tools=None, max_tokens=4096, who=None, **kw):
-        await asyncio.sleep(0.3)
-        return await real_chat(messages_, tools, max_tokens, who, **kw)
-
-    llm.chat = slow
-    llm.answer("too late")
-    await say(agent, "hello")
-    await settle(agent)
-    assert chat.texts()[-1] == messages.TOO_LONG
-
-
 async def test_by_default_cards_and_tasks_wait_for_the_person_however_long(agent, llm, chat, accounts):
-    """Async by default (SPEC §3.3, §5.3): no card expiry and no task time limit; the step limit stops loops."""
-    from aha_local.config import Config
-
-    defaults = Config(gateway_url="x", gateway_pin="x")
-    assert defaults.approval_expiry == 0 and defaults.max_task_seconds == 0
-    agent.config = dataclasses.replace(agent.config, max_task_seconds=0)
-    agent.approvals.expiry = 0
+    """SPEC §3.3, §5.3: no card expiry and no task time limit; the step limit stops loops."""
     llm.call("memory_add", text="Name is Felipe")
     llm.answer("Saved.")
     await say(agent, "I'm Felipe")
     ask = await chat.next()
     await asyncio.sleep(0.3)  # the person is away
-    assert agent.running and messages.APPROVAL_EXPIRED not in chat.texts()
+    assert agent.running
     await say(agent, "✅ Save", button=ask.buttons[0].id)
     await settle(agent)
     assert chat.texts()[-1] == "Saved."

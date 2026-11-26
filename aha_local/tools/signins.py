@@ -3,9 +3,9 @@
 """What aha notes about each person's browser (SPEC §3.4).
 
 The browser itself remembers everything, in the person's own profile folder (SPEC §3.4 "Browser profiles"):
-nothing is exported or put back. This module keeps only aha's notes about it, encrypted in the account's folder:
-the sites the person signed in on through `browser_login` (for the policy, SPEC §5.2), and the page that was open
-last (where a new, blank window picks up). The sites the browser keeps data for are read from the browser, and a
+nothing is exported or put back. This module keeps only aha's note about it, encrypted in the account's folder:
+the page that was open last (where a new, blank window picks up). Whether a site is signed in is the page's to
+say (a session can end), so it isn't noted. The sites the browser keeps data for are read from the browser, and a
 site is forgotten in the browser, with fixed code of this module through `browser_run_code_unsafe`, a tool the
 model can't call (SPEC §5.2).
 """
@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 
 import mcp.types as mt
 
@@ -24,7 +23,7 @@ from ..policy.urls import site_of
 log = logging.getLogger("aha.signins")
 
 FILE = "browser.json"
-VERSION = 2  # 1 also held an exported copy of the browser's storage: no more (SPEC §3.4 "Browser profiles")
+VERSION = 3  # 1 also held an exported copy of the browser's storage; 2 the signed-in sites (migrations 0004)
 TIMEOUT = 30  # seconds for the harness's own browser code
 GET_URL = "async (page) => page.url()"
 COOKIE_DOMAINS = "async (page) => JSON.stringify([...new Set((await page.context().cookies()).map((c) => c.domain))])"
@@ -35,15 +34,12 @@ def load(account: Account) -> dict:
     path = account.dir / FILE
     data = account.vault.read_json(path, None) if path.exists() else None
     data = data if isinstance(data, dict) else {}
-    out = {"signed_in": {h: e for h, e in (data.get("signed_in") or {}).items() if isinstance(e, dict)}}
-    if isinstance(data.get("page"), str):
-        out["page"] = data["page"]
-    return out
+    return {"page": data["page"]} if isinstance(data.get("page"), str) else {}
 
 
 def save(account: Account, data: dict) -> None:
     path = account.dir / FILE
-    if data.get("signed_in") or data.get("page"):
+    if data.get("page"):
         account.vault.write_json(path, {"v": VERSION, **data})
     else:
         path.unlink(missing_ok=True)
@@ -52,28 +48,11 @@ def save(account: Account, data: dict) -> None:
 def clear(account: Account) -> None:
     """With Clear browser: the notes go with the profile."""
     (account.dir / FILE).unlink(missing_ok=True)
-    (account.dir / "sign-ins.json").unlink(missing_ok=True)  # from before the browser kept everything
 
 
 def matches(domain: str, site: str) -> bool:
     d = domain.lstrip(".").lower()
     return d == site or d.endswith("." + site)
-
-
-def _entry_site(host: str, entry: dict) -> str:
-    return str(entry.get("site") or site_of(host))
-
-
-def signed_in_sites(account: Account) -> set[str]:
-    """The sites the person signed in on through `browser_login` (for the policy, SPEC §5.2)."""
-    return {_entry_site(h, e) for h, e in load(account)["signed_in"].items()}
-
-
-def signed_in(account: Account, host: str, site: str) -> None:
-    """The person signed in on `host`: noted (the browser keeps the session itself)."""
-    data = load(account)
-    data["signed_in"][host] = {"site": site, "at": int(time.time())}
-    save(account, data)
 
 
 def last_page(account: Account) -> str:
@@ -100,15 +79,13 @@ def site_name(text: str) -> str:
 # ---- in the browser
 
 
-async def sites(account: Account, session) -> list[dict]:
-    """The sites the browser keeps cookies for, and the ones signed in: [{"site", "signed_in"}], sorted."""
+async def sites(account: Account, session) -> list[str]:
+    """The sites the browser keeps cookies for, sorted."""
     names: set[str] = set()
     if session is not None:
         domains = _result(await session.call("browser_run_code_unsafe", {"code": COOKIE_DOMAINS}, timeout=TIMEOUT))
         names = {site_of(str(d).lstrip(".")) for d in json.loads(domains)} if isinstance(domains, str) else set()
-    signed = signed_in_sites(account)
-    names = (names | signed) - {""}
-    return [{"site": s, "signed_in": s in signed} for s in sorted(names)]
+    return sorted(names - {""})
 
 
 def forget_code(site: str) -> str:
@@ -133,11 +110,10 @@ async def forget(account: Account, session, site: str) -> bool:
     name = site_name(site)
     if not name:
         return False
-    known = name in {s["site"] for s in await sites(account, session)}
+    known = name in await sites(account, session)
     if session is not None:
         _result(await session.call("browser_run_code_unsafe", {"code": forget_code(name)}, timeout=TIMEOUT))
     data = load(account)
-    data["signed_in"] = {h: e for h, e in data["signed_in"].items() if _entry_site(h, e) != name}
     host = data.get("page", "").split("://", 1)[-1].split("/", 1)[0]
     if host and matches(host, name):
         data.pop("page")

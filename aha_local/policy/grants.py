@@ -105,15 +105,14 @@ class Grant:
             return cls()
         strings = lambda key: {s for s in data.get(key) or [] if isinstance(s, str) and s}  # noqa: E731
         yes = lambda key: data.get(key) is True  # noqa: E731
-        # A task stored before the split (2026-11-26): its "sites" typed there, its "calendar" added and changed.
         return cls(
             strings("open"),
-            strings("type") | strings("sites"),
+            strings("type"),
             yes("search"),
             strings("email"),
             yes("drafts"),
-            yes("calendar_add") or yes("calendar"),
-            yes("calendar_change") or yes("calendar"),
+            yes("calendar_add"),
+            yes("calendar_change"),
         )
 
 

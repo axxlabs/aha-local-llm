@@ -37,7 +37,6 @@ SERVICES = ["aha-agent", "aha-browser", "aha-llm"]
 # Units of earlier versions, stopped and removed at install: the search proxy (SearXNG) went when web_search came
 # to read Google's own page in the browser (SPEC §3.4 "Web search").
 OLD_UNITS = {"aha-search.container": "aha-search.service"}
-OLD_FILES = (HOME_DATA / "keys" / "search-secret",)  # SearXNG's secret, from before web_search used Google
 BROWSER_IMAGE = "localhost/aha-browser:latest"
 PROFILES_KEY_CRED = HOME_CONFIG.parent / "profiles-key.cred"
 PROFILES_ENC = HOME_DATA / "browser-profiles.enc"  # each person's browser profile, encrypted (SPEC §3.4)
@@ -346,8 +345,6 @@ def install() -> None:
         if (QUADLET_DIR / unit).exists():
             subprocess.run(["systemctl", "--user", "stop", service], check=False)
             (QUADLET_DIR / unit).unlink()
-    for old in OLD_FILES:
-        old.unlink(missing_ok=True)
     for name, text in render_units(config).items():
         (QUADLET_DIR / name).write_text(text)
     BROWSER_CONFIG.write_text(render_browser_config(config))
@@ -669,9 +666,6 @@ def cmd_doctor(a) -> None:
             "     Aha! encrypts its own files, but model files, swap and old plaintext blocks on an SSD aren't;\n"
             "     full-disk encryption (LUKS) covers them."
         )
-    if a.repin:
-        (HOME_DATA / "browser" / "pinned-tools.json").unlink(missing_ok=True)
-        print("     browser tool definitions will be re-pinned at the next start (aha restart)")
     if (HOME_DATA / "agent.sock").exists():
         st = admin({"cmd": "status"})
         check(
@@ -775,7 +769,6 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("file", nargs="?")
     s.set_defaults(fn=cmd_memory)
     s = sub.add_parser("doctor", help="check the setup")
-    s.add_argument("--repin", action="store_true", help="accept changed browser tool definitions")
     s.set_defaults(fn=cmd_doctor)
     s = sub.add_parser(
         "mail",

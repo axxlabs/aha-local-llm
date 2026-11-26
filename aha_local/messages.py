@@ -6,19 +6,14 @@ import re
 
 STOPPED = "Stopped."
 NOTHING_TO_STOP = "Nothing is running."
-FORGOT_LAST = "Done: I've dropped our last exchange from what I keep in mind."
 MODEL_DOWN = "My language model isn't running right now, so I can't answer. Try again in a minute."
 FAILED = "Something went wrong while working on that, sorry. I've noted the error on the computer."
 RESTARTING = (
     "Aha! is restarting on your computer, so anything I was working on has stopped. Give it a minute, then ask again."
 )
-TOO_LONG = "That took too long, so I stopped. Try a smaller step, or tell me where to start."
 TOO_MANY_STEPS = "I couldn't finish that within my step limit. What I did:"
-APPROVAL_EXPIRED = "I stopped waiting for your approval, so I didn't do it."
 APPROVAL_STALE = "That approval isn't open any more."
-EDIT_ONE = "Send the corrected value."
-EDIT_MANY = "Send the corrected fields, one per line, like:\n`{example}`"
-EDIT_UNCLEAR = "I couldn't match that to the fields. Send lines like `2: new value`, or tap Approve or Decline."
+EDIT_UNCLEAR = "I couldn't use those values. Check the card and tap Approve or Decline again."
 
 WELCOME = (
     "Hi! I'm **Aha!**, a truly private personal assistant, running on your own computer. "
@@ -33,29 +28,10 @@ about you.
 Before anything leaves this computer with your words or data in it (typing into a website, an email) and before \
 I save something about you, I'll show it to you with buttons: **Approve**, **Edit** or **Decline**.
 
-Commands: **stop** (cancel what I'm doing) · **memories** (what I remember about you) · **sign-ins** (sites \
-my browser remembers for you) · **forget last** (drop our last \
-exchange) · **help**
+Say **stop** to cancel what I'm doing. What I remember about you, the sites my browser keeps and your background \
+tasks are in the app's Settings and Tasks.
 
 Open source (AGPL-3.0): {source}"""
-
-EDIT_IN_CARD = "Type them into the card in the app, then tap its button."
-SIGNINS = (
-    "My browser remembers these sites for you, like your own browser does:\n{sites}\n\n"
-    "To forget one (and be signed out there): **forget sign-in** and the site, e.g. forget sign-in example.com. "
-    "To forget everything: **clear browser**, or Settings → Your browser."
-)
-SIGNED_IN = " (signed in)"
-NO_SIGNINS = (
-    "My browser doesn't remember any site for you yet. When a site asks you to sign in, I'll show you a sign-in card."
-)
-SIGNIN_FORGOTTEN = "Done: I've forgotten {site}: you're signed out there, and its saved login and trust are gone."
-SIGNIN_UNKNOWN = "My browser doesn't remember {site} for you. Say **sign-ins** to see the list."
-BROWSER_CLEARED = (
-    "Done: my browser has forgotten every site for you: you're signed out everywhere, and saved logins and trusted "
-    "sites are gone."
-)
-
 
 # What Aha! writes for someone else is signed, in code (SPEC §3.4): on the card, so the person sees it and can
 # change it. One signature per medium, and one way to tell it's already there.

@@ -37,7 +37,7 @@ If the page shows an "I'm not a robot" checkbox, click it once. If a picture puz
 2. Check availability for the exact date, time and party size before entering any personal details.
 3. If the exact request isn't available, tell the user the nearest options you can see and ask which they want.
 4. Fill in the details using the users' memories (name, phone, email, preferences).
-5. Before the button that books, check the page's date, time and party size against the user's request (the date in its "Dates" line). If any differs, fix it first. Complete the booking, then read the confirmation page. Report the confirmation exactly as shown: venue, address, date, time, party size, name, reference number, and any cancellation policy or deposit. If there's no confirmation on screen, say so; don't assume it worked.
+5. Before the button that books, check the page's date, time and party size against the user's request (its date from the list of coming days). If any differs, fix it first. Complete the booking, then read the confirmation page. Report the confirmation exactly as shown: venue, address, date, time, party size, name, reference number, and any cancellation policy or deposit. If there's no confirmation on screen, say so; don't assume it worked.
 
 ## WhatsApp
 

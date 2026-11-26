@@ -31,7 +31,7 @@ async def test_any_site_is_remembered_between_tasks_and_restarts(setup, llm, cha
     llm.answer("Opened.")
     await agent.inbound(fe, "open the shop")
     await settle(agent)
-    assert await signins.sites(fe, pool.for_account(fe.id)) == [{"site": "shop.example", "signed_in": False}]
+    assert await signins.sites(fe, pool.for_account(fe.id)) == ["shop.example"]
     first = fake.contexts[-1]
     first.origins.append({"origin": "https://web.whatsapp.com", "indexedDB": [{"name": "wawc"}]})
     await pool.close(fe.id)  # the agent restarting: the connection goes, the browser and its profile stay
@@ -51,8 +51,7 @@ async def test_clear_browser_deletes_the_whole_profile(setup, llm, chat, account
         llm.answer("Opened.")
         await agent.inbound(who, "open the shop")
         await settle(agent)
-    await agent.inbound(fe, "clear browser")
-    assert "forgotten every site" in chat.sent[-1].text
+    await agent.browser_actions.clear(fe, via="settings")
     assert ("/forget", fe.id) in fake.calls and fe.id not in fake.profiles  # the profile folder is deleted
     assert not (fe.dir / signins.FILE).exists() and not pool.is_open(fe.id)
     assert hb.id in fake.profiles and pool.is_open(hb.id)  # another person's browser is untouched
@@ -219,26 +218,24 @@ def test_sign_in_forms_are_spotted_from_the_page():
     assert not is_sign_in_form('- link "Sign in" [ref=e1]\n- button "Add to trolley" [ref=e2]', "https://shop.example/")
 
 
-async def test_a_remembered_session_that_ended_is_said_plainly_and_not_glossed_over(setup, llm, chat, accounts):
-    """Seen with the real model (2026-11-22): Waitrose was remembered, its session had ended, the model assumed not."""
+async def test_a_sign_in_page_left_unanswered_goes_back_once(setup, llm, chat, accounts):
+    """Seen with the real model (2026-11-22): Waitrose was remembered, its session had ended, the model assumed not.
+    The page is what counts: an answer left on a sign-in form goes back once (SPEC §3.5.1)."""
     agent, _, _ = setup
     fe = person(accounts)
-    signins.signed_in(fe, "waitrose.com", "waitrose.com")  # signed in once; the session has since ended
     llm.call("browser_navigate", url="https://www.waitrose.com/login")  # the fake page has a password field
     llm.answer("You're signed in to Waitrose, I've added the toilet paper.")  # glosses over the sign-in page
     llm.call("browser_login")
     await agent.inbound(fe, "add toilet paper to my Waitrose trolley")
     card = await chat.next()
     assert card.card and card.card["kind"] == "signin"
-    sent_back = json.dumps(llm.requests[1]["messages"])
-    assert "that session has ended: they are NOT signed in there now" in sent_back  # said in the tool result
     assert "The last page you saw is a sign-in form on waitrose.com" in json.dumps(llm.requests[2]["messages"])
     await agent.approval_reply(fe, card.card["id"], "decline")
     await settle(agent)
     assert chat.texts()[-1] != "You're signed in to Waitrose, I've added the toilet paper."
 
 
-async def test_a_human_check_on_the_page_is_said_and_a_card_follows(setup, llm, chat, accounts):
+async def test_a_human_check_left_unanswered_goes_back_once(setup, llm, chat, accounts):
     """Seen with the real model (2026-11-22): it said a captcha came up but never showed the check card."""
     agent, _, _ = setup
     fe = person(accounts)
@@ -249,7 +246,7 @@ async def test_a_human_check_on_the_page_is_said_and_a_card_follows(setup, llm, 
     card = (await chat.next()).card
     assert card and card["kind"] == "check"
     first = tool_results(llm)[0]
-    assert first.startswith('[Aha!: this page shows an "are you human?" check') and "can't tell why" not in first
+    assert "can't tell why" not in first  # the 403 is the check, not a page that won't load
     assert "you haven't called browser_human_check" in json.dumps(llm.requests[2]["messages"])
     await agent.approval_reply(fe, card["id"], "decline")
     await settle(agent)
@@ -344,9 +341,9 @@ async def test_password_fields_are_only_ever_filled_through_browser_login(setup,
     assert all("is a sign-in field" in r and "browser_login" in r for r in results[1:3])
 
 
-async def test_a_new_windows_blank_page_is_said_and_the_last_page_given(setup, llm, chat, accounts):
-    """Seen: after the browser closed for being idle, the model saw about:blank, said "the session timed out" and
-    told the person to check the site themselves. The state was all there."""
+async def test_a_new_windows_blank_page_reopens_the_last_page_in_code(setup, llm, chat, accounts):
+    """Seen: after the browser restarted, the model saw about:blank, said "the session timed out" and told the
+    person to check the site themselves. The page that was open goes back by itself (SPEC §3.4)."""
     agent, pool, _ = setup
     fe = person(accounts)
     llm.call("browser_navigate", url="https://www.shop.example/trolley/visit-1/")
@@ -355,20 +352,15 @@ async def test_a_new_windows_blank_page_is_said_and_the_last_page_given(setup, l
     await settle(agent)
     assert signins.last_page(fe) == "https://www.shop.example/trolley/visit-1/"
     await pool.close(fe.id)  # the agent restarting: the window comes back blank
-    assert signins.last_page(fe) == "https://www.shop.example/trolley/visit-1/"
 
     n = len(llm.requests)
     llm.call("browser_snapshot")
-    llm.answer("The session timed out; please check the site yourself.")
-    llm.call("browser_navigate", url="https://www.shop.example/trolley")
     llm.answer("Your trolley has the rice in it.")
-    await agent.inbound(fe, "remove the toilet paper")
+    await agent.inbound(fe, "what's in my trolley?")
     await settle(agent)
-    results = [m for m in llm.requests[n + 1]["messages"] if m.get("role") == "tool"]
-    assert "new browser window" in results[-1]["content"]
-    assert "https://www.shop.example/trolley/visit-1/" in results[-1]["content"]
-    retry = llm.requests[n + 2]["messages"][-1]["content"]
-    assert retry.startswith("[aha check]") and "blank page of a new browser window" in retry
+    [result] = [m for m in llm.requests[n + 1]["messages"] if m.get("role") == "tool"]
+    assert result["content"].startswith("The browser had restarted, so Aha! opened the page that was open last.")
+    assert "https://www.shop.example/trolley/visit-1/" in result["content"]
     assert chat.texts()[-1] == "Your trolley has the rice in it."
 
     assert await agent.browser_actions.forget_site(fe, "shop.example", via="chat") and signins.last_page(fe) == ""

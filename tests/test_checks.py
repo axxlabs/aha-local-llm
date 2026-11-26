@@ -17,9 +17,5 @@ async def test_the_answers_words_are_never_checked(agent, llm, chat):
     assert chat.texts() == [answer] and len(llm.requests) == 1
 
 
-def test_only_headings_change_for_the_app():
-    assert checks.chat_format("## Hours\nOpen 10:00\n\n\n\nBye") == "**Hours**\nOpen 10:00\n\nBye"
-
-
 def test_the_checks_are_the_pages_state():
-    assert [c.name for c in checks.CLAIM_CHECKS] == ["blank", "challenge", "sign_in_page"]
+    assert [c.name for c in checks.CLAIM_CHECKS] == ["challenge", "sign_in_page"]

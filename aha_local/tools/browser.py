@@ -15,7 +15,6 @@ arguments; approvals are answered only by the person (approvals.py).
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from urllib.parse import urlsplit
 
 from .. import messages
@@ -35,7 +34,7 @@ from .browser_page import (
     screenshot,
     to_result,
 )
-from .browser_pool import BrowserPool, pinned
+from .browser_pool import BrowserPool
 from .browser_signin import browser_human_check, browser_login
 from .page_view import browser_read_more
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
@@ -264,14 +263,16 @@ HARNESS_TOOLS = (
 )
 
 
-async def register(reg: Registry, pool: BrowserPool, pin_file: Path, wait: float = 60) -> int:
+async def register(reg: Registry, pool: BrowserPool, wait: float = 60) -> int:
+    """The browser's tools, as its image defines them: the image is pinned by digest (SPEC §9.2), so a change is a
+    reviewed commit."""
     try:
         tools = await pool.tools(wait)
     except TimeoutError:
         log.warning("browser not reachable; browsing is unavailable until restart")
         return 0
     count = 0
-    for t in pinned(tools, pin_file):
+    for t in tools:
         if not offered(t.name):
             continue
         reg.add(

@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import datetime as dt
 import json
 import logging
@@ -23,7 +22,7 @@ from .items import Image
 from .llm import Model, ModelUnavailable
 from .policy import addresses
 from .policy.grants import Grant
-from .tools import background, memory, signins
+from .tools import background, signins
 from .tools.registry import Registry, TaskState, ToolContext, redacted
 
 log = logging.getLogger("aha.agent")
@@ -108,7 +107,6 @@ class Session:
         self.last_prompt = None
 
 
-LIMIT_TICK = 0.5  # seconds between looks at the task's time limit
 TYPING_EVERY = 4.0  # seconds between `typing` frames while a reply is owed (SPEC §3.3)
 STOP_WORDS = {"stop", "cancel", "stop it", "stop that"}
 NEW_MESSAGE = "[New message from the user while you were working]\n{text}"
@@ -182,10 +180,6 @@ class _Pausing:
         return getattr(self._approvals, name)
 
 
-class ApprovalExpired(Exception):
-    pass
-
-
 class Agent:
     def __init__(
         self, config: Config, accounts: Accounts, llm: Model, registry: Registry, out: AgentOut, browser=None
@@ -196,7 +190,7 @@ class Agent:
         self.registry = registry
         self.out = out
         self.browser = browser
-        self.approvals = Approvals(_Counted(self), config.approval_expiry)
+        self.approvals = Approvals(_Counted(self))
         self.sessions: dict[str, Session] = defaultdict(Session)  # each person's live state, by address
         self.last_activity = time.monotonic()  # a message in or out, a card: `aha install --when-idle` waits on it
         self.last_input = time.time()  # the household's last message or card answer: background checks wait on it
@@ -285,14 +279,11 @@ class Agent:
         await self._yield_to_people()
         self.llm.wrote(account.address)  # their cache slot is the newest to keep (SPEC §3.2)
         account.transcript({"kind": "user", "text": text, "image": bool(image)})
-        if self.browser is not None:
-            self.browser.touch(account.id)  # the window stays open idle_minutes after their last message
         if image is not None:
             # A photo is never a command: it goes to the running task, or starts one (SPEC §6.5).
             self.session(account).photos.append(image)
             text = text or PHOTO_ONLY
-            if await self.approvals.reply_text(account, text):
-                return  # the edit of the card being edited
+            self.approvals.cancel_for_message(account)
             await self._start(account, text)
             return
         command = text.lower().rstrip(".!")
@@ -300,38 +291,9 @@ class Agent:
         if command in STOP_WORDS:
             await self.stop(account)
             return
-        if await self.approvals.reply_text(account, text):
-            return  # the edit of the card being edited; otherwise the open card is cancelled and this goes on
+        self.approvals.cancel_for_message(account)
         if command == "help":
             await self.send(account, messages.HELP.format(source=self.config.source_url))
-            return
-        if command == "memories":
-            items = account.load_memory()
-            await self.send(
-                account,
-                "What I remember about you:\n" + memory.render(items)
-                if items
-                else "I don't remember anything about you yet.",
-            )
-            return
-        if command in ("sign-ins", "signins", "sign ins"):
-            kept = await self.browser_actions.sites(account)
-            lines = "\n".join(f"- {s['site']}{messages.SIGNED_IN if s['signed_in'] else ''}" for s in kept)
-            await self.send(account, messages.SIGNINS.format(sites=lines) if kept else messages.NO_SIGNINS)
-            return
-        if command.startswith(("forget sign-in ", "forget signin ", "forget sign in ")):
-            site = command.split(" ", 2)[2].removeprefix("in ").strip()
-            found = await self.browser_actions.forget_site(account, site, via="chat")
-            reply = messages.SIGNIN_FORGOTTEN if found else messages.SIGNIN_UNKNOWN
-            await self.send(account, reply.format(site=signins.site_name(site) or site))
-            return
-        if command in ("clear browser", "clear my browser", "clear browser data"):
-            await self.browser_actions.clear(account, via="chat")
-            await self.send(account, messages.BROWSER_CLEARED)
-            return
-        if command == "forget last":
-            context.forget_last(account)
-            await self.send(account, messages.FORGOT_LAST)
             return
         if not text:
             return
@@ -401,10 +363,8 @@ class Agent:
         live.task = asyncio.create_task(self.run(account, text, Job(task_id, start)))
 
     async def run(self, account: Account, text: str, job: Job | None = None) -> None:
-        held = self.browser.hold(account.id) if self.browser else contextlib.nullcontext()
         try:
-            with held:
-                await self._run(account, text, job)
+            await self._run(account, text, job)
         finally:
             live = self.session(account)
             checking = live.background
@@ -466,30 +426,6 @@ class Agent:
         finally:
             TASK.reset(token)
 
-    async def _within_limit(self, account: Account, work):
-        """Run the task with its time limit (SPEC §3.3), counting only the time it works: while a card waits for
-        the person, the clock stops (seen: the 15 minutes ran out while the Evri sign-in card was being read)."""
-        if not self.config.max_task_seconds:  # the default: no time limit, only the step limit (SPEC §3.3)
-            return await work
-        solving = asyncio.ensure_future(work)
-        used, last = 0.0, time.monotonic()
-        try:
-            while True:
-                done, _ = await asyncio.wait({solving}, timeout=LIMIT_TICK)
-                now = time.monotonic()
-                if self.approvals.pending_for(account.address) is None:
-                    used += now - last
-                last = now
-                if done:
-                    return solving.result()
-                if used >= self.config.max_task_seconds:
-                    raise TimeoutError
-        finally:
-            if not solving.done():
-                solving.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await solving
-
     async def _request_body(self, account: Account, text: str, job: Job | None = None) -> None:
         sent_before = self.session(account).sent
         began = time.time()
@@ -504,17 +440,14 @@ class Agent:
         await turn.__aenter__()
         try:
             try:
-                answer, text = await self._within_limit(
+                answer, text = await self.solve(
                     account,
-                    self.solve(
-                        account,
-                        text,
-                        quiet,
-                        job.grant(account) if job else None,
-                        job.links(account) if job else None,
-                        record,
-                        report if job else None,
-                    ),
+                    text,
+                    quiet,
+                    job.grant(account) if job else None,
+                    job.links(account) if job else None,
+                    record,
+                    report if job else None,
                 )
             except asyncio.CancelledError:
                 account.transcript({"kind": "stopped"})
@@ -524,10 +457,6 @@ class Agent:
                     context.record_turn(account, text, messages.STOPPED, record=record)
                 await self._stop_typing(account, typing, quiet)
                 raise
-            except TimeoutError:
-                answer, ended = messages.TOO_LONG, "time_limit"
-            except ApprovalExpired:
-                answer, ended = messages.APPROVAL_EXPIRED, "card_expired"
             except ModelUnavailable as e:
                 log.error("model unavailable: %s", e)
                 answer, ended = messages.MODEL_DOWN, "model_down"
@@ -626,14 +555,8 @@ class Agent:
         watching has none: each action asks as it happens. `record`: filled with what it changes, one line each
         (SPEC §4 "What a request did"), kept by the caller even if it stops. `report`: a background check's, filled
         by its check_result call (SPEC §3.4)."""
-        today = dates.now(self.config).date()
 
-        def with_dates(message: str) -> str:
-            """The days the message names, worked out in code, right after it (SPEC §3.5 "Dates")."""
-            line = dates.note(message, today)
-            return f"{message}\n\n{line}" if line else message
-
-        task: list[dict] = [{"role": "user", "content": with_dates(text)}]
+        task: list[dict] = [{"role": "user", "content": text}]
 
         def take_photos(message: dict) -> None:
             """Attach the person's waiting photos to a message for the model (the vision model reads them)."""
@@ -647,7 +570,7 @@ class Agent:
         take_photos(task[0])
 
         async def send(message: str, image: Image | None = None) -> None:
-            await self.send(account, checks.chat_format(message) if message else "", image)
+            await self.send(account, message, image)
 
         # The browser is reached only through this account's own context (SPEC §3.4).
         browser = self.browser.for_account(account.id) if self.browser else None
@@ -694,7 +617,7 @@ class Agent:
                 )
             )
             for extra in extras:
-                said = NEW_MESSAGE.format(text=with_dates(extra))
+                said = NEW_MESSAGE.format(text=extra)
                 task.append({"role": "user", "content": f"{UNSENT}\n\n{said}" if unsent else said})
                 unsent = False
                 addresses.remember(ctx.task.seen_urls, extra)
@@ -736,7 +659,7 @@ class Agent:
                     task.append({"role": "assistant", "content": answer})
                     task.append({"role": "user", "content": background.REPORT_RETRY})
                     continue
-                return checks.chat_format(answer), text
+                return answer, text
             task.append(
                 {
                     "role": "assistant",
@@ -751,8 +674,6 @@ class Agent:
                 result = await self.registry.call(call.name, call.arguments, ctx)
                 # Links the task was shown (SPEC §5.2): the whole page's, whose view leaves the addresses out (§3.4)
                 addresses.remember(ctx.task.seen_urls, result.full or result.text)
-                if result.kind == "expired":
-                    raise ApprovalExpired
                 await record(
                     {
                         "kind": "tool",

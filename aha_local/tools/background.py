@@ -76,13 +76,11 @@ LAST_HOW = {
     "notify": "reported news, and this was sent to the user",
     "ended_early": "ended before it reported (stopped, interrupted, or no check_result); the last note",
 }
-ENDED_EARLY = {"unfinished", "interrupted", "ended_early"}  # kept before 2026-11-26 as two values
 
 
 def how_it_went(entry: dict) -> str:
     """How the last check ended: waiting | notify | ended_early, or "" before the first."""
-    how = entry.get("last_how", "waiting" if entry.get("last") else "")
-    return "ended_early" if how in ENDED_EARLY else how
+    return entry.get("last_how", "")
 
 
 EXPIRED = "I stopped waiting on {when}.{last}"
@@ -571,7 +569,7 @@ def finish(account: Account, task_id: str, outcome: str, message: str, stopped: 
         # A Run now check is an extra one: the planned next check keeps its time.
         later = e["next"] if e.get("now") else now + e["every"] * 60
         return {
-            **{k: v for k, v in e.items() if k not in ("now", "manual")},
+            **{k: v for k, v in e.items() if k != "now"},
             "last": _last(text) if text else e.get("last", ""),
             "last_how": kind,
             "last_at": now,
@@ -592,7 +590,7 @@ def interrupted(account: Account, task_id: str) -> None:
         account,
         task_id,
         lambda e: {
-            **{k: v for k, v in e.items() if k not in ("now", "manual")},
+            **{k: v for k, v in e.items() if k != "now"},
             "last_how": "ended_early",
             "last_at": time.time(),
         },

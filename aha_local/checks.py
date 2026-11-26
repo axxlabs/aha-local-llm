@@ -5,26 +5,15 @@
 The person audits what the model writes (every send shows its card, every answer is theirs to read); the harness
 doesn't second-guess the text with patterns. What it checks is what it knows for a fact: the page the browser
 is on. A task that ends on a new window's blank page, on a sign-in form it didn't use, or on an "are you human?"
-check it didn't hand to the person, goes back to the model once. The only change to the text is formatting for
-the app (headings to bold lines).
+check it didn't hand to the person, goes back to the model once. The text itself is never changed.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from .tools.registry import TaskState
-
-HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*#*$", re.M)
-
-
-def chat_format(text: str) -> str:
-    """The app renders a safe subset of Markdown (SPEC §7.4); headings become bold lines."""
-    text = HEADING.sub(r"**\1**", text)
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
-
 
 FROM_SCRATCH = (
     "Then write your reply to the person from scratch: they haven't seen your draft, and never mention this check."
@@ -55,18 +44,6 @@ class Check:
         return self.retry(d) if callable(self.retry) else self.retry
 
 
-def on_blank_page(d: Draft) -> bool:
-    """The task ends on a new window's blank page: the model gave up instead of opening the site again."""
-    return d.task.blank_page
-
-
-BLANK_RETRY = retry(
-    "The last page you saw is the blank page of a new browser window. That's not a problem: the browser opens "
-    "blank after a while unused, with the user's cookies and sign-ins still in it. Open the site again with "
-    "browser_navigate and finish the task. Don't tell the user a session ended or ask them to check it themselves."
-)
-
-
 def ignores_sign_in_page(d: Draft) -> bool:
     """The task ends on a sign-in page and browser_login didn't run: the model didn't notice, or gave up."""
     return d.can_sign_in and bool(d.task.sign_in_page) and not d.task.login_tried
@@ -93,7 +70,6 @@ CHALLENGE_RETRY = retry(
 
 # In this order; each runs at most once per task.
 CLAIM_CHECKS = (
-    Check("blank", on_blank_page, BLANK_RETRY, "task ended on a new window's blank page; asking to open the site"),
     Check(
         "challenge",
         ignores_challenge,

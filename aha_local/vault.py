@@ -33,9 +33,9 @@ LOG = b"AHAL1"
 NONCE = 24
 KEY_BYTES = 32
 FORMAT_FILE = "format.json"
-# Not encrypted (SPEC §3.8.1): the format marker, the socket, public tool hashes, exports (the person's own
-# plaintext copy), temporary files.
-PLAIN = {FORMAT_FILE, "agent.sock", "browser/pinned-tools.json"}
+# Not encrypted (SPEC §3.8.1): the format marker, the socket, exports (the person's own plaintext copy),
+# temporary files.
+PLAIN = {FORMAT_FILE, "agent.sock"}
 PLAIN_DIRS = ("exports/",)
 LOGS = (".jsonl",)
 
@@ -75,14 +75,17 @@ class Vault:
 
     @classmethod
     def open(cls, root: Path, key_file: Path) -> Vault:
-        """The vault for the data folder, with existing plaintext files encrypted first (SPEC §3.8.1 Upgrade)."""
+        """The vault for the data folder, brought to today's storage version first (SPEC §3.8.3): the migrations
+        run before anything reads it."""
         if not key_file.exists():
             raise RestError(
                 f"no data key at {key_file}: the unit unseals it from ~/.config/aha/data-key.cred "
                 "(run `aha install` to create one)"
             )
         vault = cls(root, key_file.read_bytes())
-        vault.migrate()
+        from .migrations import upgrade
+
+        upgrade(vault)
         return vault
 
     # ---- keys and AEAD
@@ -223,12 +226,10 @@ class Vault:
     def _is_plain(self, rel: str) -> bool:
         return rel in PLAIN or rel.startswith(PLAIN_DIRS) or rel.endswith(".tmp")
 
-    def migrate(self) -> int:
-        """Encrypt every plaintext file in place; idempotent, so a crash halfway is finished at the next start."""
+    def encrypt_plaintext(self) -> int:
+        """Encrypt every plaintext file in place (migration 0001); idempotent, so a crash halfway is finished at
+        the next start."""
         self.root.mkdir(parents=True, exist_ok=True)
-        marker = self.root / FORMAT_FILE
-        if marker.exists() and json.loads(marker.read_text()).get("rest") == 1:
-            return 0
         done = 0
         for path in sorted(p for p in self.root.rglob("*") if p.is_file() and not p.is_symlink()):
             rel = self._rel(path)
@@ -252,7 +253,6 @@ class Vault:
             if path.is_dir():
                 os.chmod(path, 0o700)
         os.chmod(self.root, 0o700)
-        marker.write_text(json.dumps({"rest": 1}) + "\n")
         return done
 
     @staticmethod

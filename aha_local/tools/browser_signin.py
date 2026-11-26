@@ -147,13 +147,6 @@ async def browser_login(args: dict, ctx: ToolContext) -> ToolResult:
             return ToolResult("Typing into the sign-in form failed. Take a snapshot and try again.", error=True)
         page, fields = await look(session, ctx)
     signed = not is_sign_in_form(ctx.task.last_snapshot, await current_url(session))
-    if signed:
-        try:  # they stay signed in, like "remember me" in their own browser (SPEC §3.4)
-            signins.signed_in(ctx.account, host, site)  # the browser keeps the session in its profile
-        except Exception:
-            log.exception("couldn't note a sign-in")
-        if ctx.task.signed_in_sites is not None:
-            ctx.task.signed_in_sites.add(site)
     ctx.task.last_snapshot = redact(ctx.task.last_snapshot, ctx.task.secrets)
     said = f"Signed in on {host}." if signed else f"Not signed in on {host}: look at the page for why."
     page.text = said + " The page now:\n\n" + page.text  # the registry hides what they typed (SPEC §5.8)

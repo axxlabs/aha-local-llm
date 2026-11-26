@@ -132,12 +132,6 @@ async def test_a_request_the_person_watches_asks_for_every_send(agent, llm, chat
     assert "permissions_request" not in agent.registry.names()
 
 
-def test_a_task_stored_before_the_split_keeps_what_it_allowed():
-    g = Grant.from_dict({"sites": ["royalmail.com"], "email": ["sam@example.com"], "calendar": True})
-    assert g.type == {"royalmail.com"} and g.email == {"sam@example.com"} and g.calendar_add and g.calendar_change
-    assert Grant.from_dict(g.to_dict()) == g
-
-
 async def test_changing_an_event_needs_its_own_permission(accounts, config):
     asked = Asked()
     ctx = ToolContext(person(accounts), asked, config, TaskState(grant=Grant(calendar_add=True)), None, None)  # type: ignore[arg-type]

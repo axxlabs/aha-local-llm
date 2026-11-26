@@ -104,8 +104,7 @@ def build(
         {"role": "user", "content": context_block(account, timezone, household, now)},
         {"role": "assistant", "content": "Understood."},
     ]
-    # A turn kept before 2026-11-26 has its record under "done".
-    shown = [{"role": t["role"], "content": t["content"] + did_note(t.get("record", t.get("done")))} for t in turns]
+    shown = [{"role": t["role"], "content": t["content"] + did_note(t.get("record"))} for t in turns]
     return head + shown + shorten_task(task, context_tokens * TASK_SHARE)
 
 
@@ -186,14 +185,5 @@ def forget_topic(account: Account, topic_id: str) -> bool:
     if len(kept) == len(conv["topics"]):
         return False
     conv["topics"] = kept
-    account.save_context(conv)
-    return True
-
-
-def forget_last(account: Account) -> bool:
-    conv = account.load_context()
-    if len(conv["turns"]) < 2:
-        return False
-    conv["turns"] = conv["turns"][:-2]
     account.save_context(conv)
     return True

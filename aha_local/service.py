@@ -50,7 +50,7 @@ class Service:
         self.registry = Registry()
         for module in (web, memory, mail, calendar, background, conversation):
             module.register(self.registry)
-        self.browser = browser_pool.BrowserPool(config.browser_url, config.browser_idle_seconds)
+        self.browser = browser_pool.BrowserPool(config.browser_url)
         self.llm = LLM(config.llm_url, config.llm_model)
         self.models = ModelChoice(self.vault, data, self.llm, config.llm_model)
         self.channel = Channel(
@@ -89,10 +89,7 @@ class Service:
         await self.tunnel.send(frame)
 
     async def run(self) -> None:
-        count = await browser.register(
-            self.registry, self.browser, self.config.data_dir / "browser" / "pinned-tools.json"
-        )
-        self.browser.start()
+        count = await browser.register(self.registry, self.browser)
         self.background.start()
         pruning = asyncio.create_task(self._prune_history())
         warming = asyncio.create_task(self.agent.warm())

@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-SHOWN = ("msg", "approval", "tool", "steps")  # what the chat shows; states and titles aren't part of a topic
+SHOWN = ("msg", "approval", "steps")  # what the chat shows; states and titles aren't part of a topic
 MAX_TITLE = 60
 ASK = (
     "[Aha! app, not from the user. Decide whether the user's latest message starts a new subject, then give a "

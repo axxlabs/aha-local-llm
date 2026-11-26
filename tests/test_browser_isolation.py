@@ -80,15 +80,13 @@ def fake_browser() -> FakeBrowser:
 
 @pytest.fixture
 async def pool(fake_browser):
-    p = BrowserPool(
-        "http://aha-browser:8930", idle_seconds=1800, session=fake_browser.Session, supervise=fake_browser.supervise
-    )
+    p = BrowserPool("http://aha-browser:8930", session=fake_browser.Session, supervise=fake_browser.supervise)
     yield p
     await p.stop()
 
 
 async def browsing_agent(config, accounts, llm, registry, chat, pool, tmp_path: Path) -> Agent:
-    assert await browser.register(registry, pool, tmp_path / "pins.json", wait=2) == 3
+    assert await browser.register(registry, pool, wait=2) == 3
     return Agent(config, accounts, llm, registry, chat, pool)
 
 
@@ -138,49 +136,6 @@ async def test_two_people_browse_at_the_same_time_on_their_own_pages(pool, fake_
     assert "b.example" in hb_tabs and "a.example" not in hb_tabs
 
 
-async def test_an_idle_context_is_discarded_and_the_next_one_starts_empty(fake_browser):
-    pool = BrowserPool("x", idle_seconds=1e-9, session=fake_browser.Session)
-    fe = pool.for_account("fe")
-    await fe.call("browser_navigate", {"url": "https://shop.example/basket"})
-    with pool.hold("fe"):  # while a task runs, it isn't closed
-        await pool.reap()
-        assert pool.is_open("fe")
-    await pool.reap()
-    assert not pool.is_open("fe") and not fake_browser.open()
-    tabs = (await fe.call("browser_tabs", {"action": "list"})).content[0].text
-    assert "about:blank" in tabs and "shop.example" not in tabs
-    await pool.stop()
-    assert not fake_browser.open()
-
-
-async def test_a_context_in_use_is_not_closed_for_idleness(fake_browser):
-    pool = BrowserPool("x", idle_seconds=1e-9, session=fake_browser.Session)
-    s = pool.session("fe")
-    await asyncio.wait_for(s.ready.wait(), 1)
-    s.busy = 1
-    await pool.reap()
-    assert pool.is_open("fe")
-    s.busy = 0
-    await pool.reap()
-    assert not pool.is_open("fe")
-
-
-async def test_a_message_from_the_person_restarts_the_idle_time(fake_browser):
-    """The window closes idle_minutes after the person's last message or browser use (24 hours by default)."""
-    pool = BrowserPool("x", idle_seconds=3600, session=fake_browser.Session)
-    s = pool.session("fe")
-    await asyncio.wait_for(s.ready.wait(), 1)
-    s.last_used -= 3000
-    pool.touch("fe")  # they wrote
-    s.last_used -= 3000  # 50 minutes later, not 100
-    await pool.reap()
-    assert pool.is_open("fe")
-    s.last_used -= 700
-    await pool.reap()
-    assert not pool.is_open("fe")
-    pool.touch("nobody")  # no window: nothing to do
-
-
 async def test_deleting_an_account_discards_its_browser_context(pool, fake_browser, accounts):
     from types import SimpleNamespace
 
@@ -220,14 +175,3 @@ def test_each_person_has_a_browser_and_profile_of_their_own():
     start = (deploy / "browser" / "start.sh").read_text()
     # mounted inside the container: the decrypted profiles never exist on the host
     assert "gocryptfs -q -noprealloc -passfile" in start and "/profiles.enc /profiles" in start
-
-
-async def test_by_default_a_window_stays_open(fake_browser):
-    """idle_minutes = 0 (the default): each person's window stays open, like their own browser (SPEC §3.4)."""
-    pool = BrowserPool("x", idle_seconds=0, session=fake_browser.Session)
-    s = pool.session("fe")
-    await asyncio.wait_for(s.ready.wait(), 1)
-    s.last_used -= 10 * 24 * 3600  # ten days unused
-    await pool.reap()
-    assert pool.is_open("fe")
-    await pool.stop()

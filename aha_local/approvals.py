@@ -20,11 +20,9 @@ from . import messages
 from .accounts import Account
 from .items import Image
 
-EDIT_LINE = re.compile(r"^\s*(\d{1,2})\s*[:.)-]\s*(.*)$")
 MAX_VALUE = 2000
 MAX_LONG = 10_000  # longtext fields: an email's message
 EDITABLE = ("text", "longtext", "secret", "taps")  # inputs on the card
-TYPED = ("text", "longtext")  # also editable by the text fallback; a secret never goes through the chat
 MASK = "••••"
 TAPS = re.compile(r"(?:\d{1,5},\d{1,5}(?:;\d{1,5},\d{1,5}){0,19})?")  # a check card's taps: "x,y;x,y", or none
 
@@ -43,7 +41,7 @@ class Decision:
     approved: bool
     values: list[str] = field(default_factory=list)
     note: str = ""
-    reason: str = ""  # declined | expired | stopped | message (the person wrote instead)
+    reason: str = ""  # declined | stopped | message (the person wrote instead)
     card: str = ""  # the card it answered (a background task keeps it: the topic that started it, SPEC §7.4)
 
 
@@ -56,7 +54,6 @@ class Pending:
     fields: list[Field]
     image: Image | None
     future: asyncio.Future
-    editing: bool = False
     why: str = ""  # why this card is shown (the (i)); "" → the kind's own reason (KINDS)
 
 
@@ -168,28 +165,6 @@ def card(p: Pending) -> dict:
     return out
 
 
-def apply_edit(fields: list[Field], text: str) -> list[Field] | None:
-    """Text fallback. One field: the whole text. Several: lines of '<n>: <value>'. None if nothing matched."""
-    text = text.strip()
-    if not text:
-        return None
-    if len(fields) == 1:
-        if fields[0].kind not in TYPED:
-            return None
-        return [Field(fields[0].label, text[:MAX_VALUE], fields[0].kind)]
-    new = [Field(f.label, f.value, f.kind) for f in fields]
-    matched = False
-    for line in text.splitlines():
-        m = EDIT_LINE.match(line)
-        if not m:
-            continue
-        i = int(m.group(1)) - 1
-        if 0 <= i < len(new) and new[i].kind in TYPED:
-            new[i].value = m.group(2).strip()[: MAX_LONG if new[i].kind == "longtext" else MAX_VALUE]
-            matched = True
-    return new if matched else None
-
-
 def checked_values(fields: list[Field], values: list) -> list[str] | None:
     """Values edited in the card: same count; only text fields may change; booleans stay booleans."""
     if not isinstance(values, list) or len(values) != len(fields):
@@ -214,9 +189,8 @@ def checked_values(fields: list[Field], values: list) -> list[str] | None:
 
 
 class Approvals:
-    def __init__(self, out: Out, expiry: float) -> None:
+    def __init__(self, out: Out) -> None:
         self.out = out
-        self.expiry = expiry
         self._pending: dict[str, Pending] = {}  # by account id
 
     def pending_for(self, address: str) -> Pending | None:
@@ -242,12 +216,9 @@ class Approvals:
         state = "stopped"
         try:
             await self.out.card(account, card(p))
-            # No expiry by default: the person answers when they check in (SPEC §5.3).
-            decision = await asyncio.wait_for(asyncio.shield(p.future), timeout=self.expiry or None)
-            state = "approved" if decision.approved else ("expired" if decision.reason == "expired" else "declined")
-        except TimeoutError:
-            decision = Decision(False, reason="expired")
-            state = "expired"
+            # A card waits until it's answered: the person answers when they check in (SPEC §5.3).
+            decision = await asyncio.shield(p.future)
+            state = "approved" if decision.approved else "declined"
         except asyncio.CancelledError:
             account.audit({"approval": p.id, "decision": "stopped"})
             raise
@@ -269,7 +240,7 @@ class Approvals:
     async def answer(
         self, account: Account, approval_id: str, decision: str, values: list | None = None, note: str = ""
     ) -> None:
-        """A tap on a card: approve (with the card's possibly edited values), edit (text fallback) or decline."""
+        """A tap on a card: approve (with the values as edited in the card) or decline."""
         p = self._pending.get(account.address)
         if p is None or approval_id != p.id:
             await self.out.text(account, messages.APPROVAL_STALE)
@@ -282,38 +253,12 @@ class Approvals:
             self._resolve(p, Decision(True, final))
         elif decision == "decline":
             self._resolve(p, Decision(False, note=str(note)[:MAX_VALUE].strip(), reason="declined"))
-        elif decision == "edit":
-            if KINDS.get(p.kind, KINDS["action"]).open_inputs or not any(f.kind in TYPED for f in p.fields):
-                await self.out.text(account, messages.EDIT_IN_CARD)
-                return
-            p.editing = True
-            text_fields = [i for i, f in enumerate(p.fields, 1) if f.kind in TYPED]
-            if len(p.fields) == 1:
-                prompt = messages.EDIT_ONE
-            else:
-                i = text_fields[0]
-                prompt = messages.EDIT_MANY.format(example=f"{i}: {p.fields[i - 1].value}")
-            await self.out.text(account, prompt)
 
-    async def reply_text(self, account: Account, text: str) -> bool:
-        """A message while a card is open. In edit mode it's the edit (True: it's been used). Otherwise the card is
-        cancelled, not allowed, and the message goes on to the request like any other (False), so the model reads
-        it right after the call it was waiting on (SPEC §5.3)."""
-        p = self._pending.get(account.address)
-        if p is None:
-            return False
-        if p.editing:
-            edited = apply_edit(p.fields, text)
-            if edited is None:
-                await self.out.text(account, messages.EDIT_UNCLEAR)
-                return True
-            await self.out.state(account, p.id, "replaced")
-            p.fields, p.editing = edited, False
-            p.id = secrets.token_hex(4)  # the old card no longer applies
-            await self.out.card(account, card(p))
-            return True
-        self._resolve(p, Decision(False, reason="message"))
-        return False
+    def cancel_for_message(self, account: Account) -> None:
+        """A message while a card is open cancels it, not allowed; the message goes on to the request like any
+        other, so the model reads it right after the call it was waiting on (SPEC §5.3)."""
+        if (p := self._pending.get(account.address)) is not None:
+            self._resolve(p, Decision(False, reason="message"))
 
     @staticmethod
     def _resolve(p: Pending, decision: Decision) -> None:

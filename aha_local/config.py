@@ -50,14 +50,11 @@ class Setting:
 
 
 SETTINGS = (
-    Setting("agent", "approval_expiry_hours", 0, "0: a card waits until it's answered", "approval_expiry", 3600),
     Setting(
         "agent", "max_model_calls_per_task", 40, "the step limit: stops a model stuck in a loop", "max_model_calls"
     ),
-    Setting("agent", "max_task_minutes", 0, "0: no time limit; the step limit stops a loop", "max_task_seconds", 60),
     Setting("agent", "history_sync_days", 30, "the most a device may cache or re-sync", "history_sync_days"),
     Setting("agent", "push_preview", False, "true: notifications show the first line of the reply", "push_preview"),
-    Setting("browser", "idle_minutes", 0, "0: each person's browser window stays open", "browser_idle_seconds", 60),
 )
 
 
@@ -109,10 +106,7 @@ class Config:
     timezone: str = "Europe/London"
     language: str = "en-GB"  # the browser's language, a BCP 47 tag (SPEC §3.4)
     models_dir: Path = Path.home() / "aha-models"
-    approval_expiry: float = _default("approval_expiry")  # seconds; 0: never
     max_model_calls: int = _default("max_model_calls")
-    max_task_seconds: float = _default("max_task_seconds")  # 0: no time limit (the step limit stops a loop)
-    browser_idle_seconds: float = _default("browser_idle_seconds")  # 0: never closed for being idle
     source_url: str = "https://github.com/axxlabs/aha-local-llm"  # named in `help` (AGPL §13, SPEC §10.1)
     app_url: str = "https://app.aha.axxlabs.ai"  # where pairing links open the app (SPEC §6.4)
     device_url: str = ""  # the gateway's device endpoint, for the pairing link; derived from gateway_url if empty

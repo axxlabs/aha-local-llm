@@ -245,12 +245,6 @@ class Account:
         conv = self.vault.read_json(self.dir / "context.json", None) or {"turns": [], "topics": []}
         conv.setdefault("turns", [])
         conv.setdefault("topics", [])
-        if "summary" in conv:  # from before topics: the rolling summary becomes one entry
-            summary, since = conv.pop("summary"), conv.pop("summary_from", None)
-            if summary:
-                ts = _epoch(since) if since else None
-                entry = {"id": "t0", "from": 0, "title": "Earlier conversation", "text": summary, "ts": ts or 0}
-                conv["topics"] = [entry, *conv["topics"]]
         return conv
 
     def save_context(self, context: dict) -> None:

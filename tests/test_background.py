@@ -120,7 +120,7 @@ async def test_checks_wait_for_idle_and_dont_reset_it(runner, agent, llm, chat, 
 
 async def test_a_closure_goes_to_the_chat_and_ends_the_task(runner, agent, llm, chat, accounts):
     fe = person(accounts)
-    background.save(fe, [task(last="no reply yet", checks=3)])
+    background.save(fe, [task(last="no reply yet", last_how="waiting", checks=3)])
     idle(agent)
     llm.call("check_result", outcome="done", message="Sam replied: yes, see you there.")
     await runner.tick()
@@ -543,9 +543,3 @@ async def test_check_result_is_only_for_a_check(agent, llm, chat):
         "Only a background task's check"
         in [m for m in llm.requests[-1]["messages"] if m["role"] == "tool"][-1]["content"]
     )
-
-
-def test_a_task_kept_before_the_merge_reads_as_ended_early():
-    for old in ("unfinished", "interrupted"):
-        assert background.how_it_went({"last_how": old, "last": "x"}) == "ended_early"
-    assert background.how_it_went({"last": "x"}) == "waiting" and background.how_it_went({}) == ""

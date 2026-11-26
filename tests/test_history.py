@@ -100,20 +100,6 @@ def test_a_length_deletes_older_history_everywhere_on_the_computer(tmp_path):
     assert again.history_days == 7  # kept in account.json
 
 
-def test_an_old_summary_becomes_a_topic_entry_and_follows_the_length(tmp_path):
-    """Before topics (SPEC §4): the rolling summary becomes one entry, dated by its oldest turn."""
-    accounts = Accounts(Vault(tmp_path, os.urandom(32)))
-    acct = accounts.create("Ana")
-    acct.history_days = 30
-    acct.save_context({"summary": "recent things", "summary_from": local(3), "turns": []})
-    acct.prune_history()
-    [entry] = acct.load_context()["topics"]
-    assert entry["title"] == "Earlier conversation" and entry["text"] == "recent things"
-    acct.save_context({"summary": "from before dates were kept", "turns": []})
-    acct.prune_history()
-    assert acct.load_context()["topics"] == []  # undated: its age is unknown, so it goes
-
-
 def test_a_topic_entry_replaces_its_earlier_one_and_earlier_topics_turns_leave(tmp_path):
     accounts = Accounts(Vault(tmp_path, os.urandom(32)))
     acct = accounts.create("Ana")
