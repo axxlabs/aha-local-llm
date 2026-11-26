@@ -208,10 +208,13 @@ class Channel:
         open: str = "",
         task: dict | None = None,
         record: list[str] | None = None,
+        run: str = "",
     ) -> None:
         item: dict = {"t": "msg", "role": "aha", "text": text}
-        if record:  # what the request changed, from its tool calls: the app's receipt under the message (§7.4)
+        if record:  # what the request changed, from its tool calls, never the model's words (§7.4 "What Aha! did")
             item["record"] = record
+        if run:  # the request it ends: its "what Aha! did" box, and its Details line after it (§7.4)
+            item["run"] = run
         if image is not None:
             item["image"] = image.to_dict()
         if open:  # "stopped": the app keeps it unfolded after a break (SPEC §7.4 "Folding")

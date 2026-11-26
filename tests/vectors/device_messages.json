@@ -101,7 +101,8 @@
       "image?",
       "open?",
       "task?",
-      "record?"
+      "record?",
+      "run?"
     ],
     "title": [
       "seq",

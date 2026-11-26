@@ -8,7 +8,7 @@ import asyncio
 from aha_local.diagnostics import Reader
 from aha_local.tools.registry import Tool, ToolResult, params
 
-from .conftest import say, settle
+from .conftest import person, say, settle
 
 
 async def test_a_requests_records_go_live_under_one_details_line(agent, llm, chat):
@@ -28,6 +28,31 @@ async def test_a_requests_records_go_live_under_one_details_line(agent, llm, cha
     assert chat.events[1]["label"] == "web search" and chat.events[1]["result"] == "a page"
     assert chat.tools == ["web search"]
     assert chat.texts() == ["Found it."]  # the answer is still a message of its own
+
+
+async def test_what_aha_did_comes_as_it_happens_and_the_answer_names_its_request(agent, llm, chat, accounts):
+    """SPEC §7.4 "What Aha! did": each action's line is in its tool record, live, before the answer; the answer
+    carries the request's id, so its box and its Details line find each other."""
+
+    async def act(args, ctx):
+        return ToolResult("done", did="Sent a message on whatsapp.com")
+
+    async def look(args, ctx):
+        return ToolResult("a page")
+
+    agent.registry.add(Tool("act", "", params(), act))
+    agent.registry.add(Tool("look", "", params(), look))
+    llm.call("look")
+    llm.call("act")
+    llm.answer("Sent.")
+    await say(agent, "message her")
+    await settle(agent)
+    tools = [e for e in chat.events if e["kind"] == "tool"]
+    assert "did" not in tools[0] and tools[1]["did"] == ["Sent a message on whatsapp.com"]  # reads aren't actions
+    answer = chat.sent[-1]
+    assert answer.text == "Sent." and answer.record == ["Sent a message on whatsapp.com"]
+    [tool] = [e for e in person(accounts).read_transcript() if e.get("kind") == "tool" and e.get("name") == "act"]
+    assert answer.run and answer.run == tool["task"]  # the request's records are tagged with it
 
 
 async def test_a_plain_answer_has_its_details_too(agent, llm, chat):

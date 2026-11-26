@@ -63,6 +63,7 @@ class AgentOut(Protocol):
         open: str = "",
         task: dict | None = None,
         record: list[str] | None = None,
+        run: str = "",
     ) -> None: ...
     async def cut(self, account: Account) -> None: ...
     async def title(self, account: Account, start: int, text: str, new: bool = False, waiting: int = 0) -> None: ...
@@ -263,13 +264,14 @@ class Agent:
         open: str = "",
         task: dict | None = None,
         record: list[str] | None = None,
+        run: str = "",
     ) -> None:
-        """`record`: what the request changed, from its tool calls (SPEC §4 "What a request did"): the app shows it
-        under the message in a decoration of its own, as Aha!'s receipt, not as the model's words."""
+        """`record`: what the request changed, from its tool calls (SPEC §4 "What a request did"), never the model's
+        words; `run`: the request it ends (its "what Aha! did" box and Details line, SPEC §7.4)."""
         self.last_activity = time.monotonic()
         self.session(account).sent += 1
         account.transcript({"kind": "out", "text": text, "image": bool(image)})
-        await self.out.message(account, text[:20_000], image, open, task, receipt(record))
+        await self.out.message(account, text[:20_000], image, open, task, receipt(record), run)
 
     async def task_note(
         self, account: Account, note: background.Note, start: int = 0, record: list[str] | None = None
@@ -473,9 +475,9 @@ class Agent:
                 else:  # what it did before it stopped stays known (seen: a saved fact saved twice more)
                     context.record_turn(account, text, messages.STOPPED, record=record)
                 await self._stop_typing(account, typing, quiet)
-                if record:  # and the person sees it too, under "Stopped."
+                if record and not job:  # its box keeps what it did, and its Details line comes after "Stopped."
                     with contextlib.suppress(Exception):
-                        await self.send(account, "", record=record)
+                        await self.send(account, "", record=record, run=TASK.get() or "")
                 raise
             except ModelUnavailable as e:
                 log.error("model unavailable: %s", e)
@@ -504,7 +506,8 @@ class Agent:
             answered = 0  # the answer's chat item: the topic call says whether it waits for the person
             if (answer or record) and not noted:
                 # Unfinished stays unfolded after a break (SPEC §7.4 "Folding"): a task that stopped.
-                await self.send(account, answer, open="stopped" if stopped else "", record=record)
+                run = "" if quiet else TASK.get() or ""
+                await self.send(account, answer, open="stopped" if stopped else "", record=record, run=run)
                 answered = account.seq
             account.transcript({"kind": "answer", "text": answer, **({"ended": ended} if ended else {})})
             context.record_turn(account, text, answer, record)
@@ -694,6 +697,7 @@ class Agent:
                 }
             )
             for call in reply.tool_calls:
+                before = len(ctx.task.record)
                 result = await self.registry.call(call.name, call.arguments, ctx)
                 # Links the task was shown (SPEC §5.2): the whole page's, whose view leaves the addresses out (§3.4)
                 addresses.remember(ctx.task.seen_urls, result.full or result.text)
@@ -705,6 +709,8 @@ class Agent:
                         "args": _short(call.arguments),
                         "result": result.text[:4000],
                         "error": result.error,
+                        # What it changed, as the record has it: the app's "what Aha! did" box, live (SPEC §7.4)
+                        **({"did": receipt(ctx.task.record[before:])} if len(ctx.task.record) > before else {}),
                     }
                 )
                 task.append(
