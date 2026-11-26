@@ -113,8 +113,10 @@ class Chat:
         self.details = 0  # Details lines
         self.cuts: list[int] = []  # the folds Aha! made (a background task's note starts a topic)
 
-    async def message(self, account, text, image=None, open="", task=None) -> None:
-        self.sent.append(SimpleNamespace(text=text, buttons=[], image=image, card=None, open=open, task=task))
+    async def message(self, account, text, image=None, open="", task=None, record=None) -> None:
+        self.sent.append(
+            SimpleNamespace(text=text, buttons=[], image=image, card=None, open=open, task=task, record=record or [])
+        )
 
     async def cut(self, account) -> None:
         self.cuts.append(len(self.sent))  # where it folded: before the next message

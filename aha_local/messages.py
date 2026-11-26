@@ -11,7 +11,7 @@ FAILED = "Something went wrong while working on that, sorry. I've noted the erro
 RESTARTING = (
     "Aha! is restarting on your computer, so anything I was working on has stopped. Give it a minute, then ask again."
 )
-TOO_MANY_STEPS = "I couldn't finish that within my step limit. What I did:"
+TOO_MANY_STEPS = "I couldn't finish that within my step limit."
 APPROVAL_STALE = "That approval isn't open any more."
 EDIT_UNCLEAR = "I couldn't use those values. Check the card and tap Approve or Decline again."
 

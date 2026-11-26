@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime as dt
 import json
 import logging
@@ -55,7 +56,13 @@ class AgentOut(Protocol):
     """Where the agent's output goes: the end-to-end channel to the person's devices (e2e/channel.py)."""
 
     async def message(
-        self, account: Account, text: str, image: Image | None = None, open: str = "", task: dict | None = None
+        self,
+        account: Account,
+        text: str,
+        image: Image | None = None,
+        open: str = "",
+        task: dict | None = None,
+        record: list[str] | None = None,
     ) -> None: ...
     async def cut(self, account: Account) -> None: ...
     async def title(self, account: Account, start: int, text: str, new: bool = False, waiting: int = 0) -> None: ...
@@ -249,20 +256,30 @@ class Agent:
     # ---- outbound
 
     async def send(
-        self, account: Account, text: str, image: Image | None = None, open: str = "", task: dict | None = None
+        self,
+        account: Account,
+        text: str,
+        image: Image | None = None,
+        open: str = "",
+        task: dict | None = None,
+        record: list[str] | None = None,
     ) -> None:
+        """`record`: what the request changed, from its tool calls (SPEC §4 "What a request did"): the app shows it
+        under the message in a decoration of its own, as Aha!'s receipt, not as the model's words."""
         self.last_activity = time.monotonic()
         self.session(account).sent += 1
         account.transcript({"kind": "out", "text": text, "image": bool(image)})
-        await self.out.message(account, text[:20_000], image, open, task)
+        await self.out.message(account, text[:20_000], image, open, task, receipt(record))
 
-    async def task_note(self, account: Account, note: background.Note, start: int = 0) -> None:
+    async def task_note(
+        self, account: Account, note: background.Note, start: int = 0, record: list[str] | None = None
+    ) -> None:
         """A background task's news (SPEC §3.4, §7.4 "Task notes"): always in a topic of its own. A check folded
         what was going on before it started (`start`: the first item after that fold); with no check (it
         expired), it folds now. The part is titled with the task's title."""
         if not start:
             start = await self._fold(account)
-        await self.send(account, note.text, task=note.for_app())
+        await self.send(account, note.text, task=note.for_app(), record=record)
         await self.out.title(account, start, note.title)
 
     async def _fold(self, account: Account) -> int:
@@ -456,6 +473,9 @@ class Agent:
                 else:  # what it did before it stopped stays known (seen: a saved fact saved twice more)
                     context.record_turn(account, text, messages.STOPPED, record=record)
                 await self._stop_typing(account, typing, quiet)
+                if record:  # and the person sees it too, under "Stopped."
+                    with contextlib.suppress(Exception):
+                        await self.send(account, "", record=record)
                 raise
             except ModelUnavailable as e:
                 log.error("model unavailable: %s", e)
@@ -467,21 +487,24 @@ class Agent:
                 ended = "step_limit" if answer.startswith(messages.TOO_MANY_STEPS) else ""
             stopped = bool(ended)  # it didn't finish: the reason is `ended` (Stop raises CancelledError above)
             if not answer.strip() and not job:
-                # After "✅ Save" there may be nothing to add; if they've heard nothing at all, say something.
-                answer = "" if self.session(account).sent > sent_before else "…"
+                # After "✅ Save" there may be nothing to add; if they've heard nothing at all, say something
+                # (the receipt is something).
+                answer = "" if self.session(account).sent > sent_before or record else "…"
             await self._stop_typing(account, typing, quiet)  # before the answer, so no refresh can land after it
             noted = False  # a background task's note: its own topic, already sent and titled
             if job:
                 result = job.finish(account, report.get("outcome", ""), report.get("message", answer), stopped)
                 if result is None:
                     account.transcript({"kind": "answer", "text": "", "job": "background", "quiet": True})
-                    return  # nothing to tell yet: say nothing, keep the chat clean
-                await self.task_note(account, result, job.start)
+                    if record:  # no news, but it changed something: that's never silent (SPEC §4)
+                        await self.send(account, "", record=record)
+                    return  # nothing to tell yet: say nothing more, keep the chat clean
+                await self.task_note(account, result, job.start, record)
                 answer, noted = result.as_text(), True
             answered = 0  # the answer's chat item: the topic call says whether it waits for the person
-            if answer and not noted:
+            if (answer or record) and not noted:
                 # Unfinished stays unfolded after a break (SPEC §7.4 "Folding"): a task that stopped.
-                await self.send(account, answer, open="stopped" if stopped else "")
+                await self.send(account, answer, open="stopped" if stopped else "", record=record)
                 answered = account.seq
             account.transcript({"kind": "answer", "text": answer, **({"ended": ended} if ended else {})})
             context.record_turn(account, text, answer, record)
@@ -713,12 +736,22 @@ def after_task(prompt: list[dict], answer: str, question: str) -> list[dict]:
 
 
 def out_of_steps(record: list[str]) -> str:
-    """The answer when the step limit ends a task (SPEC §3.3): what it did, from the record of its actions, not the
-    model's last words (seen: "Let me take a fresh snapshot to see the current state." sent as the answer)."""
-    did = [line.split(": ", 1)[-1] for line in record]
-    if not did:
-        return f"{messages.TOO_MANY_STEPS} nothing was changed."
-    return f"{messages.TOO_MANY_STEPS}\n" + "\n".join(f"- {d}" for d in did)
+    """The answer when the step limit ends a task (SPEC §3.3), never the model's last words (seen: "Let me take a
+    fresh snapshot to see the current state." sent as the answer). What it did shows under it, as the receipt."""
+    return messages.TOO_MANY_STEPS if record else f"{messages.TOO_MANY_STEPS} Nothing was changed."
+
+
+MAX_RECEIPT_LINE = 200
+
+
+def receipt(record: list[str] | None) -> list[str]:
+    """The person's view of a request's record (SPEC §4 "What a request did"): each action that changed something,
+    in the tool's own words, without the tool's name; never written by the model."""
+    out = []
+    for line in record or []:
+        text = line.split(": ", 1)[-1].strip()
+        out.append(text if len(text) <= MAX_RECEIPT_LINE else text[: MAX_RECEIPT_LINE - 1] + "…")
+    return out
 
 
 def _short(arguments: str) -> str:

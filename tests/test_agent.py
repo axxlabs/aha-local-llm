@@ -249,15 +249,16 @@ async def test_typing_while_a_reply_is_owed_but_not_while_an_approval_waits(agen
     assert chat.texts() == [ask.text, "Noted."]  # no "On it…", no "Busy…"
 
 
-async def test_an_empty_answer_after_an_approval_sends_nothing(agent, llm, chat):
+async def test_an_empty_answer_after_an_approval_sends_only_the_receipt(agent, llm, chat):
     llm.call("memory_add", text="Lives in Testville")
     llm.answer("")
     await say(agent, "I live in Testville")
     approval = await chat.next()
     await say(agent, approval.buttons[0].label, button=approval.buttons[0].id)
     await settle(agent)
-    assert chat.texts() == [approval.text]  # no "…" after the save
-    assert person(agent.accounts).load_memory()[0]["text"] == "Lives in Testville"
+    [saved] = person(agent.accounts).load_memory()
+    assert chat.texts() == [approval.text, ""]  # no "…" after the save, no words the model didn't write
+    assert chat.sent[-1].record == [f"Saved [{saved['id']}]: Lives in Testville"]  # what was done, by the code
 
 
 async def test_typing_ends_before_the_answer_and_stays_off_while_the_topic_is_written(agent, llm, chat, accounts):

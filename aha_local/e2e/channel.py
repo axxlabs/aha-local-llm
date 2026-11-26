@@ -201,12 +201,20 @@ class Channel:
     # ---- output for the agent (agent.AgentOut, approvals.Out)
 
     async def message(
-        self, account: Account, text: str, image: Image | None = None, open: str = "", task: dict | None = None
+        self,
+        account: Account,
+        text: str,
+        image: Image | None = None,
+        open: str = "",
+        task: dict | None = None,
+        record: list[str] | None = None,
     ) -> None:
         item: dict = {"t": "msg", "role": "aha", "text": text}
+        if record:  # what the request changed, from its tool calls: the app's receipt under the message (§7.4)
+            item["record"] = record
         if image is not None:
             item["image"] = image.to_dict()
-        if open:  # "asks" or "stopped": the app keeps it unfolded after a break (SPEC §7.4 "Folding")
+        if open:  # "stopped": the app keeps it unfolded after a break (SPEC §7.4 "Folding")
             item["open"] = open
         if task:  # a background task's note: {"kind","title","prompt","every"}, a box (SPEC §7.4 "Task notes")
             item["task"] = task

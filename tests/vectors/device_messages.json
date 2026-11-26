@@ -100,7 +100,8 @@
       "cid?",
       "image?",
       "open?",
-      "task?"
+      "task?",
+      "record?"
     ],
     "title": [
       "seq",
