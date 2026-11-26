@@ -44,6 +44,7 @@ class Decision:
     values: list[str] = field(default_factory=list)
     note: str = ""
     reason: str = ""  # declined | expired | stopped | replan (the person wants a new plan, SPEC §3.4)
+    card: str = ""  # the card it answered (a background task keeps it: the topic that started it, SPEC §7.4)
 
 
 @dataclass
@@ -267,6 +268,7 @@ class Approvals:
             if self._pending.get(account.address) is p:
                 del self._pending[account.address]
             await asyncio.shield(self.out.state(account, p.id, state))
+        decision.card = p.id
         account.audit(
             {
                 "approval": p.id,

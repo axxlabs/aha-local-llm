@@ -208,6 +208,7 @@ async def test_a_background_task_keeps_what_was_allowed(agent, llm, chat, accoun
     await agent.approval_reply(fe, card.card["id"], "approve")
     await settle(agent)
     (entry,) = background.load(fe)
+    assert entry["card"] == card.card["id"] == background.listing(fe)[0]["card"]  # the topic that started it
     assert background.grant_of(fe, entry["id"]).open == {"royalmail.com"}
     assert background.listing(fe)[0]["allowed"] == [card.card["fields"][-1]["value"]]
 

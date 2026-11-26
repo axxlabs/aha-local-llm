@@ -261,6 +261,7 @@ async def test_the_panel_lists_tasks_and_cancel_is_the_persons(runner, agent, ac
         "now",
         "last_how",
         "allowed",
+        "card",
     }
     assert actions.cancel_background(fe, "def456", via="settings")
     assert not actions.cancel_background(fe, "def456", via="settings")

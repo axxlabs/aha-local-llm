@@ -289,6 +289,7 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
         "next": first,
         "created": int(now),
         "checks": 0,
+        **({"card": d.card} if d.card else {}),
         **({"grant": ctx.task.grant.to_dict()} if ctx.task.grant else {}),
     }
     save(ctx.account, [*entries, entry])
@@ -492,7 +493,7 @@ def check_prompt(entry: dict, now: float, tz: ZoneInfo) -> str:
 
 def listing(account: Account) -> list[dict]:
     """For the app's Tasks panel, newest first (SPEC §6.5)."""
-    keys = ("id", "title", "prompt", "until", "next", "created")
+    keys = ("id", "title", "prompt", "until", "next", "created", "card")
     rows = sorted(load(account), key=lambda e: e.get("created", 0), reverse=True)
     return [
         {
