@@ -30,8 +30,12 @@ class ToolResult:
     kind: str = "text"  # "page" results (browser snapshots) may be shortened later in a long task (SPEC §4.3)
     error: bool = False
     full: str = field(default="", repr=False)  # a page before it was cut to fit, for the harness's own checks
+    # What it changed, in one line, when it did (sent, saved, clicked, typed): kept in the request's record
+    # (SPEC §4 "What a request did"). Empty: it only read.
+    did: str = ""
 
 
+MAX_DID = 300  # characters of one line of a request's record
 MIN_SECRET = 3  # shorter values aren't masked in results: they'd blank out ordinary text
 
 
@@ -85,6 +89,9 @@ class TaskState:
     # What a background task's checks may do without asking (SPEC §5.2 "Allowed up front"): ticked by the person
     # on its card, or in the Tasks panel. A request the person is watching has none.
     grant: Grant = field(default_factory=Grant)
+    # What the task changed, one line per action that worked, set by the registry from each result's `did`: kept
+    # with the request's answer, so a later request knows, even when this one stopped before saying so (SPEC §4).
+    done: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -159,4 +166,6 @@ class Registry:
             ctx.task.ran.add(name)
             if tool.private:  # it read the person's private data (SPEC §5.2): declared, not set
                 ctx.task.private = True
+            if line := " ".join(result.did.split()):
+                ctx.task.done.append(redact(f"{name}: {line}", ctx.task.secrets)[:MAX_DID])
         return result

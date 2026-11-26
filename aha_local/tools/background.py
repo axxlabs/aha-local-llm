@@ -402,7 +402,8 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
     save(ctx.account, [*entries, entry])
     return ToolResult(
         f"Started. {describe(entry, tz)} Checks run when the household is idle, so timing isn't exact. "
-        "Tell the person briefly what you'll watch for."
+        "Tell the person briefly what you'll watch for.",
+        did=f"Started the background task {describe(entry, tz)}",
     )
 
 
@@ -416,9 +417,9 @@ async def task_list(args: dict, ctx: ToolContext) -> ToolResult:
 
 async def task_cancel(args: dict, ctx: ToolContext) -> ToolResult:
     task_id = str(args.get("id", "")).strip().strip("`")
-    if update(ctx.account, task_id, lambda e: None) is None:
+    if (gone := update(ctx.account, task_id, lambda e: None)) is None:
         return ToolResult("There's no background task with that id: use task_list.", error=True)
-    return ToolResult("Cancelled.")
+    return ToolResult("Cancelled.", did=f"Cancelled the background task “{gone['title']}” [{task_id}].")
 
 
 def register(reg: Registry) -> None:

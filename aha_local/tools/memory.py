@@ -46,7 +46,8 @@ async def memory_add(args: dict, ctx: ToolContext) -> ToolResult:
     if refused or not d.values[0].strip():
         return refused or guard.stopped(d, NOT_AGAIN)
     item = add_fact(ctx.account, " ".join(d.values[0].split()))
-    return ToolResult(f"Saved [{item['id']}]: {item['text']}{CARRY_ON}")
+    saved = f"Saved [{item['id']}]: {item['text']}"
+    return ToolResult(saved + CARRY_ON, did=saved)
 
 
 async def memory_update(args: dict, ctx: ToolContext) -> ToolResult:
@@ -63,7 +64,8 @@ async def memory_update(args: dict, ctx: ToolContext) -> ToolResult:
         if m["id"] == mid:
             m["text"], m["updated"] = " ".join(d.values[0].split())[:MAX_FACT_CHARS], time.strftime("%Y-%m-%d")
     ctx.account.save_memory(items)
-    return ToolResult(f"Updated [{mid}]: {' '.join(d.values[0].split())[:MAX_FACT_CHARS]}{CARRY_ON}")
+    updated = f"Updated [{mid}]: {' '.join(d.values[0].split())[:MAX_FACT_CHARS]}"
+    return ToolResult(updated + CARRY_ON, did=updated)
 
 
 async def memory_delete(args: dict, ctx: ToolContext) -> ToolResult:
@@ -77,7 +79,7 @@ async def memory_delete(args: dict, ctx: ToolContext) -> ToolResult:
     if refused:
         return refused
     ctx.account.save_memory([m for m in ctx.account.load_memory() if m["id"] != mid])
-    return ToolResult(f"Forgot [{mid}].{CARRY_ON}")
+    return ToolResult(f"Forgot [{mid}].{CARRY_ON}", did=f"Forgot [{mid}]: {current['text']}")
 
 
 def register(reg: Registry) -> None:

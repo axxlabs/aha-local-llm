@@ -297,9 +297,8 @@ async def calendar_add(args: dict, ctx: ToolContext) -> ToolResult:
     made = await call(ctx, "POST", cal.events, cal.conn, params={"sendUpdates": sends}, json=body)
     if isinstance(made, ToolResult):
         return made
-    return ToolResult(
-        f"Added to {cal.label}: " + describe(made, tz) + ("; invitations sent." if sends == "all" else ".")
-    )
+    added = f"Added to {cal.label}: " + describe(made, tz) + ("; invitations sent." if sends == "all" else ".")
+    return ToolResult(added, did=added)
 
 
 async def _event(ctx: ToolContext, args: dict) -> tuple[Cal, dict] | ToolResult:
@@ -371,7 +370,8 @@ async def calendar_update(args: dict, ctx: ToolContext) -> ToolResult:
     done = await call(ctx, "PATCH", f"{cal.events}/{event['id']}", cal.conn, params={"sendUpdates": sends}, json=body)
     if isinstance(done, ToolResult):
         return done
-    return ToolResult("Changed: " + describe(done, tz) + ("; guests were told." if sends == "all" else "."))
+    changed = "Changed: " + describe(done, tz) + ("; guests were told." if sends == "all" else ".")
+    return ToolResult(changed, did=changed)
 
 
 async def calendar_delete(args: dict, ctx: ToolContext) -> ToolResult:
@@ -392,7 +392,8 @@ async def calendar_delete(args: dict, ctx: ToolContext) -> ToolResult:
     )
     if isinstance(done, ToolResult):
         return done
-    return ToolResult(f"Deleted “{event.get('summary', '')}” from {cal.label}.")
+    deleted = f"Deleted “{event.get('summary', '')}” from {cal.label}."
+    return ToolResult(deleted, did=deleted)
 
 
 WHEN = "Local time 'YYYY-MM-DD HH:MM', or 'YYYY-MM-DD' for a whole day"

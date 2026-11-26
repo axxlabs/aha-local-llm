@@ -122,8 +122,20 @@ def build(
         {"role": "user", "content": context_block(account, timezone, household, now, current)},
         {"role": "assistant", "content": "Understood."},
     ]
-    shown = [{"role": t["role"], "content": t["content"]} for t in turns]
+    shown = [{"role": t["role"], "content": t["content"] + did_note(t.get("done"))} for t in turns]
     return head + shown + shorten_task(task, context_tokens * TASK_SHARE)
+
+
+MAX_DONE = 40  # lines of a request's record kept: the latest
+
+
+def did_note(done: object) -> str:
+    """What an earlier request changed, after its answer (SPEC §4 "What a request did"). A later request sees only
+    the messages, not the tool calls: without this, a fact saved in a request that then ran out of steps looked
+    still to do, and was asked twice more (2026-11-26)."""
+    if not isinstance(done, list) or not done:
+        return ""
+    return "\n\n[Aha!'s record of what this request did:\n" + "\n".join(f"- {d}" for d in done) + "]"
 
 
 def shorten_task(task: list[dict], budget: float) -> list[dict]:
@@ -151,15 +163,25 @@ def strip(m: dict) -> dict:
     return {k: v for k, v in m.items() if not k.startswith("_")}
 
 
-def record_turn(account: Account, user_text: str, answer: str, checked: bool = False) -> dict:
-    """`checked`: the answer passed the number check, so its numbers may be quoted again later."""
+def record_turn(
+    account: Account, user_text: str, answer: str, checked: bool = False, done: list[str] | None = None
+) -> dict:
+    """`checked`: the answer passed the number check, so its numbers may be quoted again later. `done`: what the
+    request changed (SPEC §4 "What a request did"), shown with the answer to later requests."""
     conv = account.load_context()
     now = time.time()
     stamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     conv["turns"].extend(
         [
             {"role": "user", "content": user_text, "ts": stamp, "t": now},
-            {"role": "assistant", "content": answer, "ts": stamp, "t": now, "checked": checked},
+            {
+                "role": "assistant",
+                "content": answer,
+                "ts": stamp,
+                "t": now,
+                "checked": checked,
+                **({"done": done[-MAX_DONE:]} if done else {}),
+            },
         ]
     )
     account.save_context(conv)

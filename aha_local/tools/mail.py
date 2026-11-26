@@ -274,7 +274,8 @@ def _compose(kind: str):
         else:
             await gmail(ctx, "POST", "/drafts", conn, json={"message": message})
             done = "saved as a draft (not sent)"
-        return ToolResult(f"The email was {done}. Subject: {subj}." + (f" Cc: {cc_ok}." if cc_ok else ""))
+        said = f"The email was {done}. Subject: {subj}." + (f" Cc: {cc_ok}." if cc_ok else "")
+        return ToolResult(said, did=said)
 
     return handler
 

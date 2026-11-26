@@ -142,9 +142,13 @@ def make_handler(name: str):
             return guard.blocked(verdict.why)
         if verdict.outcome == "run":
             if action.kind == "read":
+                clicked = clicked_on(args, ctx) if name == "browser_click" else ""  # before the page changes
                 if name == "browser_click" and human.is_ref(args.get("target")):
                     await run_code(session, human.move_code(args["target"]))  # the mouse gets there first (§3.4)
-                return await call_with_snapshot(session, name, args, ctx)
+                result = await call_with_snapshot(session, name, args, ctx)
+                if clicked and not result.error:
+                    result.did = clicked
+                return result
             return await ran(session, name, args, action, ctx)
         try:  # the card shows the page the action happens on
             shot_result = to_result(await session.call("browser_take_screenshot", {}))
@@ -166,14 +170,27 @@ def make_handler(name: str):
 async def ran(session, name: str, args: dict, action, ctx: ToolContext) -> ToolResult:
     """Run an action that may go out (it passed the gate, with or without a card), and say what went, in the same
     words either way (SPEC §5.1)."""
+    what = entered(name, args, ctx)  # before the page changes: its labels are this page's
     result = await run_approved(session, name, args, ctx)
     if action.kind in ("open", "search"):
         if not result.error:
             guard.opened(ctx, str(args.get("url", "")))
         return result
-    if what := entered(name, args, ctx):
+    if what:
         result.text = what + "\n\n" + result.text
+    if not result.error:  # the request's record (SPEC §4 "What a request did")
+        result.did = (what or name.removeprefix("browser_")) + (f" (on {action.site})" if action.site else "")
     return result
+
+
+def clicked_on(args: dict, ctx: ToolContext) -> str:
+    """A click for the request's record (SPEC §4): the page's own label of what it clicks, and the site. A click
+    may change things (a basket, a booking), so a later request must know it happened."""
+    ref = str(args.get("target", ""))
+    label = element_label(ctx.task.ref_lines.get(ref, ""), ref) or " ".join(str(args.get("element", "")).split())
+    host = urlsplit(ctx.task.page_url).hostname or ""
+    site = site_of(host) if host else ""
+    return f"Clicked “{label}”" + (f" on {site}" if site else "")
 
 
 SIGNED_NOTE = (

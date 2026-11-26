@@ -464,6 +464,7 @@ class Agent:
         began = time.time()
         asked_at = 0 if job else account.seq  # the item of the message that started it (SPEC §7.4)
         quiet = job is not None and job.quiet
+        done: list[str] = []  # what it changed, kept with its answer (SPEC §4 "What a request did")
         typing = asyncio.create_task(asyncio.sleep(0) if quiet else self._typing(account))
         # The model is this person's for the whole task, its title and summary included: its cache stays theirs
         # (SPEC §3.3 "One task at a time"). Waiting for the turn shows as "finishing someone else's request".
@@ -474,13 +475,20 @@ class Agent:
                 answer, checked, text = await self._within_limit(
                     account,
                     self.solve(
-                        account, text, quiet, job.grant(account) if job else None, job.links(account) if job else None
+                        account,
+                        text,
+                        quiet,
+                        job.grant(account) if job else None,
+                        job.links(account) if job else None,
+                        done,
                     ),
                 )
             except asyncio.CancelledError:
                 account.transcript({"kind": "stopped"})
                 if job:
                     job.interrupted(account)
+                else:  # what it did before it stopped stays known (seen: a saved fact saved twice more)
+                    context.record_turn(account, text, messages.STOPPED, done=done)
                 await self._stop_typing(account, typing, quiet)
                 raise
             except TimeoutError:
@@ -511,7 +519,7 @@ class Agent:
                 # Unfinished stays unfolded after a break (SPEC §7.4 "Folding"): a task that stopped, or a question.
                 await self.send(account, answer, open="stopped" if stopped else "asks" if folding.asks(answer) else "")
             account.transcript({"kind": "answer", "text": answer})
-            context.record_turn(account, text, answer, checked)
+            context.record_turn(account, text, answer, checked, done)
             # The task's last request, still cached in the person's slot: the topic's title and memory entry are
             # asked at its end, so they cost only their own words (SPEC §3.2 "Cache slots", §5.4, §7.4).
             prompt, self.session(account).last_prompt = self.session(account).last_prompt, None
@@ -569,11 +577,13 @@ class Agent:
         quiet: bool = False,
         grant: Grant | None = None,
         links: list[str] | None = None,
+        done: list[str] | None = None,
     ) -> tuple[str, bool, str]:
         """Returns the answer, whether it passed the checks, and everything the person said during the task.
         `quiet` (a background check): no tool lines, and the person's messages wait for a task of their own.
         `grant`: a background task's own permissions (SPEC §5.2 "Allowed up front"); a request the person is
-        watching has none: each action asks as it happens."""
+        watching has none: each action asks as it happens. `done`: filled with what it changes, one line each
+        (SPEC §4 "What a request did"), kept by the caller even if it stops."""
         today = dates.now(self.config).date()
 
         def with_dates(message: str) -> str:
@@ -603,7 +613,7 @@ class Agent:
         browser = self.browser.for_account(account.id) if self.browser else None
         approvals = _Pausing(self.approvals, self.llm, account.address)  # a card frees the model meanwhile
         topic = folding.segment_start(account.recent_items(), dates.tz(self.config))  # the topic going on (§4)
-        state = TaskState(grant=grant if grant is not None else Grant())
+        state = TaskState(grant=grant if grant is not None else Grant(), done=done if done is not None else [])
         ctx = ToolContext(account, approvals, self.config, state, browser, send)
 
         def record(entry: dict) -> None:
