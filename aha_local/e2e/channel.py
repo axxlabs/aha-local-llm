@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import __version__, actions, folding, messages, reports
+from .. import __version__, actions, diagnostics, folding, messages, reports
 from ..accounts import Account, Accounts, Device
 from ..certs import needs_renewal
 from ..items import Image
@@ -46,6 +46,7 @@ REPLY_BYTES = 1_500_000  # items in one sync or history reply, as JSON: well ins
 
 
 TRACE_KINDS = ("user", "model", "tool", "check", "item", "stopped", "answer")
+STEP_CHARS = 8_000  # of each text in a live step: the whole record stays in the transcript
 
 
 def trace(records: list[dict], seq: int, budget: int = REPLY_BYTES) -> list[dict]:
@@ -222,9 +223,32 @@ class Channel:
         subject starts there, so the part before it folds now."""
         await self.publish(account, {"t": "title", "from": start, "text": text, **({"new": True} if new else {})})
 
-    async def tool(self, account: Account, label: str) -> None:
-        """A tool the model starts using, as it happens (SPEC §7.4 "Tools used"): a chat item, no push."""
-        await self.publish(account, {"t": "tool", "label": label})
+    async def steps(self, account: Account) -> None:
+        """The request's Details line (SPEC §7.4 "Details"): a chat item, no push, once per task, where its work
+        starts. Its records come live (`step`); expanded later, the app asks for them (`trace_request`)."""
+        await self.publish(account, {"t": "steps", "task": account.task or ""})
+
+    async def step(self, account: Account, event: dict) -> None:
+        """One record of the task as it happens, for its Details line (SPEC §7.4): outside the chat items, since
+        the transcript keeps it already."""
+        event = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), **{k: _cut(v, STEP_CHARS) for k, v in event.items()}}
+        await self.to_devices(account, {"t": "step", "task": account.task or "", "event": event})
+
+    async def diagnostics(self, reader=None, every: float = diagnostics.EVERY) -> None:
+        """Live diagnostics in the app's header (SPEC §7.4): a reading every few seconds, only while some device
+        is online, to the accounts that have one."""
+        reader = reader or diagnostics.Reader()
+        while True:
+            await asyncio.sleep(every)
+            if not self.online:
+                continue
+            try:
+                reading = await reader.read()
+                for account in self.accounts.all():
+                    if any(self.is_online(d) for d in account.devices.values()):
+                        await self.to_devices(account, reading)
+            except Exception:
+                log.exception("live diagnostics failed")
 
     async def text(self, account: Account, text: str) -> None:
         await self.message(account, text)

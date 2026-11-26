@@ -194,6 +194,20 @@
       "seq",
       "ts",
       "label"
+    ],
+    "steps": [
+      "seq",
+      "ts",
+      "task"
+    ],
+    "step": [
+      "task",
+      "event"
+    ],
+    "stats": [
+      "cpu?",
+      "mem?",
+      "gpu?"
     ]
   },
   "pairing": {

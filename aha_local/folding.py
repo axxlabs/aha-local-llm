@@ -14,7 +14,7 @@ import re
 from zoneinfo import ZoneInfo
 
 BREAK_SECONDS = 2 * 3600  # a break: two hours without a message, or a new day (app: src/fold.ts; both checked)
-SHOWN = ("msg", "approval", "tool")  # what the chat shows; states and titles don't count for breaks
+SHOWN = ("msg", "approval", "tool", "steps")  # what the chat shows; states and titles don't count for breaks
 MAX_TITLE = 60
 ASK = (
     "[Aha! app, not from the user. Decide whether the user's latest message starts a new subject, then give a "

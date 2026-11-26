@@ -96,6 +96,7 @@ class Service:
         self.background.start()
         pruning = asyncio.create_task(self._prune_history())
         warming = asyncio.create_task(self.agent.warm())
+        live = asyncio.create_task(self.channel.diagnostics())  # the app's header (SPEC §7.4 "Live diagnostics")
         log.info("aha %s: %d tools (%d browser)", __version__, len(self.registry.names()), count)
         sock = self.config.data_dir / "agent.sock"
         sock.unlink(missing_ok=True)
@@ -107,6 +108,7 @@ class Service:
         finally:
             pruning.cancel()
             warming.cancel()
+            live.cancel()
             await self.background.stop()
             await self.browser.stop()
 

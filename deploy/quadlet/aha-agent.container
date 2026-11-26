@@ -10,6 +10,9 @@ Image=@AGENT_IMAGE@
 Network=aha-internal.network
 Network=aha-egress.network
 SecurityLabelDisable=true
+# The GPU, only to read its load and temperature with nvidia-smi for the app's header (SPEC §7.4 "Live
+# diagnostics"); the model runs in aha-llm.
+AddDevice=nvidia.com/gpu=all
 DropCapability=ALL
 NoNewPrivileges=true
 ReadOnly=true

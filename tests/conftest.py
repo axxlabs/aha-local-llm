@@ -89,7 +89,9 @@ class Chat:
         self.typed: list[bool] = []  # typing on/off, in order
         self.states: list[tuple[str, str]] = []
         self.titles: list[tuple[int, str]] = []
-        self.tools: list[str] = []  # tool lines, as they happened (SPEC §7.4 "Tools used")
+        self.tools: list[str] = []  # the tools' labels its Details line shows, as they happened (SPEC §7.4)
+        self.events: list[dict] = []  # the records sent live, for the Details line
+        self.details = 0  # Details lines
         self.cuts: list[int] = []  # the folds Aha! made (a background task's note starts a topic)
 
     async def message(self, account, text, image=None, open="", task=None) -> None:
@@ -98,8 +100,13 @@ class Chat:
     async def cut(self, account) -> None:
         self.cuts.append(len(self.sent))  # where it folded: before the next message
 
-    async def tool(self, account, label) -> None:
-        self.tools.append(label)
+    async def steps(self, account) -> None:
+        self.details += 1
+
+    async def step(self, account, event) -> None:
+        self.events.append(event)
+        if event.get("kind") == "tool" and event.get("label") and (not self.tools or self.tools[-1] != event["label"]):
+            self.tools.append(event["label"])  # what the Details line says it used, in order
 
     async def title(self, account, start, text, new=False) -> None:
         self.titles.append((start, text) if not new else (start, text, "new"))

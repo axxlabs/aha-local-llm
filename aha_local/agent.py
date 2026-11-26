@@ -40,7 +40,11 @@ def model_record(model: str, reply) -> dict:
         "model": model,
         "text": hide(reply.content),
         "reasoning": hide(reply.reasoning),
-        "calls": [{"name": c.name, "args": hide(c.arguments)} for c in reply.tool_calls],
+        # Each call's label in the person's words (SPEC §7.4 "Details"): what the app's details line says it's doing
+        "calls": [
+            {"name": c.name, "args": hide(c.arguments), "label": messages.tool_label(c.name) or ""}
+            for c in reply.tool_calls
+        ],
         "prompt_tokens": reply.prompt_tokens,
         "cached_tokens": reply.cached_tokens,
         "ms": reply.ms,
@@ -56,7 +60,8 @@ class AgentOut(Protocol):
     ) -> None: ...
     async def cut(self, account: Account) -> None: ...
     async def title(self, account: Account, start: int, text: str, new: bool = False) -> None: ...
-    async def tool(self, account: Account, label: str) -> None: ...
+    async def steps(self, account: Account) -> None: ...  # the request's Details line (SPEC §7.4 "Details")
+    async def step(self, account: Account, event: dict) -> None: ...  # one of its records, as it happens
     async def typing(self, account: Account, on: bool, queued: bool = False) -> None: ...
     async def card(self, account: Account, card: dict) -> None: ...
     async def state(self, account: Account, approval_id: str, state: str) -> None: ...
@@ -616,9 +621,21 @@ class Agent:
         state = TaskState(grant=grant if grant is not None else Grant(), done=done if done is not None else [])
         ctx = ToolContext(account, approvals, self.config, state, browser, send)
 
-        def record(entry: dict) -> None:
-            """The task's transcript: what the person typed on a sign-in card never shows (SPEC §5.8)."""
-            account.transcript(redacted(entry, ctx.task.secrets))
+        steps_shown = False
+
+        async def record(entry: dict) -> None:
+            """The task's transcript: what the person typed on a sign-in card never shows (SPEC §5.8). Each record
+            also goes to the app as it happens, under one Details line for the request (SPEC §7.4 "Details"); a
+            background check is quiet."""
+            nonlocal steps_shown
+            entry = redacted(entry, ctx.task.secrets)
+            account.transcript(entry)
+            if quiet:
+                return
+            if not steps_shown:
+                steps_shown = True
+                await self.out.steps(account)
+            await self.out.step(account, entry)
 
         # A link the person sent is theirs, not the model's. A check's text is its task's instructions, which the
         # model wrote: only the links its task kept count (SPEC §5.2 "Made-up addresses").
@@ -626,7 +643,6 @@ class Agent:
         tools = self.registry.specs()
         last = ""
         retried: set[str] = set()  # the checks that already sent a draft back (SPEC §3.5.1): once each
-        shown_tool = ""  # the last tool label said in the chat
         can_sign_in = "browser_login" in self.registry.names()
         # Where numbers in the answer may come from: what the person said or saved, earlier answers, and pages
         # opened in this task. Search snippets don't count (SPEC §3.5).
@@ -663,7 +679,7 @@ class Agent:
             reply = await self.llm.chat(msgs, tools, who=account.address)
             self.session(account).last_prompt = msgs  # the title is asked at its end (SPEC §7.4 "Folding")
             log.info("model call: %d prompt tokens, %d cached", reply.prompt_tokens, reply.cached_tokens)
-            record(model_record(self.llm.model, reply))
+            await record(model_record(self.llm.model, reply))
             if not reply.tool_calls:
                 draft = checks.Draft(text, reply.content or "", ctx.task, can_sign_in, sources, has_photo)
                 # A check's own "I'll check again in 15 minutes" isn't a promise to set something up (SPEC §3.4).
@@ -672,7 +688,7 @@ class Agent:
                 if failed:
                     retried.add(failed.name)
                     log.info(failed.log)
-                    record({"kind": "check", "name": failed.name, **failed.details(draft)})
+                    await record({"kind": "check", "name": failed.name, **failed.details(draft)})
                     task.append({"role": "assistant", "content": draft.answer})
                     task.append({"role": "user", "content": failed.retry_for(draft)})
                     continue
@@ -680,7 +696,7 @@ class Agent:
                     # A check's answer must say what it found (SPEC §3.4): seen, one that followed its own prompt's
                     # wording ("No reply yet") with no WAITING closed the task.
                     retried.add("outcome")
-                    record({"kind": "check", "name": "outcome"})
+                    await record({"kind": "check", "name": "outcome"})
                     task.append({"role": "assistant", "content": draft.answer})
                     task.append({"role": "user", "content": background.OUTCOME_RETRY})
                     continue
@@ -701,19 +717,16 @@ class Agent:
                 }
             )
             for call in reply.tool_calls:
-                label = messages.tool_label(call.name)
-                if label and label != shown_tool and not quiet:  # said as it happens (SPEC §7.4 "Tools used")
-                    shown_tool = label
-                    await self.out.tool(account, label)
                 result = await self.registry.call(call.name, call.arguments, ctx)
                 # Links the task was shown (SPEC §5.2): the whole page's, whose view leaves the addresses out (§3.4)
                 addresses.remember(ctx.task.seen_urls, result.full or result.text)
                 if result.kind == "expired":
                     raise ApprovalExpired
-                record(
+                await record(
                     {
                         "kind": "tool",
                         "name": call.name,
+                        "label": messages.tool_label(call.name) or "",
                         "args": _short(call.arguments),
                         "result": result.text[:4000],
                         "error": result.error,
