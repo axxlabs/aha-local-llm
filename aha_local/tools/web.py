@@ -95,6 +95,7 @@ async def read_with_browser(url: str, ctx: ToolContext, why: str) -> ToolResult:
     if ctx.browser is None:
         return ToolResult(f"Couldn't read {url}: {why}. Try the browser tools.", error=True)
     from .browser_page import CANT_TELL, annotate, http_status, to_result
+    from .page_view import for_model
 
     result = to_result(await ctx.browser.call("browser_navigate", {"url": url}))
     annotate(ctx, result)  # a sign-in form or a human check on it is said here too (SPEC §3.4)
@@ -106,6 +107,7 @@ async def read_with_browser(url: str, ctx: ToolContext, why: str) -> ToolResult:
         also = f"answered HTTP {status} to the browser too" if status else "and the browser failed too"
         return ToolResult(f"Couldn't read {url}: {why}, {also}. {CANT_TELL}", error=True)
     ctx.task.opened_sites.add(check_url(url)[0] or "")
+    for_model(ctx, result)
     result.text = f"(Read with the browser because {why}.)\n{result.text}"
     return result
 

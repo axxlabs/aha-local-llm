@@ -706,7 +706,8 @@ class Agent:
                     shown_tool = label
                     await self.out.tool(account, label)
                 result = await self.registry.call(call.name, call.arguments, ctx)
-                addresses.remember(ctx.task.seen_urls, result.text)  # links the task was shown (SPEC §5.2)
+                # Links the task was shown (SPEC §5.2): the whole page's, whose view leaves the addresses out (§3.4)
+                addresses.remember(ctx.task.seen_urls, result.full or result.text)
                 if result.kind == "expired":
                     raise ApprovalExpired
                 record(

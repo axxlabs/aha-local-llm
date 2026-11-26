@@ -58,11 +58,12 @@ BROWSER_CLEARED = "Done: my browser has forgotten every site for you, so you're 
 # change it. One signature per medium, and one way to tell it's already there.
 SIGNATURES = {
     "email": "Written by Aha!\n- {name}'s Private AI Assistant",
-    "chat": "(_Written by Aha!, {name}'s Private AI Assistant_)",  # WhatsApp's: one line, in its italics
+    # A message typed on a site: one line, plain (WhatsApp's italics showed as underscores elsewhere)
+    "chat": "(Written by Aha!, {name}'s Private AI Assistant)",
     "event": "Created by Aha! (A Private AI Assistant)",  # read by guests too: no one's name
 }
 SEPARATORS = {"email": "\n\n", "chat": "\n", "event": "\n\n"}
-# Not \b at the start: the chat signature opens with "(_Written", and "_" is a word character.
+# Not \b at the start: an older chat signature opens with "(_Written", and "_" is a word character.
 ALREADY_SIGNED = re.compile(r"(?<![a-z])(?:written|created) by aha\b", re.I)
 
 

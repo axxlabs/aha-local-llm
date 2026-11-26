@@ -238,13 +238,22 @@ async def test_private_data_is_declared_on_the_tool_and_set_by_the_registry():
     }
 
 
-def test_on_a_messaging_site_typing_is_a_send_unless_clearly_the_search_box():
-    """SPEC §5.2: on the safe side, so a renamed or translated message box is still a card."""
+def test_typing_into_a_message_box_is_a_send_on_any_site():
+    """SPEC §5.2 rule 2: told by the field's own label on the page, not by a list of sites (seen: LinkedIn's
+    messages went unsigned)."""
     from aha_local.policy.browser import sends_message
 
-    for labels in (["Type a message"], ["Digite uma mensagem"], ["Composer"], [""], []):
-        assert sends_message("browser_type", "whatsapp.com", labels), labels
-    for labels in (["Search input textbox"], ["Pesquisar ou começar uma nova conversa"]):
-        assert not sends_message("browser_type", "whatsapp.com", labels), labels
-    assert sends_message("browser_press_key", "whatsapp.com", [])  # a key goes wherever the focus is
-    assert not sends_message("browser_type", "waitrose.com", ["Type a message"])  # not a messaging site
+    for labels in (
+        ["Type a message"],
+        ["Write a message…"],
+        ["Reply"],
+        ["Your response"],
+        ["Add a comment"],
+        ["Digite uma mensagem"],
+        ["Escribe un mensaje"],
+        ["Name", "Your message"],  # a form with a message in it
+    ):
+        assert sends_message("browser_type", labels), labels
+    for labels in (["Search messages"], ["Pesquisar ou começar uma nova conversa"], ["Postcode"], [""], []):
+        assert not sends_message("browser_type", labels), labels
+    assert not sends_message("browser_press_key", ["Write a message…"])  # a key alone is typing, not a message

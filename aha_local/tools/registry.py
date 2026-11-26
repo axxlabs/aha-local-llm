@@ -68,6 +68,7 @@ class TaskState:
     page_url: str = ""  # the current page's address, from the browser
     blank_page: bool = False  # the last page the model saw is a new window's blank page (SPEC §3.4)
     ref_lines: dict[str, str] = field(default_factory=dict)  # elements seen on the current page: ref → its line
+    page_parts: list[str] = field(default_factory=list)  # the current page as the model reads it, part by part
     # The task holds private data (SPEC §5.2): set by the registry after any tool declared `private` ran, and by
     # the browser when a page of a signed-in site shows. Tools never set it themselves.
     private: bool = False

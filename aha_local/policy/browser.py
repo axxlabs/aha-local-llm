@@ -69,23 +69,29 @@ SAFE_KEYS = {
 }
 
 
-# Messaging sites (SPEC §5.2 rule 2): typing into the message box sends a message to someone, so it's a `send`,
-# a card every time, trusted or not; typing elsewhere there (the search box) follows the usual rules. Their pages
-# are the person's own messages, so a page of one makes the task hold private data.
-MESSAGE_SITES = {"whatsapp.com"}
-MESSAGE_BOX = re.compile(r"\btype a message\b|^message\b|\bmensagem\b|\bescreva\b", re.I)
+# A message box (SPEC §5.2 rule 2), on any site: typing into it sends a message to someone, so it's a `send`, a
+# card every time, trusted or not. Told by the page's own label of the field, never by a list of sites (seen
+# 2026-11-26: LinkedIn wasn't on the list, and its messages went unsigned, as ordinary typing).
+MESSAGE_BOX = re.compile(
+    r"\bmessag|\bmsg\b|\breply\b|\brespon[sd]|\bcomment|\bcompose|\bwrite\b|\bchat\b|\binmail\b|"
+    r"mensag|mensaje|escrev|escrib|respost|respond|comentár|comentar|nachricht|antwort|réponse|répond|commentaire",
+    re.I,
+)
 SEARCH_BOX = re.compile(r"\bsearch\b|\bpesquis|\bbusca|\bbuscar\b|\bsuche\b|\brecherch", re.I)
+# Sites whose pages are the person's own messages, signed in by a QR code rather than browser_login: a page of one
+# makes the task hold private data (SPEC §5.6), as a site they signed in on does.
+PRIVATE_SITES = {"whatsapp.com"}
 
 
-def sends_message(name: str, site: str, labels: list[str]) -> bool:
-    """Typing on a messaging site sends a message, unless it's clearly into the search box: decided from the page's
-    own labels, on the safe side (a renamed or translated message box is still a send). A typed key goes wherever
-    the focus is: a send too."""
-    if site not in MESSAGE_SITES:
-        return False
-    if name == "browser_press_key":
-        return True
-    return not labels or not all(label and SEARCH_BOX.search(label) for label in labels)
+def is_message_box(label: str) -> bool:
+    """The page's own label of a field says it's for a message to someone ("Write a message…", "Reply",
+    "Your response"), and not a search box ("Search messages")."""
+    return bool(label) and bool(MESSAGE_BOX.search(label)) and not SEARCH_BOX.search(label)
+
+
+def sends_message(name: str, labels: list[str]) -> bool:
+    """Typing into a message box, on any site: from the page's own labels of the fields it types into."""
+    return name != "browser_press_key" and any(is_message_box(label) for label in labels)
 
 
 def offered(name: str) -> bool:
@@ -195,7 +201,7 @@ def classify(name: str, args: dict, page_site: str = "", labels: list[str] | Non
     if name in TYPING:
         if not TYPING[name].types(args):
             return Action("read")
-        if labels is not None and sends_message(name, page_site, labels):
+        if labels is not None and sends_message(name, labels):
             return Action("send", page_site)
         return Action("type", page_site)
     if name in AUTO or name == "browser_tabs":
@@ -228,8 +234,8 @@ class Form:
 
 
 def form_for(name: str, args: dict, site: str, signer: str = "") -> Form:
-    """The card for a browser call. `signer`: it sends a message on a messaging site, signed in that name in
-    code (SPEC §3.4), on the card, so the person sees the signature and can change it."""
+    """The card for a browser call. `signer`: it types into a message box, signed in that name in code
+    (SPEC §3.4), on the card, so the person sees the signature and can change it."""
     where = f" on {site}" if site else ""
     if name in TYPING:
         form = TYPING[name].form(args, where)

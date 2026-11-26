@@ -12,14 +12,14 @@ from urllib.parse import urlsplit
 import mcp.types as mt
 
 from ..items import Image
-from ..policy.browser import MESSAGE_SITES
+from ..policy.browser import PRIVATE_SITES
 from ..policy.urls import site_of
 from . import human, signins
+from .page_view import for_model
 from .registry import ToolContext, ToolResult
 
 log = logging.getLogger("aha.browser")
 
-MAX_SNAPSHOT_CHARS = 30_000
 HTTP_STATUS = re.compile(r"^- HTTP status: (\d{3})", re.M)
 PAGE_URL = re.compile(r"^- Page URL: (\S+)", re.M)
 # A sign-in form on the page, from the page's own snapshot (SPEC §3.4 "Signing in"): a password field, or an email
@@ -65,10 +65,7 @@ def to_result(r: mt.CallToolResult) -> ToolResult:
     status = http_status(text)
     if status and status >= 400:
         text = f"The site answered HTTP {status}. {CANT_TELL}\n{text}"
-    full = text
-    if len(text) > MAX_SNAPSHOT_CHARS:
-        text = text[:MAX_SNAPSHOT_CHARS] + "\n[… snapshot cut to fit; use browser_find to look for something specific]"
-    return ToolResult(text, images, kind="page", error=bool(r.isError), full=full)
+    return ToolResult(text, images, kind="page", error=bool(r.isError), full=text)
 
 
 def http_status(text: str) -> int | None:
@@ -96,7 +93,7 @@ async def current_site(session) -> str:
 
 SNAPSHOT_LINK = re.compile(r"### Snapshot\s*\n- \[Snapshot\]\([^)]*\)")
 # The model writes references as "e23", "[ref=e23]", "ref=f8e31"…: the browser wants "e23" / "f8e31".
-REF_TARGET = re.compile(r"^\[?\s*(?:ref\s*[=:]\s*)?((?:f\d+)?e\d+)\s*\]?$")
+REF_TARGET = re.compile(r"^[\[(]?\s*(?:ref\s*[=:]\s*)?((?:f\d+)?e\d+)\s*[\])]?$")
 # A field only the sign-in card may fill: its page label says password or code (SPEC §3.4 "Signing in").
 SECRET_FIELD = re.compile(r"pass ?word|passcode|\bpin\b|one[- ]time|verification code|security code|\botp\b|2fa", re.I)
 YAML_BLOCK = re.compile(r"```yaml\n(.*?)(?:```|\Z)", re.S)  # tolerant of a snapshot cut to fit
@@ -140,6 +137,7 @@ async def call_with_snapshot(session, name: str, args: dict, ctx: ToolContext) -
             )
     await close_cookie_banner(session, ctx, result)
     annotate(ctx, result)
+    for_model(ctx, result)
     return result
 
 
@@ -188,6 +186,7 @@ async def close_cookie_banner(session, ctx: ToolContext, result: ToolResult) -> 
         + "### Page"
         + snap.text.split("### Page", 1)[1]
     )
+    result.full = result.text  # the page after the banner, whole, for the harness (refs, links)
 
 
 REF_IN_LINE = re.compile(r"\[ref=((?:f\d+)?e\d+)\]")
@@ -291,7 +290,7 @@ def note_page(ctx: ToolContext, text: str) -> None:
         return
     if ctx.task.signed_in_sites is None:
         ctx.task.signed_in_sites = signins.signed_in_sites(ctx.account)
-    if site_of(host) in ctx.task.signed_in_sites or site_of(host) in MESSAGE_SITES:
+    if site_of(host) in ctx.task.signed_in_sites or site_of(host) in PRIVATE_SITES:
         ctx.task.private = True  # the person's account pages, or their messages
 
 

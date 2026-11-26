@@ -421,7 +421,7 @@ async def test_on_whatsapp_web_the_message_box_is_always_a_card_and_the_page_is_
     await agent.inbound(fe, "tell Sam on WhatsApp I'm on my way")
     card = await chat.next()
     assert card.card["title"] == "Send this message on whatsapp.com?"
-    signed = "On my way\n(_Written by Aha!, Fe's Private AI Assistant_)"  # signed in code (SPEC §3.4)
+    signed = "On my way\n(Written by Aha!, Fe's Private AI Assistant)"  # signed in code (SPEC §3.4)
     assert [(f["label"], f["value"], f["kind"]) for f in card.card["fields"]] == [("Text", signed, "longtext")]
     assert card.card["why"].startswith("Sending a message to someone always asks first")  # the card's (i)
     assert fake.contexts[-1].fields == {"e1": "Sam"}  # the search ran without a card: the site is trusted
@@ -438,6 +438,29 @@ async def test_on_whatsapp_web_the_message_box_is_always_a_card_and_the_page_is_
     from aha_local.messages import signed as sign
 
     assert sign(signed, "Fe", medium="chat") == signed  # never signed twice
+
+
+async def test_a_message_box_on_any_site_is_a_signed_card(setup, llm, chat, accounts):
+    """Seen 2026-11-26: LinkedIn messages went unsigned, as ordinary typing on a site, since only WhatsApp was on
+    a list. The field's own label says it's a message box."""
+    from aha_local.tools import trusted
+
+    agent, _, fake = setup
+    fe = person(accounts)
+    assert trusted.set_trusted(fe, "www.linkedin.com", True)
+    llm.call("browser_navigate", url="https://www.linkedin.com/messaging/")
+    llm.call("browser_type", element="Search", target="e1", text="Sam")
+    llm.call("browser_type", element="message", target="e2", text="Thanks, see you then")
+    llm.answer("Sent.")
+    await agent.inbound(fe, "reply to Sam on LinkedIn")
+    card = await chat.next()
+    assert card.card["title"] == "Send this message on linkedin.com?"
+    signed = "Thanks, see you then\n(Written by Aha!, Fe's Private AI Assistant)"
+    assert [f["value"] for f in card.card["fields"]] == [signed]
+    assert fake.contexts[-1].fields == {"e1": "Sam"}  # the search box follows trust: no card
+    await agent.approval_reply(fe, card.card["id"], "approve")
+    await settle(agent)
+    assert fake.contexts[-1].fields == {"e1": "Sam", "e2": signed}
 
 
 def test_a_whatsapp_web_page_makes_the_task_private(accounts):

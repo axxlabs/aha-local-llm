@@ -156,6 +156,11 @@ class FakeContext:
                 '- heading "Sam" [ref=e5]\n'
                 f'- textbox "Type a message" [ref=e2]: {self.fields.get("e2", "")}\n```'
             )
+        if "linkedin" in self.url:  # a site with messages, on no list: its message box says so itself
+            return head + (
+                f'- textbox "Search" [ref=e1]: {self.fields.get("e1", "")}\n'
+                f'- textbox "Write a message…" [ref=e2]: {self.fields.get("e2", "")}\n```'
+            )
         if "account" in self.url:  # a page with a password field, not a sign-in page
             return (
                 f"### Page\n- Page URL: {self.url}\n### Snapshot\n```yaml\n"

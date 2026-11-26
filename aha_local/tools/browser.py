@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .. import messages
-from ..policy.browser import MESSAGE_SITES, TYPING, classify, form_for, offered, opens
+from ..policy.browser import TYPING, classify, form_for, is_message_box, offered, opens
 from ..policy.gate import explain
 from ..policy.urls import site_of
 from . import guard, human
@@ -37,6 +37,7 @@ from .browser_page import (
 )
 from .browser_pool import BrowserPool, pinned
 from .browser_signin import browser_human_check, browser_login
+from .page_view import browser_read_more
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
 log = logging.getLogger("aha.browser")
@@ -46,9 +47,8 @@ log = logging.getLogger("aha.browser")
 async def run_approved(session, name: str, args: dict, ctx: ToolContext) -> ToolResult:
     """Run an approved action; typing goes at human pace where it can (SPEC §3.4)."""
     typing = name == "browser_type" and not args.get("slowly") and isinstance(args.get("text"), str)
-    # On a messaging site Enter sends: a new line in the text is Shift+Enter there (SPEC §3.4).
-    host = urlsplit(ctx.task.page_url).hostname or ""
-    newline = "Shift+Enter" if host and site_of(host) in MESSAGE_SITES else "Enter"
+    # In a message box Enter often sends: a new line in the text is Shift+Enter there (SPEC §3.4).
+    newline = "Shift+Enter" if any(is_message_box(label) for label in labels_of(name, args, ctx)) else "Enter"
     if typing and await human_type(
         session, str(args.get("target", "")), args["text"], bool(args.get("submit")), newline
     ):
@@ -238,6 +238,13 @@ HARNESS_TOOLS = (
         "plan, a confirmation). Describing a page is not the same as showing it.",
         params(caption=string("A short caption, optional")),
         show_screenshot,
+    ),
+    Tool(
+        "browser_read_more",
+        "Read the next part of a long page: the page says when it has more parts. Read on before you say "
+        "something isn't on the page.",
+        params(["part"], part={"type": "integer", "description": "The part to read, e.g. 2"}),
+        browser_read_more,
     ),
     Tool(
         "browser_login",
