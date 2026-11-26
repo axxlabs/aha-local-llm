@@ -22,6 +22,8 @@ from . import trusted
 from .registry import ToolContext, ToolResult
 
 STOPPED = "This wasn't done: the user stopped it."
+STOPPED_FOR_MESSAGE = "This wasn't done: the user didn't allow it."
+MESSAGE_FOLLOWS = "They sent a new message instead: read it before you go on."
 
 
 def facts(ctx: ToolContext) -> Facts:
@@ -52,6 +54,8 @@ def stopped(decision: Decision, then: str = "", declined: str = "") -> ToolResul
     card that isn't an action (a check the person does) says instead."""
     if decision.reason == "expired":
         return ToolResult("", error=True, kind="expired")
+    if decision.reason == "message":  # they wrote instead of answering: their message comes next
+        return ToolResult(f"{declined or STOPPED_FOR_MESSAGE} {MESSAGE_FOLLOWS}", error=True)
     if declined:
         text = declined + (f" They said: “{decision.note}”. Follow that." if decision.note else "")
         return ToolResult(text, error=True)

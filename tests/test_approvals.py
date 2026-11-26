@@ -25,7 +25,9 @@ def add_typing_tool(registry, ran: list):
         from aha_local.tools.registry import ToolResult
 
         if not d.approved:
-            return ToolResult(f"declined; note={d.note}", error=True)
+            from aha_local.tools import guard
+
+            return guard.stopped(d)
         final = form.apply("browser_fill_form", args, d.values)
         ran.append(final)
         return ToolResult("filled")
@@ -79,14 +81,17 @@ async def test_edit_numbered_fields_then_approve(agent, llm, chat, registry):
     assert ran[0]["fields"][0]["value"] == "Felipe"
 
 
-async def test_free_text_declines_with_a_note(agent, llm, chat, registry):
+async def test_a_message_while_a_card_waits_cancels_it_and_comes_next(agent, llm, chat, registry):
+    """The model never knows a card exists: the call it made isn't done, and the person's message follows it."""
     ran = []
     await start_form_task(agent, llm, chat, registry, ran)
     await say(agent, "no, use my work phone")
     await settle(agent)
-    assert ran == []
-    tool_msg = [m for m in llm.requests[-1]["messages"] if m["role"] == "tool"][-1]
-    assert "note=no, use my work phone" in tool_msg["content"]
+    assert ran == [] and chat.states[-1][1] == "declined"
+    msgs = llm.requests[-1]["messages"]
+    tool = [i for i, m in enumerate(msgs) if m["role"] == "tool"][-1]
+    assert msgs[tool]["content"].startswith("This wasn't done: the user didn't allow it. They sent a new message")
+    assert msgs[tool + 1]["role"] == "user" and "no, use my work phone" in msgs[tool + 1]["content"]
 
 
 async def test_decline_button(agent, llm, chat, registry):

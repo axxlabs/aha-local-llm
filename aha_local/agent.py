@@ -93,6 +93,7 @@ LIMIT_TICK = 0.5  # seconds between looks at the task's time limit
 TYPING_EVERY = 4.0  # seconds between `typing` frames while a reply is owed (SPEC §3.3)
 STOP_WORDS = {"stop", "cancel", "stop it", "stop that"}
 NEW_MESSAGE = "[New message from the user while you were working]\n{text}"
+UNSENT = "[Aha!: your reply above wasn't sent: the user wrote again. Reply to everything in one answer.]"
 PHOTO_ONLY = "(sent a photo)"
 
 
@@ -266,7 +267,7 @@ class Agent:
             self.session(account).photos.append(image)
             text = text or PHOTO_ONLY
             if await self.approvals.reply_text(account, text):
-                return  # declines the open card; the running task sees the photo with the note
+                return  # the edit of the card being edited
             await self._start(account, text)
             return
         command = text.lower().rstrip(".!")
@@ -275,7 +276,7 @@ class Agent:
             await self.stop(account)
             return
         if await self.approvals.reply_text(account, text):
-            return
+            return  # the edit of the card being edited; otherwise the open card is cancelled and this goes on
         if command == "help":
             await self.send(account, messages.HELP.format(source=self.config.source_url))
             return
@@ -655,6 +656,7 @@ class Agent:
         tools = self.registry.specs()
         retried: set[str] = set()  # the checks that already sent a draft back (SPEC §3.5.1): once each
         can_sign_in = "browser_login" in self.registry.names()
+        unsent = False  # the model's last reply wasn't sent: the person wrote again (SPEC §3.3)
         for _ in range(self.config.max_model_calls):
             extras, self.session(account).inbox = (
                 ([], self.session(account).inbox)
@@ -665,7 +667,9 @@ class Agent:
                 )
             )
             for extra in extras:
-                task.append({"role": "user", "content": NEW_MESSAGE.format(text=with_dates(extra))})
+                said = NEW_MESSAGE.format(text=with_dates(extra))
+                task.append({"role": "user", "content": f"{UNSENT}\n\n{said}" if unsent else said})
+                unsent = False
                 addresses.remember(ctx.task.seen_urls, extra)
                 text = f"{text}\n\n{extra}"
                 take_photos(task[-1])
@@ -683,6 +687,12 @@ class Agent:
             await record(model_record(self.llm.model, reply))
             if not reply.tool_calls:
                 answer = reply.content or ""
+                if not quiet and self.session(account).inbox:
+                    # They wrote after the model's last call: one more call, so the answer covers it too
+                    # (SPEC §3.3), rather than a separate request after this one.
+                    task.append({"role": "assistant", "content": answer})
+                    unsent = True
+                    continue
                 draft = checks.Draft(ctx.task, can_sign_in)
                 failed = next((c for c in checks.CLAIM_CHECKS if c.name not in retried and c.failed(draft)), None)
                 if failed:

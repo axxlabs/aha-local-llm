@@ -43,7 +43,7 @@ class Decision:
     approved: bool
     values: list[str] = field(default_factory=list)
     note: str = ""
-    reason: str = ""  # declined | expired | stopped
+    reason: str = ""  # declined | expired | stopped | message (the person wrote instead)
     card: str = ""  # the card it answered (a background task keeps it: the topic that started it, SPEC §7.4)
 
 
@@ -296,7 +296,9 @@ class Approvals:
             await self.out.text(account, prompt)
 
     async def reply_text(self, account: Account, text: str) -> bool:
-        """A typed message while an approval is open. Returns False if there is none."""
+        """A message while a card is open. In edit mode it's the edit (True: it's been used). Otherwise the card is
+        cancelled, not allowed, and the message goes on to the request like any other (False), so the model reads
+        it right after the call it was waiting on (SPEC §5.3)."""
         p = self._pending.get(account.address)
         if p is None:
             return False
@@ -310,9 +312,8 @@ class Approvals:
             p.id = secrets.token_hex(4)  # the old card no longer applies
             await self.out.card(account, card(p))
             return True
-        # Free text while an approval is open: decline, and pass the text to the model as a note.
-        self._resolve(p, Decision(False, note=text.strip(), reason="declined"))
-        return True
+        self._resolve(p, Decision(False, reason="message"))
+        return False
 
     @staticmethod
     def _resolve(p: Pending, decision: Decision) -> None:

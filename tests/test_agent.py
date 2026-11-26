@@ -196,7 +196,8 @@ async def test_messages_during_a_task_reach_the_running_task(agent, llm, chat, r
     assert len(llm.requests) == 3  # no extra task: the running one took the messages
 
 
-async def test_messages_after_the_last_step_become_one_follow_up(agent, llm, chat, registry):
+async def test_messages_after_the_last_step_join_the_request(agent, llm, chat, registry):
+    """SPEC §3.3: written while the model wrote its answer, they get one more call, not a request of their own."""
     gate = asyncio.Event()
     real_chat = llm.chat
 
@@ -207,16 +208,20 @@ async def test_messages_after_the_last_step_become_one_follow_up(agent, llm, cha
 
     llm.chat = slow_answer
     llm.answer("first done")
-    llm.answer("follow-up done")
+    llm.answer("all done")
     await say(agent, "first")
     await asyncio.sleep(0.05)
     for text in ("one", "two", "three"):
         await say(agent, text)
     gate.set()
     await settle(agent)
-    assert chat.texts() == ["first done", "follow-up done"]
-    last_user = [m for m in llm.requests[-1]["messages"] if m["role"] == "user"][-1]["content"]
-    assert last_user == "one\n\ntwo\n\nthree"
+    assert chat.texts() == ["all done"]  # the draft wasn't sent
+    msgs = llm.requests[-1]["messages"]
+    assert msgs[-4] == {"role": "assistant", "content": "first done"}
+    assert "wasn't sent" in msgs[-3]["content"] and msgs[-3]["content"].endswith("one")
+    assert msgs[-1]["content"].endswith("three")
+    [turn] = [t for t in agent.accounts.all()[0].load_context()["turns"] if t["role"] == "user"]
+    assert turn["content"] == "first\n\none\n\ntwo\n\nthree"
 
 
 async def test_cancel_words_stop_the_task(agent, llm, chat, registry):
