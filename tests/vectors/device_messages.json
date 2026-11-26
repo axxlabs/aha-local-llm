@@ -47,6 +47,7 @@
       "id",
       "title?",
       "prompt?",
+      "done_when?",
       "every?",
       "until?",
       "next?"

@@ -29,6 +29,7 @@ from . import (
     m0004_browser_notes,
     m0005_task_fields,
     m0006_leftover_files,
+    m0007_task_done_when,
 )
 
 if TYPE_CHECKING:
@@ -61,6 +62,7 @@ MIGRATIONS = tuple(
         m0004_browser_notes,
         m0005_task_fields,
         m0006_leftover_files,
+        m0007_task_done_when,
     )
 )
 LATEST = MIGRATIONS[-1].number

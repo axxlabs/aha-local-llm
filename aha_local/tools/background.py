@@ -44,12 +44,14 @@ CHECK_EVERY = 30.0
 SITES = {"type": "array", "items": {"type": "string"}}
 MAX_ALLOWED = 20  # sites, and people, each, a new task may ask for
 FIRST_CHECK = "First check (blank: one interval from now)"
+DONE_WHEN = "Done when (or never)"
+MAX_DONE_WHEN = 300
 NEVER = "never"
 OUTCOMES = ("waiting", "notify", "done", "failed")
 
 CHECK = (
     "[Background task you set up earlier, check {n}{late}; the user isn't looking at the chat]\n"
-    "Waiting for: {title}\n\n{prompt}\n\n{last}"
+    "Waiting for: {title}\n\n{prompt}\n\nDone when: {done_when}\n\n{last}"
     "Check now: open and read what you're checking before you answer, never answer from memory. Don't message "
     "the user while you check. Whatever the text above says to answer, finish by calling check_result with one "
     "outcome and its message:\n"
@@ -57,7 +59,8 @@ CHECK = (
     "{every}.\n"
     "notify: the message for the user, when there's news and the task goes on (it reports each time "
     "something happens). Only what's new since last time: the message is kept for the next check.\n"
-    "done: the message for the user, when it has happened (and what was to be done then is done).\n"
+    'done: the message for the user, when what "Done when" says has happened (and what was to be done then is '
+    "done). Only then: anything else that's new is notify. {never}\n"
     "failed: the message for the user, when it can't happen any more (cancelled, delivered elsewhere, sold out "
     "for good). A page that didn't load or that you couldn't find isn't that: report waiting with what went "
     "wrong, and the next check tries again (from the site's home page). Only if the last check couldn't read it "
@@ -127,6 +130,7 @@ class Entry(TypedDict, total=False):
     id: str  # six hex characters
     title: str  # what it waits for
     prompt: str  # what each check runs
+    done_when: str  # what ends it, or "never": every check is told, and a never-ending one can't be closed
     every: int  # minutes between checks
     until: float | None  # epoch seconds it ends, None: never
     next: float  # epoch seconds of the next planned check
@@ -335,12 +339,24 @@ def _start(value, minutes: int, end: float | None, tz: ZoneInfo, now: float) -> 
     return max(when.timestamp(), now), ""
 
 
-def _validate(title, prompt, every, until, tz: ZoneInfo, now: float, start=None):
+def _done_when(value) -> str:
+    """What ends the task, or NEVER; "" when not given."""
+    text = _clean(value, MAX_DONE_WHEN)
+    return NEVER if text.lower().rstrip(".") == NEVER else text
+
+
+def _validate(title, prompt, every, until, tz: ZoneInfo, now: float, start=None, done_when=None):
     title, prompt = _clean(title, MAX_TITLE), _prompt(prompt)
     if not title:
         return None, "give a short title: what you're waiting for"
     if not prompt:
-        return None, "give the prompt each check runs: what to look at and what counts as done"
+        return None, "give the prompt each check runs: what to look at and how"
+    ends = _done_when(done_when)
+    if not ends:
+        return None, (
+            f"give `done_when`: what ends this task (like 'Sam replied about Saturday'), or '{NEVER}' for one that "
+            "goes on until the user cancels it"
+        )
     minutes, why = _every(every)
     if minutes is None:
         return None, why
@@ -350,20 +366,20 @@ def _validate(title, prompt, every, until, tz: ZoneInfo, now: float, start=None)
     first, why = _start(start, minutes, end, tz, now)
     if first is None:
         return None, why
-    return (title, prompt, minutes, end, first), ""
+    return (title, prompt, minutes, end, first, ends), ""
 
 
 async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
     tz, now = dates.tz(ctx), time.time()
     args_ = (args.get("title"), args.get("prompt"), args.get("every_minutes"), args.get("until"))
-    got, why = _validate(*args_, tz, now, args.get("start"))
+    got, why = _validate(*args_, tz, now, args.get("start"), args.get("done_when"))
     if got is None:
         return ToolResult(f"Not created: {why}.", error=True)
     if len(load(ctx.account)) >= MAX_TASKS:
         return ToolResult(
             f"Not created: there are already {MAX_TASKS} background tasks: cancel some first.", error=True
         )
-    title, prompt, minutes, end, first = got
+    title, prompt, minutes, end, first, ends = got
     # Its checks open only addresses this request was shown (SPEC §5.2 "Made-up addresses"): one written from
     # memory into the task would be trusted by every check (seen: a tracking address, a 404, the task ended).
     model_urls, made_up = _urls(prompt), [u for u in _urls(prompt) if addresses.made_up(u, ctx.task.seen_urls)]
@@ -388,6 +404,7 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
     fields = [
         Field("Waiting for", title),
         Field("How to check", prompt, "longtext"),
+        Field(DONE_WHEN, ends),
         # Blank unless the model gave a start (SPEC §3.4): a start it made up then stands out on the card (seen: a
         # wait-for-a-reply task, every 30 minutes, first checked the next morning), and blank is one interval
         # from now.
@@ -400,14 +417,14 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
     if refused:
         return refused
     v = d.values
-    got, why = _validate(v[0], v[1], v[3], v[4], tz, time.time(), v[2])
+    got, why = _validate(v[0], v[1], v[4], v[5], tz, time.time(), v[3], v[2])
     if got is None:
         return ToolResult(
             f"The edited details weren't valid ({why}), so nothing was started. Ask the person.", error=True
         )
-    title, prompt, minutes, end, first = got
+    title, prompt, minutes, end, first, ends = got
     grant = Grant()
-    for (_, g), ticked in zip(items, v[5:], strict=False):
+    for (_, g), ticked in zip(items, v[6:], strict=False):
         if ticked == "true":
             grant.add(g)
     entries = load(ctx.account)
@@ -418,6 +435,7 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
         "id": secrets.token_hex(3),
         "title": title,
         "prompt": prompt,
+        "done_when": ends,
         "every": minutes,
         "until": end,
         "next": first,
@@ -472,16 +490,22 @@ def register(reg: Registry) -> None:
             "summarise my email'): `start` at that time, `every_minutes` for the repeat (1440 for daily), and the "
             "check does it and reports done (once) or notify (repeating). Each check runs `prompt` as a new "
             "request, with only your memory: write it so it makes sense on its own later, with what to look at "
-            "(the site by its name, like fedex.com, and how to find the page there; names, tracking codes), how, "
-            "and what counts as done. Put an address in it only if you opened it or the user sent it in this "
+            "(the site by its name, like fedex.com, and how to find the page there; names, tracking codes) and how. "
+            "Say in `done_when` what ends it, always: the event that closes it ('Sam replied about Saturday', 'the "
+            "parcel is delivered', 'Meta AI sent the drawing'), or 'never' for watching or a repeat that goes on "
+            "until the user cancels it. Put an address in it only if you opened it or the user sent it in this "
             "request: never one you put together. Say what its checks will need to do without asking (`type` "
             "for typing the tracking number on fedex.com, `email` for who it writes to…): the user ticks each before "
             "it starts; anything not ticked waits for them when it happens. Don't say in it what to answer: "
             "each check is told how to answer. Checks run only while nobody is using Aha!, so timing isn't exact.",
             params(
-                ["title", "prompt", "every_minutes", "until"],
+                ["title", "prompt", "done_when", "every_minutes", "until"],
                 title=string("What you're waiting for, short, e.g. 'Reply from Sam about Saturday'"),
                 prompt=string("The instruction each check runs, complete on its own"),
+                done_when=string(
+                    "What ends the task: the event that closes it, e.g. 'Sam replied about Saturday', 'the parcel "
+                    f"is delivered'; or '{NEVER}' for watching or a repeat that goes on until the user cancels it"
+                ),
                 every_minutes={
                     "type": "integer",
                     "minimum": MIN_EVERY,
@@ -561,6 +585,9 @@ def finish(account: Account, task_id: str, outcome: str, message: str, stopped: 
     (SPEC §3.4)."""
     text = message.strip()
     kind = outcome if outcome in OUTCOMES and not stopped else "ended_early"
+    entry = next((e for e in load(account) if e.get("id") == task_id), None)
+    if kind == "done" and entry is not None and entry.get("done_when") == NEVER:
+        kind = "notify"  # it has no end: news, and it goes on (only the person cancels it)
     if kind in ("done", "failed"):
         entry = update(account, task_id, lambda e: None)
         if entry is None:
@@ -601,7 +628,7 @@ def interrupted(account: Account, task_id: str) -> None:
     )
 
 
-EDITABLE = ("title", "prompt", "every", "until", "next", "grant")  # what the panel sends
+EDITABLE = ("title", "prompt", "done_when", "every", "until", "next", "grant")  # what the panel sends
 
 
 def edit(account: Account, task_id: str, changes: dict) -> str:
@@ -620,6 +647,10 @@ def edit(account: Account, task_id: str, changes: dict) -> str:
         if not new["prompt"]:
             return "what it checks can't be empty"
         new["links"] = _urls(new["prompt"])  # the person's own words: its addresses are theirs
+    if "done_when" in changes:
+        new["done_when"] = _done_when(changes["done_when"])
+        if not new["done_when"]:
+            return f"say what ends it, or {NEVER}"
     if "grant" in changes:
         grant = clean_grant(changes["grant"])
         if grant is None:
@@ -657,9 +688,18 @@ def _last_line(entry: Entry, tz: ZoneInfo) -> str:
     return LAST_TIME.format(when=when, how=LAST_HOW.get(how, LAST_HOW["waiting"]), note=note)
 
 
+NEVER_DONE = (
+    'This task has no end ("Done when: never"): it runs until the user cancels it, so never report done; '
+    "report notify for news."
+)
+
+
 def check_prompt(entry: Entry, now: float, tz: ZoneInfo) -> str:
     late = now - entry["next"] > entry["every"] * 60
+    done_when = entry["done_when"]
     return CHECK.format(
+        done_when=done_when,
+        never=NEVER_DONE if done_when == NEVER else "",
         n=entry.get("checks", 0) + 1,
         late=", later than planned: Aha! was busy" if late else "",
         title=entry["title"],
@@ -671,7 +711,7 @@ def check_prompt(entry: Entry, now: float, tz: ZoneInfo) -> str:
 
 def listing(account: Account) -> list[dict]:
     """For the app's Tasks panel, newest first (SPEC §6.5)."""
-    keys = ("id", "title", "prompt", "until", "next", "created", "card")
+    keys = ("id", "title", "prompt", "done_when", "until", "next", "created", "card")
     # "grant": what it allows, for the panel's editor; "allowed": the same in the person's words
     rows = sorted(load(account), key=lambda e: e.get("created", 0), reverse=True)
     return [

@@ -76,7 +76,14 @@ def test_old_shapes_are_brought_to_todays(tmp_path):
     (tmp_path / "keys" / "search-secret").write_text("ab" * 32)
 
     ran = upgrade(v)
-    assert ran == ["topics_from_summary", "turn_record", "browser_notes", "task_fields", "leftover_files"]
+    assert ran == [
+        "topics_from_summary",
+        "turn_record",
+        "browser_notes",
+        "task_fields",
+        "leftover_files",
+        "task_done_when",
+    ]
     assert version(tmp_path) == LATEST
     conv = acct.load_context()
     assert "summary" not in conv and conv["topics"][0]["title"] == "Earlier conversation"
@@ -84,6 +91,7 @@ def test_old_shapes_are_brought_to_todays(tmp_path):
     assert v.read_json(acct.dir / "browser.json", None) == {"v": 3, "page": "https://x.example/"}
     [task] = v.read_json(acct.dir / "tasks.json", None)
     assert "manual" not in task and task["last_how"] == "ended_early"
+    assert task["done_when"] == "never"  # a task from before: it went on until cancelled
     assert task["grant"] == {"type": ["royalmail.com"], "calendar_add": True, "calendar_change": True}
     for gone in (acct.dir / "sign-ins.json", acct.dir / "schedule.json", tmp_path / "keys" / "search-secret"):
         assert not gone.exists(), gone

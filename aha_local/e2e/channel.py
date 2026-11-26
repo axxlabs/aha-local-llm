@@ -568,7 +568,7 @@ class Channel:
             return
         if t == "task_edit":
             changes = {k: r.msg[k] for k in background.EDITABLE if k in r.msg}
-            for k in ("title", "prompt"):
+            for k in ("title", "prompt", "done_when"):
                 if k in changes:
                     changes[k] = clean_text(changes[k], background.MAX_PROMPT) or ""
             if not actions.edit_background(r.account, task_id, changes, via="settings"):

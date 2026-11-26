@@ -79,6 +79,7 @@ async def test_a_task_asks_on_its_own_card_and_its_checks_keep_what_stays_ticked
     fe = person(accounts)
     llm.call(
         "task_create",
+        done_when="it happened",
         title="Parcel",
         prompt="On fedex.com, type 385413566727 in the tracking box and read the status.",
         every_minutes=60,
@@ -110,7 +111,15 @@ async def test_a_task_asks_on_its_own_card_and_its_checks_keep_what_stays_ticked
 async def test_a_task_refuses_what_isnt_a_site_or_one_address(agent, llm, chat, accounts, registry):
     background.register(registry)
     fe = person(accounts)
-    llm.call("task_create", title="X", prompt="Check x", every_minutes=60, until="never", type=["not a site"])
+    llm.call(
+        "task_create",
+        done_when="it happened",
+        title="X",
+        prompt="Check x",
+        every_minutes=60,
+        until="never",
+        type=["not a site"],
+    )
     llm.answer("OK.")
     await agent.inbound(fe, "watch it")
     await settle(agent)

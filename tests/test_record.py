@@ -116,7 +116,7 @@ async def test_every_change_shows_under_the_answer_even_the_ones_the_answer_leav
 
     background.register(agent.registry)
     task = {"title": "Reply from Natalia", "prompt": "Check WhatsApp for Natalia's reply", "every_minutes": 30}
-    llm.call("task_create", **task)
+    llm.call("task_create", done_when="it happened", **task)
     llm.call("task_cancel", id="ID")
     llm.answer("I've set up a background task.")
     await say(agent, "wait for Natalia's reply")

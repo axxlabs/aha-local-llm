@@ -33,6 +33,7 @@ def task(**over) -> dict:
         "id": "abc123",
         "title": "Reply from Sam about Saturday",
         "prompt": "Search the email for a reply from sam@example.com about Saturday; done when one arrives.",
+        "done_when": "Sam replied about Saturday",
         "every": 15,
         "until": None,
         "next": now - 1,
@@ -50,6 +51,7 @@ async def test_creating_one_needs_a_card_with_every_detail(runner, agent, llm, c
     fe = person(accounts)
     llm.call(
         "task_create",
+        done_when="it happened",
         title="Reply from Sam about Saturday",
         prompt="Search the email for a reply from sam@example.com about Saturday.",
         every_minutes=15,
@@ -63,6 +65,7 @@ async def test_creating_one_needs_a_card_with_every_detail(runner, agent, llm, c
     assert [(f["label"], f["value"]) for f in card.card["fields"]] == [
         ("Waiting for", "Reply from Sam about Saturday"),
         ("How to check", "Search the email for a reply from sam@example.com about Saturday."),
+        (background.DONE_WHEN, "it happened"),
         (background.FIRST_CHECK, ""),  # no start: blank, one interval from now
         ("Check every (minutes)", "15"),
         ("Until", "never"),
@@ -75,12 +78,12 @@ async def test_creating_one_needs_a_card_with_every_detail(runner, agent, llm, c
 
 async def test_a_declined_or_too_frequent_task_starts_nothing(runner, agent, llm, chat, accounts):
     fe = person(accounts)
-    llm.call("task_create", title="X", prompt="Check x", every_minutes=1, until="never")
+    llm.call("task_create", done_when="it happened", title="X", prompt="Check x", every_minutes=1, until="never")
     llm.answer("OK.")
     await agent.inbound(fe, "watch x every minute")
     await settle(agent)
     assert "at most every 5 minutes" in str(llm.requests[-1]["messages"][-1])
-    llm.call("task_create", title="X", prompt="Check x", every_minutes=5, until="never")
+    llm.call("task_create", done_when="it happened", title="X", prompt="Check x", every_minutes=5, until="never")
     llm.answer("OK.")
     await agent.inbound(fe, "every 5 then")
     card = await chat.next()
@@ -213,7 +216,7 @@ async def test_a_message_stops_a_running_check_and_gets_the_model(runner, agent,
 async def test_a_card_waiting_for_someone_leaves_the_model_free(runner, agent, llm, chat, accounts):
     """A request waiting days on an unanswered card mustn't hold every check back."""
     fe, hb = person(accounts), accounts.create("Hb")
-    llm.call("task_create", title="X", prompt="Check x", every_minutes=5, until="never")
+    llm.call("task_create", done_when="it happened", title="X", prompt="Check x", every_minutes=5, until="never")
     await agent.inbound(fe, "watch x")
     card = await chat.next()
     assert card.card is not None and agent.running and not agent.busy() and not agent.working()
@@ -251,6 +254,7 @@ async def test_the_panel_lists_tasks_and_cancel_is_the_persons(runner, agent, ac
         "id",
         "title",
         "prompt",
+        "done_when",
         "every",
         "until",
         "next",
@@ -274,7 +278,7 @@ async def test_every_change_tells_the_open_panels(runner, agent, llm, chat, acco
     fe = person(accounts)
     told: list[str] = []
     monkeypatch.setattr(background, "WATCHERS", [lambda account: told.append(account.id)])
-    llm.call("task_create", title="X", prompt="Check x", every_minutes=5, until="never")
+    llm.call("task_create", done_when="it happened", title="X", prompt="Check x", every_minutes=5, until="never")
     llm.answer("OK.")
     await agent.inbound(fe, "watch x")
     card = await chat.next()
@@ -428,6 +432,7 @@ async def test_something_at_a_time_starts_then(runner, agent, llm, chat, account
     tomorrow = (dt.datetime.now(LONDON) + dt.timedelta(days=1)).strftime("%Y-%m-%d 18:00")
     llm.call(
         "task_create",
+        done_when="it happened",
         title="Call Sam",
         prompt="Remind them to call Sam.",
         every_minutes=1440,
@@ -443,7 +448,15 @@ async def test_something_at_a_time_starts_then(runner, agent, llm, chat, account
     (saved,) = background.load(fe)
     assert saved["next"] == dt.datetime.fromisoformat(tomorrow).replace(tzinfo=LONDON).timestamp()
 
-    llm.call("task_create", title="X", prompt="Do x", every_minutes=5, until="never", start="2001-01-01 08:00")
+    llm.call(
+        "task_create",
+        done_when="it happened",
+        title="X",
+        prompt="Do x",
+        every_minutes=5,
+        until="never",
+        start="2001-01-01 08:00",
+    )
     llm.answer("OK.")
     await agent.inbound(fe, "do x in the past")
     await settle(agent)
@@ -469,7 +482,9 @@ async def test_a_check_folds_first_and_a_card_in_it_leaves_no_working(runner, ag
     fe = person(accounts)
     background.save(fe, [task()])
     idle(agent)
-    llm.call("task_create", title="Y", prompt="Check y", every_minutes=60, until="never")  # any card will do
+    llm.call(
+        "task_create", done_when="it happened", title="Y", prompt="Check y", every_minutes=60, until="never"
+    )  # any card will do
     llm.call("check_result", outcome="done", message="Sam replied.")
     await runner.tick()
     card = await chat.next()
@@ -489,9 +504,21 @@ async def test_a_task_never_keeps_an_address_the_model_made_up(runner, agent, ll
     guessed = "https://www.fedex.com/en-gb/tracking?track-numbers=385413566727"
     sent = "https://parcel.example/t/AB123"
     llm.call(
-        "task_create", title="Parcel", prompt=f"Open {guessed} and read the status.", every_minutes=60, until="never"
+        "task_create",
+        done_when="it happened",
+        title="Parcel",
+        prompt=f"Open {guessed} and read the status.",
+        every_minutes=60,
+        until="never",
     )
-    llm.call("task_create", title="Parcel", prompt=f"Open {sent} and read the status.", every_minutes=60, until="never")
+    llm.call(
+        "task_create",
+        done_when="it happened",
+        title="Parcel",
+        prompt=f"Open {sent} and read the status.",
+        every_minutes=60,
+        until="never",
+    )
     llm.answer("Watching it.")
     await agent.inbound(fe, f"tell me when {sent} says delivered")
     card = await chat.next()
@@ -542,3 +569,24 @@ async def test_check_result_is_only_for_a_check(agent, llm, chat):
         "Only a background task's check"
         in [m for m in llm.requests[-1]["messages"] if m["role"] == "tool"][-1]["content"]
     )
+
+
+async def test_every_task_says_what_ends_it_and_a_never_ending_one_isnt_closed(runner, agent, llm, chat, accounts):
+    """Seen 2026-11-26: the check that found Meta AI's dragon reported it as news, and the task went on: nothing
+    said the reply ended it. `done_when` is required, every check is told it, and 'never' can't be closed."""
+    fe = person(accounts)
+    llm.call("task_create", title="Dragon", prompt="Check the Meta AI chat", every_minutes=10, until="never")
+    llm.answer("OK.")
+    await agent.inbound(fe, "wait for the dragon")
+    await settle(agent)
+    assert "give `done_when`" in str(llm.requests[-1]["messages"])  # refused without it
+    background.save(fe, [task(done_when="never")])
+    idle(agent)
+    llm.call("check_result", outcome="done", message="Here it is.")
+    await runner.tick()
+    await settle(agent)
+    assert "Done when: never" in llm.requests[-1]["messages"][-1]["content"] or any(
+        "Done when: never" in str(m.get("content")) for m in llm.requests[-1]["messages"]
+    )
+    (left,) = background.load(fe)  # still there: news, not a closure
+    assert left["last_how"] == "notify" and chat.sent[-1].task["kind"] == "update"
