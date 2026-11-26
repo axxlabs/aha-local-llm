@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import re
 import secrets
 import time
 from collections.abc import Callable
@@ -43,7 +44,8 @@ IDLE_AFTER = 5 * 60  # seconds without input from anyone before a check runs
 CHECK_EVERY = 30.0
 SITES = {"type": "array", "items": {"type": "string"}}
 MAX_ALLOWED = 20  # sites, and people, each, a new task may ask for
-FIRST_CHECK = "First check (blank: one interval from now)"
+CHECKS = "Checks (every N minutes, or times of day like 08:00, 18:00)"
+MAX_AT = 6
 DONE_WHEN = "Done when (or never)"
 MAX_DONE_WHEN = 300
 NEVER = "never"
@@ -131,7 +133,9 @@ class Entry(TypedDict, total=False):
     title: str  # what it waits for
     prompt: str  # what each check runs
     done_when: str  # what ends it, or "never": every check is told, and a never-ending one can't be closed
-    every: int  # minutes between checks
+    every: int  # minutes between checks (with `at`, a day divided by its times)
+    at: list[str]  # times of day it checks, "08:00", in `tz`; none: every `every` minutes
+    tz: str  # the household's time zone when `at` was set
     until: float | None  # epoch seconds it ends, None: never
     next: float  # epoch seconds of the next planned check
     created: int
@@ -271,11 +275,13 @@ def every_words(minutes: int) -> str:
 
 def describe(entry: Entry, tz: ZoneInfo) -> str:
     until = entry.get("until")
-    end = "no end" if until is None else "until " + dates.for_model(dt.datetime.fromtimestamp(until, tz))
+    end = f"done when: {entry.get('done_when', NEVER)}" + (
+        "" if until is None else ", until " + dates.for_model(dt.datetime.fromtimestamp(until, tz))
+    )
     nxt = dates.for_model(dt.datetime.fromtimestamp(entry["next"], tz))
     last = f" Last found: {entry['last']}" if entry.get("last") else ""
     return (
-        f"`{entry['id']}` {entry['title']}: every {every_words(entry['every'])}, {end}, next check {nxt}, "
+        f"`{entry['id']}` {entry['title']}: {schedule_words(entry)}, {end}, next check {nxt}, "
         f"{entry.get('checks', 0)} checks so far.{last}"
     )
 
@@ -303,40 +309,64 @@ def _every(value) -> tuple[int | None, str]:
     return minutes, ""
 
 
-def _until(value, tz: ZoneInfo, now: float) -> tuple[float | None, str]:
-    """(epoch, "") or (None, "") for never; ("", why) when it isn't valid."""
-    text = str(value or "").strip()
-    if text.lower() in (NEVER, "none", "no end", ""):
-        return None, ""
-    when = dates.parse_local(text, tz)
-    if when is None:
-        return None, f"give `until` as a local date and time like 2026-11-30 18:00, or '{NEVER}'"
-    if when.timestamp() <= now + 60:
-        return None, f"{dates.for_model(when)} has already passed: check the current time in the <context> block"
-    if when.timestamp() > now + MAX_AHEAD:
-        return None, f"that's more than a year away: give an earlier time, or '{NEVER}'"
-    return when.timestamp(), ""
-
-
 def _until_text(until: float | None, tz: ZoneInfo) -> str:
     return NEVER if until is None else dates.editable(dt.datetime.fromtimestamp(until, tz))
 
 
-def _start(value, minutes: int, end: float | None, tz: ZoneInfo, now: float) -> tuple[float | None, str]:
-    """The first check: a local time, or `every` from now when none is given."""
-    text = str(value or "").strip()
-    if not text:
-        return now + minutes * 60, ""
-    when = dates.parse_local(text, tz)
-    if when is None:
-        return None, "give `start` as a local date and time like 2026-11-30 08:00, or leave it out"
-    if when.timestamp() < now - 60:
-        return None, f"{dates.for_model(when)} has already passed: check the current time in the <context> block"
-    if when.timestamp() > now + MAX_AHEAD:
-        return None, "the first check is more than a year away"
-    if end is not None and when.timestamp() >= end:
-        return None, "the first check is after `until`"
-    return max(when.timestamp(), now), ""
+AT = re.compile(r"^([01]?\d|2[0-3])[:h.]([0-5]\d)$")
+
+
+def _at(value) -> tuple[list[str] | None, str]:
+    """Times of day ("08:00"), sorted, from a list or "08:00, 18:00"; None with why when one isn't a time."""
+    items = value if isinstance(value, list) else re.split(r"[,;\s]+", str(value or ""))
+    times = []
+    for item in items:
+        text = str(item).strip().lower().removeprefix("at ")
+        if not text:
+            continue
+        m = AT.match(text)
+        if not m:
+            return None, f"{item!r} isn't a time of day: give times like 08:00 or 18:30"
+        times.append(f"{int(m.group(1)):02d}:{m.group(2)}")
+    if len(times) > MAX_AT:
+        return None, f"at most {MAX_AT} times a day"
+    return sorted(set(times)), ""
+
+
+def next_check(entry: dict, now: float) -> float:
+    """When the task checks next after `now`: its next time of day (in its own time zone), or its interval."""
+    if entry.get("at"):
+        tz = dates.tz(entry.get("tz") or "UTC")
+        day = dt.datetime.fromtimestamp(now, tz).date()
+        for k in range(0, 3):
+            for t in entry["at"]:
+                h, m = (int(x) for x in t.split(":"))
+                when = dt.datetime.combine(day + dt.timedelta(days=k), dt.time(h, m), tz).timestamp()
+                if when > now + 30:
+                    return when
+    return now + entry["every"] * 60
+
+
+def schedule_words(entry: dict) -> str:
+    """'every 30 minutes', 'every day at 08:00 and 18:00'."""
+    if entry.get("at"):
+        return "every day at " + " and ".join(entry["at"])
+    return "every " + every_words(entry["every"])
+
+
+def _schedule(every, at) -> tuple[tuple[int, list[str]] | None, str]:
+    """(minutes, times of day) from the tool or the card: one of the two, never both."""
+    times, why = _at(at) if at not in (None, "", []) else ([], "")
+    if times is None:
+        return None, why
+    if times:
+        if every not in (None, ""):
+            return None, "give `every_minutes` or `at`, not both"
+        return (1440 // len(times), times), ""
+    if every in (None, ""):
+        return None, "give `every_minutes` (how often) or `at` (times of day, like 08:00 for every morning)"
+    minutes, why = _every(every)
+    return ((minutes, []), "") if minutes is not None else (None, why)
 
 
 def _done_when(value) -> str:
@@ -345,7 +375,7 @@ def _done_when(value) -> str:
     return NEVER if text.lower().rstrip(".") == NEVER else text
 
 
-def _validate(title, prompt, every, until, tz: ZoneInfo, now: float, start=None, done_when=None):
+def _validate(title, prompt, every, at, done_when):
     title, prompt = _clean(title, MAX_TITLE), _prompt(prompt)
     if not title:
         return None, "give a short title: what you're waiting for"
@@ -357,29 +387,25 @@ def _validate(title, prompt, every, until, tz: ZoneInfo, now: float, start=None,
             f"give `done_when`: what ends this task (like 'Sam replied about Saturday'), or '{NEVER}' for one that "
             "goes on until the user cancels it"
         )
-    minutes, why = _every(every)
-    if minutes is None:
+    schedule, why = _schedule(every, at)
+    if schedule is None:
         return None, why
-    end, why = _until(until, tz, now)
-    if why:
-        return None, why
-    first, why = _start(start, minutes, end, tz, now)
-    if first is None:
-        return None, why
-    return (title, prompt, minutes, end, first, ends), ""
+    minutes, times = schedule
+    return (title, prompt, minutes, times, ends), ""
 
 
 async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
-    tz, now = dates.tz(ctx), time.time()
-    args_ = (args.get("title"), args.get("prompt"), args.get("every_minutes"), args.get("until"))
-    got, why = _validate(*args_, tz, now, args.get("start"), args.get("done_when"))
+    tz = dates.tz(ctx)
+    got, why = _validate(
+        args.get("title"), args.get("prompt"), args.get("every_minutes"), args.get("at"), args.get("done_when")
+    )
     if got is None:
         return ToolResult(f"Not created: {why}.", error=True)
     if len(load(ctx.account)) >= MAX_TASKS:
         return ToolResult(
             f"Not created: there are already {MAX_TASKS} background tasks: cancel some first.", error=True
         )
-    title, prompt, minutes, end, first, ends = got
+    title, prompt, minutes, times, ends = got
     # Its checks open only addresses this request was shown (SPEC §5.2 "Made-up addresses"): one written from
     # memory into the task would be trusted by every check (seen: a tracking address, a 404, the task ended).
     model_urls, made_up = _urls(prompt), [u for u in _urls(prompt) if addresses.made_up(u, ctx.task.seen_urls)]
@@ -405,26 +431,23 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
         Field("Waiting for", title),
         Field("How to check", prompt, "longtext"),
         Field(DONE_WHEN, ends),
-        # Blank unless the model gave a start (SPEC §3.4): a start it made up then stands out on the card (seen: a
-        # wait-for-a-reply task, every 30 minutes, first checked the next morning), and blank is one interval
-        # from now.
-        Field(FIRST_CHECK, dates.editable(dt.datetime.fromtimestamp(first, tz)) if args.get("start") else ""),
-        Field("Check every (minutes)", str(minutes)),
-        Field("Until", _until_text(end, tz)),
+        # How often, and nothing else: no start or end date (2026-11-26); what ends it is `done_when`.
+        Field(CHECKS, ", ".join(times) if times else str(minutes)),
     ]
     fields += [Field(label, "true", "bool") for label, _ in items]
     d, refused = await guard.send(ctx, "task", "Start this background task?", fields)
     if refused:
         return refused
     v = d.values
-    got, why = _validate(v[0], v[1], v[4], v[5], tz, time.time(), v[3], v[2])
+    when = v[3].strip()
+    got, why = _validate(v[0], v[1], None if ":" in when else when, when if ":" in when else None, v[2])
     if got is None:
         return ToolResult(
             f"The edited details weren't valid ({why}), so nothing was started. Ask the person.", error=True
         )
-    title, prompt, minutes, end, first, ends = got
+    title, prompt, minutes, times, ends = got
     grant = Grant()
-    for (_, g), ticked in zip(items, v[6:], strict=False):
+    for (_, g), ticked in zip(items, v[4:], strict=False):
         if ticked == "true":
             grant.add(g)
     entries = load(ctx.account)
@@ -437,8 +460,8 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
         "prompt": prompt,
         "done_when": ends,
         "every": minutes,
-        "until": end,
-        "next": first,
+        **({"at": times, "tz": ctx.config.timezone} if times else {}),
+        "until": None,
         "created": int(now),
         "checks": 0,
         **({"card": d.card} if d.card else {}),
@@ -455,6 +478,7 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
         ),
         **({"grant": grant.to_dict()} if grant else {}),
     }
+    entry["next"] = next_check(entry, now)
     save(ctx.account, [*entries, entry])
     return ToolResult(
         f"Started. {describe(entry, tz)} Checks run when the household is idle, so timing isn't exact. "
@@ -485,21 +509,22 @@ def register(reg: Registry) -> None:
             "Start a background task: the only way to do anything later. For something that waits on something "
             "else (a reply to an email, a parcel's tracking, a page changing, tickets going on sale): check it until "
             "it happens, then tell the user or do what they asked. For watching that goes on ('tell me whenever "
-            "Sam emails', until 'never'): each check reports only what's new. For something at a time, once or "
-            "repeating ('remind me at 6 to call Sam', 'in 5 minutes google my name', 'every morning at 8 "
-            "summarise my email'): `start` at that time, `every_minutes` for the repeat (1440 for daily), and the "
-            "check does it and reports done (once) or notify (repeating). Each check runs `prompt` as a new "
-            "request, with only your memory: write it so it makes sense on its own later, with what to look at "
-            "(the site by its name, like fedex.com, and how to find the page there; names, tracking codes) and how. "
-            "Say in `done_when` what ends it, always: the event that closes it ('Sam replied about Saturday', 'the "
-            "parcel is delivered', 'Meta AI sent the drawing'), or 'never' for watching or a repeat that goes on "
-            "until the user cancels it. Put an address in it only if you opened it or the user sent it in this "
-            "request: never one you put together. Say what its checks will need to do without asking (`type` "
-            "for typing the tracking number on fedex.com, `email` for who it writes to…): the user ticks each before "
-            "it starts; anything not ticked waits for them when it happens. Don't say in it what to answer: "
-            "each check is told how to answer. Checks run only while nobody is using Aha!, so timing isn't exact.",
+            "Sam emails'): each check reports only what's new. For something at a time of day, once or repeating "
+            "('remind me at 6 to call Sam', 'every morning summarise my email'): `at` that time, and the check does "
+            "it. How often is all you give: `every_minutes` (an interval from now) or `at` (times of day, every "
+            "day: every morning 08:00, every evening 18:00); there's no start or end date. Say in `done_when` what "
+            "ends it, always: the event that closes it ('Sam replied about Saturday', 'the parcel is delivered', "
+            "'Meta AI sent the drawing', 'reminded once'), or 'never' for watching or a repeat that goes on until "
+            "the user cancels it. Each check runs `prompt` as a new request, with only your memory: write it so it "
+            "makes sense on its own later, with what to look at (the site by its name, like fedex.com, and how to "
+            "find the page there; names, tracking codes) and how. Put an address in it only if you opened it or "
+            "the user sent it in this request: never one you put together. Say what its checks will need to do "
+            "without asking (`type` for typing the tracking number on fedex.com, `email` for who it writes to…): "
+            "the user ticks each before it starts; anything not ticked waits for them when it happens. Don't say "
+            "in it what to answer: each check is told how to answer. Checks run only while nobody is using Aha!, "
+            "so timing isn't exact.",
             params(
-                ["title", "prompt", "done_when", "every_minutes", "until"],
+                ["title", "prompt", "done_when"],
                 title=string("What you're waiting for, short, e.g. 'Reply from Sam about Saturday'"),
                 prompt=string("The instruction each check runs, complete on its own"),
                 done_when=string(
@@ -509,17 +534,15 @@ def register(reg: Registry) -> None:
                 every_minutes={
                     "type": "integer",
                     "minimum": MIN_EVERY,
-                    "description": f"How often to check, in minutes (at least {MIN_EVERY}): as often as it can "
-                    "change and matters, e.g. 15 for a reply, 240 for a delivery, 1440 for a price",
+                    "description": f"How often to check, in minutes (at least {MIN_EVERY}), from now: as often as "
+                    "it can change and matters, e.g. 15 for a reply, 240 for a delivery, 1440 for a price. Or `at`",
                 },
-                until=string(
-                    f"When to stop waiting, local YYYY-MM-DD HH:MM (work it out from the <context> block), or "
-                    f"'{NEVER}' for no end"
-                ),
-                start=string(
-                    "The first check, local YYYY-MM-DD HH:MM, for something at a time; leave it out to start "
-                    "`every_minutes` from now. 'Every weekday at 8' asked on a Saturday evening starts Monday 08:00"
-                ),
+                at={
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Instead of every_minutes: local times of day it checks, every day, HH:MM, "
+                    "e.g. ['08:00'] for every morning, ['18:00'] for every evening, ['08:00', '18:00'] for both",
+                },
                 type={**SITES, "description": "Sites its checks type on (a search box, a form), like fedex.com"},
                 open={
                     **SITES,
@@ -598,7 +621,7 @@ def finish(account: Account, task_id: str, outcome: str, message: str, stopped: 
     def checked(e: dict) -> dict:
         now = time.time()
         # A Run now check is an extra one: the planned next check keeps its time.
-        later = e["next"] if e.get("now") else now + e["every"] * 60
+        later = e["next"] if e.get("now") else next_check(e, now)
         return {
             **{k: v for k, v in e.items() if k != "now"},
             "last": _last(text) if text else e.get("last", ""),
@@ -628,7 +651,7 @@ def interrupted(account: Account, task_id: str) -> None:
     )
 
 
-EDITABLE = ("title", "prompt", "done_when", "every", "until", "next", "grant")  # what the panel sends
+EDITABLE = ("title", "prompt", "done_when", "every", "at", "until", "next", "grant")  # what the panel sends
 
 
 def edit(account: Account, task_id: str, changes: dict) -> str:
@@ -663,6 +686,13 @@ def edit(account: Account, task_id: str, changes: dict) -> str:
         if minutes is None:
             return why
         new["every"] = minutes
+        new.pop("at", None)  # an interval replaces times of day
+    if changes.get("at"):
+        times, why = _at(changes["at"])
+        if not times:
+            return why or "give times of day like 08:00"
+        new["at"], new["every"] = times, 1440 // len(times)
+        new.setdefault("tz", entry.get("tz") or "UTC")
     if "until" in changes:
         until = changes["until"]
         if until is not None and (not isinstance(until, int | float) or until <= now + 60 or until > now + MAX_AHEAD):
@@ -705,13 +735,13 @@ def check_prompt(entry: Entry, now: float, tz: ZoneInfo) -> str:
         title=entry["title"],
         prompt=entry["prompt"],
         last=_last_line(entry, tz),
-        every=every_words(entry["every"]),
+        every=schedule_words(entry).removeprefix("every "),
     )
 
 
 def listing(account: Account) -> list[dict]:
     """For the app's Tasks panel, newest first (SPEC §6.5)."""
-    keys = ("id", "title", "prompt", "done_when", "until", "next", "created", "card")
+    keys = ("id", "title", "prompt", "done_when", "at", "until", "next", "created", "card")
     # "grant": what it allows, for the panel's editor; "allowed": the same in the person's words
     rows = sorted(load(account), key=lambda e: e.get("created", 0), reverse=True)
     return [

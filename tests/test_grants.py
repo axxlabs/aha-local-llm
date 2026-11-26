@@ -83,7 +83,6 @@ async def test_a_task_asks_on_its_own_card_and_its_checks_keep_what_stays_ticked
         title="Parcel",
         prompt="On fedex.com, type 385413566727 in the tracking box and read the status.",
         every_minutes=60,
-        until="never",
         type=["https://www.fedex.com/en-gb"],
         open=["fedex.com", "royalmail.com"],
         email=["Sam@Example.com"],
@@ -117,7 +116,6 @@ async def test_a_task_refuses_what_isnt_a_site_or_one_address(agent, llm, chat, 
         title="X",
         prompt="Check x",
         every_minutes=60,
-        until="never",
         type=["not a site"],
     )
     llm.answer("OK.")

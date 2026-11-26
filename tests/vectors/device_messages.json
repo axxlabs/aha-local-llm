@@ -49,6 +49,7 @@
       "prompt?",
       "done_when?",
       "every?",
+      "at?",
       "until?",
       "next?"
     ],
