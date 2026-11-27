@@ -588,3 +588,25 @@ async def test_every_task_says_what_ends_it_and_a_never_ending_one_isnt_closed(r
     )
     (left,) = background.load(fe)  # still there: news, not a closure
     assert left["last_how"] == "notify" and chat.sent[-1].task["kind"] == "update"
+
+
+async def test_a_new_task_inherits_what_its_request_was_allowed_always(runner, agent, llm, chat, accounts):
+    """2026-11-27: "make it so that it is inherited": an "always" ticked in the request that starts a task carries
+    over to its checks, and the Tasks panel lists it."""
+    fe = person(accounts)
+    llm.call("memory_add", text="Likes tea")
+    llm.call("task_create", title="Sam", prompt="Check for Sam's reply", done_when="Sam replied", every_minutes=15)
+    llm.answer("Watching.")
+    await agent.inbound(fe, "remember I like tea, and watch for Sam")
+    card = await chat.next()
+    while card.card is None:
+        card = await chat.next()
+    await agent.approval_reply(fe, card.card["id"], "approve", always=True)  # the memory card, ticked
+    card = await chat.next()
+    while card.card is None:
+        card = await chat.next()
+    await agent.approval_reply(fe, card.card["id"], "approve")  # the task card
+    await settle(agent)
+    (entry,) = background.load(fe)
+    assert background.allowed_of(fe, entry["id"]) == {"memory"}
+    assert background.listing(fe)[0]["allowed"] == [{"key": "memory", "label": "Save memories"}]

@@ -380,6 +380,8 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
         "title": title,
         "prompt": prompt,
         "done_when": ends,
+        # What the person ticked "always" on in the request that starts it carries over to its checks (SPEC §5.2)
+        **({"allowed": sorted(ctx.task.allowed)} if ctx.task.allowed else {}),
         "every": minutes,
         **({"at": times, "tz": ctx.config.timezone} if times else {}),
         "created": int(now),
