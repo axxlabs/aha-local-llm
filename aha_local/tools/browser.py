@@ -99,8 +99,9 @@ def check_targets(name: str, args: dict, ctx: ToolContext) -> ToolResult | None:
 
 
 NO_CHAT = (
-    "Not typed: no chat is open on {site}, or which one couldn't be read from the page. Open the person's chat "
-    "first (check its name at the top), then type the message."
+    "Not typed: no chat is open on {site}, or which one couldn't be read from the page (its name at the top and "
+    "the message box must agree). Open the person's chat first, check its name at the top, take a snapshot, then "
+    "type the message."
 )
 
 
@@ -157,7 +158,7 @@ def make_handler(name: str):
         labels = labels_of(name, args, ctx)
         action = classify(name, args, site, labels)
         if action.kind == "send" and chats.is_chat_site(action.site):  # the open chat, from the page (chats.py)
-            if not (chat := await open_chat(session, action.site)):
+            if not (chat := chats.resolve(action.site, await open_chat(session, action.site), labels)):
                 return ToolResult(NO_CHAT.format(site=action.site), error=True)
             action = replace(action, chat=chat)
         verdict = guard.check(ctx, action, name)  # SPEC §5.2: the one place that decides

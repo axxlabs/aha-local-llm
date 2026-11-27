@@ -235,3 +235,15 @@ def test_chats_are_user_driven():
     assert (
         chats.clean("  Sam‮ \n Smith ") == "Sam Smith" and chats.clean(None) == "" and len(chats.clean("x" * 500)) == 80
     )
+
+
+def test_the_open_chat_is_checked_against_the_message_box():
+    """policy/chats.resolve: the header's name, checked against the box's "Type a message to …" (real labels)."""
+    from aha_local.policy.chats import resolve
+
+    box = ["Type a message to Haibo E"]
+    assert resolve("whatsapp.com", "Haibo E", box) == "Haibo E"
+    assert resolve("whatsapp.com", "Natalia Lavratti", box) == ""  # they disagree: nothing is typed
+    assert resolve("whatsapp.com", "", box) == "Haibo E"  # the header unreadable: the box alone
+    assert resolve("whatsapp.com", "Meta AI", ["Message"]) == "Meta AI"  # a box that names no one
+    assert resolve("whatsapp.com", "", ["Message"]) == ""

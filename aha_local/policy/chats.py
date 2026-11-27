@@ -12,6 +12,8 @@ label. On a chat site, a message whose chat can't be read isn't typed at all.
 
 from __future__ import annotations
 
+import re
+
 # The open chat's name, from the conversation pane's header (`#main header`): its first `span[dir=auto]`, the title
 # WhatsApp Web shows above the messages. Empty when no chat is open. Fixed code: nothing from the model goes in.
 WHATSAPP = (
@@ -26,6 +28,10 @@ WHATSAPP = (
 # Sites that are chats as a whole (their registrable domain), with the code that reads which chat is open.
 CHAT_SITES = {"whatsapp.com": WHATSAPP}
 MAX_NAME = 80
+
+# The message box's own label names its chat too (seen in real WhatsApp Web snapshots, 2026-11-27: "Type a message
+# to Haibo E", "Type a message to Meta AI"): a second reading from the page, to check the first.
+BOX_NAME = {"whatsapp.com": re.compile(r"^\s*type a message to (.+?)\s*$", re.I)}
 
 
 def is_chat_site(site: str) -> bool:
@@ -42,3 +48,21 @@ def clean(name: object) -> str:
     if not isinstance(name, str):
         return ""
     return " ".join("".join(ch for ch in name if ch.isprintable()).split())[:MAX_NAME]
+
+
+def named_by_box(site: str, labels: list[str]) -> str:
+    """The chat the message box's own label names, or ""."""
+    pattern = BOX_NAME.get(site)
+    for label in labels if pattern else []:
+        if m := pattern.match(label or ""):
+            return clean(m.group(1))
+    return ""
+
+
+def resolve(site: str, header: str, labels: list[str]) -> str:
+    """The chat a message goes to: the header's name (the site's reader), checked against the message box's label
+    when it names one; either alone if only one reads. "" when neither does, or they disagree: then nothing is typed."""
+    header, box = clean(header), named_by_box(site, labels)
+    if header and box and header.casefold() != box.casefold():
+        return ""
+    return header or box
