@@ -727,7 +727,11 @@ class Agent:
                         await self.out.act(account, line)
                 # A site's or a tool's skill, the first time the task reaches it (SPEC §3.5 "Skills"): after the
                 # result, and kept when an older page is shortened (context.shorten_task).
-                skill = "\n\n".join(skills.added(k) for k in skills.due(ctx.task, call.name))
+                due = skills.due(ctx.task, call.name)
+                skill = "\n\n".join(skills.added(k) for k in due)
+                if not quiet:  # shown like a skill the model read (SPEC §7.4 "What Aha! did")
+                    for k in due:
+                        await self.out.act(account, messages.skill_line(k.name))
                 task.append(
                     {
                         "role": "tool",

@@ -188,6 +188,8 @@ class Account:
 
     def items(self, after: int = 0, before: int | None = None, since: float = 0, limit: int = 10_000) -> list[dict]:
         """Items shown in the app (messages, approval cards and their states), by sequence number."""
+        from . import numbers
+
         out = []
         for e in self.read_transcript():
             item = e.get("item") if e.get("kind") == "item" else None
@@ -196,6 +198,11 @@ class Account:
             if since and item.get("ts", 0) < since:
                 continue
             out.append(item)
+        # A title carries its part's number (SPEC §7.4 "Topic numbers"): from numbers.json, not the item.
+        known = numbers.parts(self) if any(it.get("t") == "title" for it in out) else {}
+        out = [
+            {**it, "n": known[it["from"]]} if it.get("t") == "title" and it.get("from") in known else it for it in out
+        ]
         return out[-limit:]
 
     # ---- history length and clearing (SPEC §3.8.1)

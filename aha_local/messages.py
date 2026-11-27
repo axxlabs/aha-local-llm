@@ -68,6 +68,8 @@ TOOL_LABELS = {
     "web_search": "web search",
     "fetch_url": "web page",
     "conversation_search": "conversation history",
+    "skill_read": "skill",
+    "topic_read": "earlier topic",
     "show_screenshot": "screenshot",
     "browser_login": "sign-in",
     "browser_human_check": "human check",
@@ -97,6 +99,11 @@ def _host(url: str) -> str:
     return rest[:80] + ("…" if len(rest) > 80 else "")
 
 
+def skill_line(name: str) -> str:
+    """A skill read, by the model or added by Aha! for a site or tool (SPEC §3.5 "Skills"): its file's name."""
+    return f"Read skill {name}.md"
+
+
 CALL_WORDS = {
     "web_search": lambda a: f"Searched Google for “{a.get('query', '')}”",
     "fetch_url": lambda a: f"Read {_host(a.get('url', ''))}",
@@ -118,6 +125,8 @@ CALL_WORDS = {
     "calendar_list": lambda a: "Looked at your calendar",
     "conversation_search": lambda a: f"Searched our earlier conversation for “{a.get('query', '')}”",
     "current_time": lambda a: "Checked the time",
+    "skill_read": lambda a: skill_line(str(a.get("name", "")).strip().lower()),
+    "topic_read": lambda a: f"Read topic {str(a.get('number', '')).strip().lstrip('#')}",
     "message_user": lambda a: "Sent you a message",
     "task_list": lambda a: "Looked at your background tasks",
     "check_result": lambda a: f"Reported: {a.get('outcome', '')}",

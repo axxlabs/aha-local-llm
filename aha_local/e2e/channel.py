@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import __version__, actions, diagnostics, folding, messages, reports
+from .. import __version__, actions, diagnostics, folding, messages, numbers, reports
 from ..accounts import TASK, Account, Accounts, Device
 from ..certs import needs_renewal
 from ..items import Image
@@ -242,7 +242,9 @@ class Channel:
         subject starts there, so the part before it folds now; `waiting`: Aha!'s message (its seq) that waits for
         the person's reply, so it stays open."""
         extra = {**({"new": True} if new else {}), **({"waiting": waiting} if waiting else {})}
-        await self.publish(account, {"t": "title", "from": start, "text": text, **extra})
+        # Its part's number (SPEC §7.4 "Topic numbers"): given with the first title, sent, never stored in the item.
+        n = numbers.part(account, start)
+        await self.publish(account, {"t": "title", "from": start, "text": text, **extra}, live={"n": n})
 
     async def steps(self, account: Account) -> None:
         """The request's Details line (SPEC §7.4 "Details"): a chat item, no push, once per task, where its work
@@ -293,11 +295,16 @@ class Channel:
         """ "Aha! is working…", or, while it waits for another person's request to finish, that it's queued."""
         await self.to_devices(account, {"t": "typing", "on": on, **({"queued": True} if queued else {})})
 
-    async def publish(self, account: Account, item: dict, notify: bool = False) -> dict:
-        """Number the item, keep it in the transcript, send it to every device of the account."""
+    async def publish(self, account: Account, item: dict, notify: bool = False, live: dict | None = None) -> dict:
+        """Number the item, keep it in the transcript, send it to every device of the account. `live`: what the
+        devices get with it that the transcript doesn't keep (a title's part number)."""
         item = {**item, "seq": account.next_seq(), "ts": int(time.time())}
         account.transcript({"kind": "item", "item": item})
-        live = {**item, "item": True}  # a chat item, whatever its type: the app keeps and draws it (SPEC §6.5)
+        live = {
+            **item,
+            **(live or {}),
+            "item": True,
+        }  # a chat item, whatever its type: the app keeps and draws it (SPEC §6.5)
         for device in list(account.devices.values()):
             if self.is_online(device):
                 await self._send(account, device, live)

@@ -84,8 +84,10 @@ def test_old_shapes_are_brought_to_todays(tmp_path):
         "leftover_files",
         "task_done_when",
         "task_no_grant",
+        "part_numbers",
     ]
     assert version(tmp_path) == LATEST
+    assert v.read_json(acct.dir / "numbers.json", None) == {"next": 1, "parts": {}}
     conv = acct.load_context()
     assert "summary" not in conv and conv["topics"][0]["title"] == "Earlier conversation"
     assert conv["turns"][0]["record"] == ["memory_add: Saved"] and "done" not in conv["turns"][0]

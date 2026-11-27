@@ -6,11 +6,12 @@ from __future__ import annotations
 
 import datetime as dt
 
-from .. import dates
+from .. import dates, numbers
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
 MAX_HITS = 8
 MAX_TOPICS = 5
+MAX_READ = 12_000  # characters of a topic read back: its newest messages when it's longer
 
 
 async def conversation_search(args: dict, ctx: ToolContext) -> ToolResult:
@@ -36,16 +37,73 @@ async def conversation_search(args: dict, ctx: ToolContext) -> ToolResult:
     hits.sort(key=lambda x: -x[0])
     out = []
     if found:
+        known = numbers.parts(ctx.account)
         out.append("Your memory of earlier topics (best matches first):")
         for e in found[:MAX_TOPICS]:
             day = dates.say(dt.date.fromtimestamp(e["ts"])) if e.get("ts") else "earlier"
-            out.append(f"- [{e['id']}] {day}, {e.get('title') or 'Untitled'}:\n  " + e["text"].replace("\n", "\n  "))
+            n = known.get(e.get("from"))
+            label = f"topic {n}" if n else e["id"]
+            out.append(f"- [{label}] {day}, {e.get('title') or 'Untitled'}:\n  " + e["text"].replace("\n", "\n  "))
     if hits:
         out.append("What was said (newest matches first):")
         out += [
             f"{e.get('ts', '')[:16]} {'User' if e['kind'] == 'user' else 'aha'}: {e['text'][:500]}"
             for _, e in hits[:MAX_HITS]
         ]
+    return ToolResult("\n".join(out))
+
+
+async def topic_read(args: dict, ctx: ToolContext) -> ToolResult:
+    """One numbered part of the chat, read back (SPEC §7.4 "Topic numbers"): its messages, your memory of it, and,
+    for a background task's note, that task. Read only: the topic going on stays the one in view."""
+    try:
+        n = int(str(args.get("number", "")).strip().lstrip("#"))
+    except ValueError:
+        return ToolResult("Give the topic's number, e.g. 12.", error=True)
+    account = ctx.account
+    start = numbers.start_of(account, n)
+    if start is None:
+        return ToolResult(f"There's no topic {n}.", error=True)
+    items = account.items(after=start - 1)
+    later = sorted(s for s in numbers.parts(account) if s > start)
+    cuts = [it["seq"] for it in items if it.get("t") == "cut" and it["seq"] > start]
+    end = min([*later, *cuts], default=None)
+    part = [it for it in items if end is None or it["seq"] < end]
+    title = next((it.get("text") for it in reversed(part) if it.get("t") == "title" and it.get("from") == start), "")
+    tz = dates.tz(ctx.config) if ctx.config else None
+    lines, task_ids = [], []
+    for it in part:
+        if it.get("t") != "msg":
+            continue
+        when = dt.datetime.fromtimestamp(it.get("ts", 0), tz).strftime("%d/%m/%Y %H:%M")
+        who = "User" if it.get("role") == "me" else "Aha!"
+        if isinstance(it.get("task"), dict):
+            who = f"Aha! (background task “{it['task'].get('title', '')}”, {it['task'].get('kind', 'update')})"
+            if it["task"].get("id"):
+                task_ids.append(it["task"]["id"])
+        lines.append(f"{when} {who}: {it.get('text', '')}")
+    if not lines:
+        return ToolResult(f"Topic {n} has no messages left (the history before it was cleared).", error=True)
+    body = "\n".join(lines)
+    if len(body) > MAX_READ:
+        body = "(earlier messages cut)\n" + body[-MAX_READ:]
+    head = f"Topic {n}" + (f": {title}" if title else "")
+    memory = next((e["text"] for e in account.load_context()["topics"] if e.get("from") == start), "")
+    out = [head, "", body]
+    if memory:
+        out += ["", "Your memory of it:", memory]
+    if task_ids:
+        from . import background
+
+        entry = next((e for e in background.load(account) if e.get("id") == task_ids[-1]), None)
+        out += ["", "Its background task:"]
+        if entry is None:
+            out.append("it has ended.")
+        else:
+            out.append(
+                f"still running ({background.schedule_words(entry)}). Waiting for: {entry['title']}. "
+                f"Each check: {entry['prompt']} Done when: {entry['done_when']}."
+            )
     return ToolResult("\n".join(out))
 
 
@@ -72,6 +130,16 @@ def register(reg: Registry) -> None:
             "found and done, with codes, addresses and dates) and the messages themselves.",
             params(["query"], query=string("Keywords")),
             conversation_search,
+        )
+    )
+    reg.add(
+        Tool(
+            "topic_read",
+            'Read an earlier topic by its number, as the user sees it on the chat\'s folded lines ("topic 12"): its '
+            "messages, your memory of it, and for a background task's note, that task. Read only: it doesn't change "
+            "the topic going on.",
+            params(["number"], number={"type": "integer", "description": "The topic's number"}),
+            topic_read,
         )
     )
     reg.add(

@@ -43,6 +43,8 @@ def allow_key(action: Action) -> str:
     """What an "always" tick on this action's card covers: the same kind of action, to the same place or people."""
     if user_driven(action.kind, action.site):  # a chat: no "always" (policy/chats.py)
         return ""
+    if action.kind == "send" and action.what == "task":  # each background task is its own decision (2026-11-27)
+        return ""
     if action.kind == "send":
         return f"{action.what}:{','.join(sorted(action.to))}" if action.to else action.what
     if action.kind == "search":

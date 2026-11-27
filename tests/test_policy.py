@@ -232,6 +232,7 @@ def test_chats_are_user_driven():
         assert decide(action, trusted).outcome == "card" and guard.allow_key(action) == ""
     assert decide(Action("type", "linkedin.com"), trusted).outcome == "run"  # not a chat site: trust still counts
     assert guard.allow_key(Action("send", what="email", to=("sam@example.com",))) == "email:sam@example.com"
+    assert guard.allow_key(Action("send", what="task")) == ""  # starting a background task: no "always" either
     assert (
         chats.clean("  Sam‮ \n Smith ") == "Sam Smith" and chats.clean(None) == "" and len(chats.clean("x" * 500)) == 80
     )
