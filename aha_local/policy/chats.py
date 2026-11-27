@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
 """Chats are user-driven (SPEC §5.2 rule 2, 2026-11-27: "typing on whatsapp should always be user-driven… or any
-other chat too").
+other chat too"; then: "'always allow' not available to enable free messaging to a given person").
 
-A message typed into a chat, on any site, is a card every time: no "Always allow for this task", no trust. On a
-chat site (WhatsApp Web), so is everything typed there, its search box included. The card names the chat the
+A message typed into a chat, on any site, is a card: trust never skips it, and its "Always allow for this task"
+covers only the chat the page named (no chat named, no tick). On a chat site (WhatsApp Web), everything else typed
+there is a card every time, its search box included, with no tick. The card names the chat the
 message goes to, read from the page by the harness, never from the model: on a chat site by the site's own reader
 below (fixed code, run through `browser_run_code_unsafe`); elsewhere from the page's address or the message box's
 label. On a chat site, a message whose chat can't be read isn't typed at all.
@@ -39,7 +40,8 @@ def is_chat_site(site: str) -> bool:
 
 
 def user_driven(kind: str, site: str) -> bool:
-    """Every time a card, never an "always" or trust: a message typed on a site, or any typing on a chat site."""
+    """A card whatever is trusted: a message typed on a site (its "always" is per chat, guard.allow_key), or any
+    typing on a chat site."""
     return bool(site) and (kind == "send" or (kind == "type" and is_chat_site(site)))
 
 

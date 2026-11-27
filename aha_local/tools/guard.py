@@ -41,7 +41,9 @@ def facts(ctx: ToolContext) -> Facts:
 
 def allow_key(action: Action) -> str:
     """What an "always" tick on this action's card covers: the same kind of action, to the same place or people."""
-    if user_driven(action.kind, action.site):  # a chat: no "always" (policy/chats.py)
+    if action.kind == "send" and action.site:  # a chat message: "always" only for the chat the page named
+        return f"message:{action.site}:{action.chat}" if action.chat else ""
+    if user_driven(action.kind, action.site):  # typing on a chat site (its search box): never "always"
         return ""
     if action.kind == "send" and action.what == "task":  # each background task is its own decision (2026-11-27)
         return ""
@@ -73,6 +75,9 @@ ALLOW_WORDS = {
 def allow_label(key: str) -> str:
     """The person's words for an "always" (the Tasks panel's approved permissions)."""
     kind, _, x = key.partition(":")
+    if kind == "message" and ":" in x:
+        site, _, chat = x.partition(":")
+        return f"Send messages to {chat} on {site}"
     words = ALLOW_WORDS.get(kind, kind.replace("_", " ").capitalize())
     return words.replace("{x}", x.replace(",", ", ")) if x else words.replace(" to {x}", "").replace(" on {x}", "")
 

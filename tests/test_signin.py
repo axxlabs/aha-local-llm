@@ -69,7 +69,13 @@ class FakeContext:
         self.codes.append(code)
         echo = f"\n### Ran Playwright code\n```js\n{code}\n```"  # the real one echoes the code: typed text too
         if code == chats.WHATSAPP:
-            return text_result("### Result\n" + json.dumps(json.dumps({"chat": self.open_chat})) + echo)
+            # A list: the chat open at each read, in turn (the last one stays)
+            name = (
+                (self.open_chat.pop(0) if len(self.open_chat) > 1 else self.open_chat[0])
+                if isinstance(self.open_chat, list)
+                else self.open_chat
+            )
+            return text_result("### Result\n" + json.dumps(json.dumps({"chat": name})) + echo)
         if code == signins.COOKIE_DOMAINS:
             domains = sorted({c["domain"] for c in self.cookies})
             return text_result("### Result\n" + json.dumps(json.dumps(domains)) + echo)

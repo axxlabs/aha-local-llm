@@ -97,9 +97,9 @@ TRUST_HINT = " Add {site} to your trusted sites in Settings and it won't ask aga
 WHY = {
     "send": "Sending a message to someone always asks first, on every site, trusted or not: nothing goes out in "
     "your name without your OK. You can change the text before it goes.",
-    "message": "A message typed into a chat always asks first, every time, on every site: nothing goes out in "
-    "your name without your OK, and no setting skips it. The card names the chat it goes to, as the page shows it. "
-    "You can change the text before it goes.",
+    "message": "A message typed into a chat always asks first, on every site, trusted or not: nothing goes out in "
+    'your name without your OK. The card names the chat it goes to, as the page shows it; "Always allow" covers '
+    "only that chat. You can change the text before it goes.",
     "chat": "Everything typed on {site} is shown to you first, every time, even a search: on a chat site, what "
     "Aha! types is yours to decide.",
     "type": "{site} isn't one of your trusted sites, so whatever Aha! types into it (a search, a form, an answer) "

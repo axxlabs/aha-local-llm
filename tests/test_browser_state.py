@@ -385,7 +385,7 @@ async def test_on_whatsapp_web_the_message_box_is_always_a_card_and_the_page_is_
     assert search.card["why"].startswith("Everything typed on whatsapp.com is shown to you first")
     await agent.approval_reply(fe, search.card["id"], "approve")
     card = await chat.next()
-    assert card.card["title"] == "Send this message to Sam on whatsapp.com?" and not card.card.get("always")
+    assert card.card["title"] == "Send this message to Sam on whatsapp.com?" and card.card.get("always")
     signed = "On my way\n(Written by Aha!, Fe's Private AI Assistant)"  # signed in code (SPEC §3.4)
     assert [(f["label"], f["value"], f["kind"]) for f in card.card["fields"]] == [
         ("Text", signed, "longtext"),
@@ -406,6 +406,29 @@ async def test_on_whatsapp_web_the_message_box_is_always_a_card_and_the_page_is_
     from aha_local.messages import signed as sign
 
     assert sign(signed, "Fe", medium="chat") == signed  # never signed twice
+
+
+async def test_always_on_a_whatsapp_message_covers_that_chat_only(setup, llm, chat, accounts, monkeypatch):
+    """Ticked "always" for Sam: the next message to Sam goes without a card, still signed; one to Ana still asks."""
+    from .test_signin import FakeContext
+
+    monkeypatch.setattr(FakeContext, "open_chat", ["Sam", "Sam", "Ana"])  # the chat open at each message
+    agent, _, fake = setup
+    fe = person(accounts)
+    llm.call("browser_navigate", url="https://web.whatsapp.com/")
+    llm.call("browser_type", element="Message", target="e2", text="On my way")
+    llm.call("browser_type", element="Message", target="e2", text="5 min")
+    llm.call("browser_type", element="Message", target="e2", text="Hi Ana")
+    llm.answer("Sent.")
+    await agent.inbound(fe, "message Sam, then Ana")
+    first = await chat.next()
+    await agent.approval_reply(fe, first.card["id"], "approve", always=True)
+    second = await chat.next()
+    assert second.card["title"] == "Send this message to Ana on whatsapp.com?"
+    assert fake.contexts[-1].fields["e2"] == "5 min\n(Written by Aha!, Fe's Private AI Assistant)"  # no card, signed
+    await agent.approval_reply(fe, second.card["id"], "approve")
+    await settle(agent)
+    assert sum(1 for m in chat.sent if m.card) == 2
 
 
 async def test_on_whatsapp_web_no_open_chat_means_nothing_is_typed(setup, llm, chat, accounts, monkeypatch):

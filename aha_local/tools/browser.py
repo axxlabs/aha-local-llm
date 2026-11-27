@@ -173,6 +173,9 @@ def make_handler(name: str):
                 if clicked and not result.error:
                     result.did = clicked
                 return result
+            if action.kind == "send":  # signed in code with or without its card (SPEC §3.4)
+                form = form_for(name, labelled(name, args, ctx), action.site, ctx.account.label, action.chat)
+                args = form.apply(name, args, [f.value for f in form.fields])
             return await ran(session, name, args, action, ctx)
         try:  # the card shows the page the action happens on
             shot_result = to_result(await session.call("browser_take_screenshot", {}))
