@@ -122,7 +122,7 @@ class FakeApprovals:
         self.answers = list(answers)
         self.asked: list[SimpleNamespace] = []
 
-    async def ask(self, account, kind, title, fields, image=None, why="", always=False) -> Decision:
+    async def ask(self, account, kind, title, fields, image=None, why="", always=False, task=None) -> Decision:
         self.asked.append(
             SimpleNamespace(kind=kind, title=title, fields=[(f.label, f.value, f.kind) for f in fields], why=why)
         )

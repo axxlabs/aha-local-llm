@@ -36,7 +36,7 @@ class Approvals:
     def __init__(self, answer: Decision) -> None:
         self.answer, self.asked = answer, []
 
-    async def ask(self, account, kind, title, fields, image=None, why="", always=False):
+    async def ask(self, account, kind, title, fields, image=None, why="", always=False, task=None):
         self.asked.append((kind, title, [f.value for f in fields], why))
         return self.answer
 

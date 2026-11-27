@@ -530,6 +530,7 @@ async def test_always_allow_on_a_checks_card_is_kept_for_its_next_checks(runner,
     while card.card is None:
         card = await chat.next()
     assert card.card["always"] is True
+    assert card.card["task"] == {"id": "abc123", "title": "Reply from Sam about Saturday"}  # drawn in its box
     await agent.approval_reply(fe, card.card["id"], "approve", always=True)
     await settle(agent)
     assert background.allowed_of(fe, "abc123") == {"memory"}

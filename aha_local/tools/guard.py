@@ -86,6 +86,16 @@ def check(ctx: ToolContext, action: Action, tool: str) -> Verdict:
     return verdict
 
 
+def task_box(ctx: ToolContext) -> dict | None:
+    """The background task a card is raised in, for the app to draw it in that task's box (SPEC §7.4)."""
+    if not ctx.task.background or ctx.account is None:
+        return None
+    from . import background
+
+    entry = next((e for e in background.load(ctx.account) if e.get("id") == ctx.task.background), None)
+    return {"id": ctx.task.background, "title": entry["title"] if entry else ""}
+
+
 def remember(ctx: ToolContext, key: str) -> None:
     """The person ticked "always" on a card: this request, or this background task's every check, allows it."""
     ctx.task.allowed.add(key)
@@ -131,7 +141,9 @@ async def ask(
     reason, for the card's (i) (policy.gate.explain); without it, the kind's own (approvals.KINDS). `allow`: the
     action's `allow_key`, for the card's "Always allow for this task" tick (none on cards the person fills in:
     a sign-in, a human check)."""
-    decision = await ctx.approvals.ask(ctx.account, kind, title, fields, image, why=why, always=bool(allow))
+    decision = await ctx.approvals.ask(
+        ctx.account, kind, title, fields, image, why=why, always=bool(allow), task=task_box(ctx)
+    )
     if decision.approved and decision.always and allow:
         remember(ctx, allow)
     return decision, (None if decision.approved else stopped(decision, then, declined))

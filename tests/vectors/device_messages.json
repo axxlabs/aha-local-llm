@@ -126,7 +126,8 @@
       "buttons",
       "image?",
       "why?",
-      "always?"
+      "always?",
+      "task?"
     ],
     "approval_state": [
       "seq",
