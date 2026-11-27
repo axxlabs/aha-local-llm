@@ -15,7 +15,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from . import actions, checks, context, dates, folding, messages
+from . import actions, checks, context, dates, folding, messages, skills
 from .accounts import TASK, Account, Accounts, turn_time
 from .approvals import Approvals
 from .config import Config
@@ -365,7 +365,7 @@ class Agent:
     async def warm(self) -> None:
         """Load the chosen model and read the fixed start of every request (the system prompt and the tool
         definitions) once, so the first message after a start or a model change doesn't wait for it (§3.2)."""
-        msgs = [{"role": "system", "content": context.system_prompt()}, {"role": "user", "content": "."}]
+        msgs = [{"role": "system", "content": context.system_prompt(self.llm.model)}, {"role": "user", "content": "."}]
         try:
             await self.llm.chat(msgs, self.registry.specs(), max_tokens=1)
             log.info("model %s ready", self.llm.model)
@@ -661,6 +661,7 @@ class Agent:
                 self.config.household_name,
                 self.config.context_tokens,
                 topic=topic,
+                model=self.llm.model,
             )
             reply = await self.llm.chat(msgs, tools, who=account.address)
             self.session(account).last_prompt = msgs  # the title is asked at its end (SPEC §7.4 "Folding")
@@ -724,17 +725,22 @@ class Agent:
                     ]
                     for line in lines:
                         await self.out.act(account, line)
+                # A site's or a tool's skill, the first time the task reaches it (SPEC §3.5 "Skills"): after the
+                # result, and kept when an older page is shortened (context.shorten_task).
+                skill = "\n\n".join(skills.added(k) for k in skills.due(ctx.task, call.name))
                 task.append(
                     {
                         "role": "tool",
                         "tool_call_id": call.id,
-                        "content": result.text or "(no output)",
+                        "content": (result.text or "(no output)") + (f"\n\n{skill}" if skill else ""),
                         "_kind": result.kind,
+                        **({"_skill": skill} if skill else {}),
                     }
                 )
                 for image in result.images:
                     shot = with_images(f"[Screenshot returned by {call.name}]", [image])
                     task.append({"role": "user", "_kind": "image", "content": shot})
+
             if report:  # the check said what it found: it's over (SPEC §3.4)
                 return report.get("message", ""), text
         return out_of_steps(ctx.task.record), text

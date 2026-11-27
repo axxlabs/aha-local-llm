@@ -15,6 +15,7 @@ arguments; approvals are answered only by the person (approvals.py).
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from urllib.parse import urlsplit
 
 from .. import messages
@@ -95,6 +96,15 @@ def check_targets(name: str, args: dict, ctx: ToolContext) -> ToolResult | None:
     return None
 
 
+def conversation(url: str, labels: list[str]) -> str:
+    """Which conversation a message typed on a site goes to, from the page alone (SPEC §5.2): the address's path when
+    it names one (a thread's page), else the message box's own label. Empty: the page doesn't say."""
+    path = urlsplit(url).path.rstrip("/")
+    if path:
+        return path
+    return next((" ".join(label.split()) for label in labels if label.strip()), "")
+
+
 def labels_of(name: str, args: dict, ctx: ToolContext) -> list[str]:
     """The page's own labels of the elements a typing call targets, from the latest snapshot."""
     spec = TYPING.get(name)
@@ -135,7 +145,10 @@ def make_handler(name: str):
                 site = await current_site(session)  # the browser's own address, never the model's
             except Exception:
                 log.warning("couldn't read the current site")
-        action = classify(name, args, site, labels_of(name, args, ctx))
+        labels = labels_of(name, args, ctx)
+        action = classify(name, args, site, labels)
+        if action.kind == "send" and action.site:
+            action = replace(action, chat=conversation(ctx.task.page_url, labels))
         verdict = guard.check(ctx, action, name)  # SPEC §5.2: the one place that decides
         if verdict.outcome == "block":
             return guard.blocked(verdict.why)

@@ -11,7 +11,7 @@ import logging
 import os
 import time
 
-from . import __version__, messages
+from . import __version__, messages, skills
 from .accounts import Accounts
 from .agent import Agent
 from .certs import public_b64
@@ -48,7 +48,7 @@ class Service:
         self.key = load_or_create_instance_key(self.vault, data / "keys" / "instance.key")
         self.accounts = Accounts(self.vault)
         self.registry = Registry()
-        for module in (web, memory, mail, calendar, background, conversation):
+        for module in (web, memory, mail, calendar, background, conversation, skills):
             module.register(self.registry)
         self.browser = browser_pool.BrowserPool(config.browser_url)
         self.llm = LLM(config.llm_url, config.llm_model)

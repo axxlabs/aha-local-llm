@@ -28,6 +28,9 @@ class Action:
     # None: no one in particular (a memory, a background task, a deletion, a message typed on a site)
     what: str = ""
     to: tuple[str, ...] | None = None
+    # A message typed on a site: the conversation it goes to, read from the page by the harness (the page's path, or
+    # the message box's own label), never from the model's words; what an "always" tick on it covers (SPEC §5.2)
+    chat: str = ""
 
 
 @dataclass

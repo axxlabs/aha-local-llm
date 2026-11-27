@@ -38,8 +38,19 @@ KEEP_PAGES = 2  # the newest page results always stay whole
 
 
 @cache
-def system_prompt() -> str:
-    return "\n\n".join((PROMPTS / f).read_text().strip() for f in ("core.md", "browser.md", "chat.md"))
+def system_prompt(model: str = "") -> str:
+    """The base prompt with the skills' list, then the model's own file when it has one (SPEC §3.5): the same for
+    every request and account on that model. Another model's prompt cache starts empty anyway."""
+    from . import skills
+
+    parts = [
+        (PROMPTS / "core.md").read_text().strip().replace("<skills/>", skills.listing()),
+        (PROMPTS / "chat.md").read_text().strip(),
+    ]
+    own = PROMPTS / "models" / f"{model}.md"
+    if model and own.is_file():
+        parts.append(own.read_text().strip())
+    return "\n\n".join(parts)
 
 
 def estimate(messages: list[dict]) -> int:
@@ -96,11 +107,12 @@ def build(
     context_tokens: int,
     now: dt.datetime | None = None,
     topic: tuple[int, float] | None = None,
+    model: str = "",
 ) -> list[dict]:
     """`topic`: (first chat item, when) of the topic going on (folding.segment_start): only its turns are shown."""
     turns = topic_turns(account.load_context()["turns"], topic[1] if topic else 0)
     head = [
-        {"role": "system", "content": system_prompt()},
+        {"role": "system", "content": system_prompt(model)},
         {"role": "user", "content": context_block(account, timezone, household, now)},
         {"role": "assistant", "content": "Understood."},
     ]
@@ -137,7 +149,10 @@ def shorten_task(task: list[dict], budget: float) -> list[dict]:
             out[i] = {"role": "user", "content": "[an earlier screenshot, no longer shown]", "_kind": "stub"}
         else:
             first = (m.get("content") or "").splitlines()[:3]
-            out[i] = {**m, "content": "[earlier page result, superseded] " + " ".join(first)[:200], "_kind": "stub"}
+            stub = "[earlier page result, superseded] " + " ".join(first)[:200]
+            if m.get("_skill"):  # the skill added with it stays (SPEC §3.5 "Skills")
+                stub += "\n\n" + m["_skill"]
+            out[i] = {**m, "content": stub, "_kind": "stub"}
     return [strip(m) for m in out]
 
 

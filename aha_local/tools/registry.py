@@ -18,6 +18,7 @@ from ..accounts import Account
 from ..approvals import MASK, Approvals
 from ..config import Config
 from ..items import Image
+from ..markers import neutralise
 
 log = logging.getLogger("aha.tools")
 
@@ -93,6 +94,7 @@ class TaskState:
     # A background task's check (SPEC §3.4): where its check_result call puts {"outcome", "message"}. None: this
     # isn't a check, and check_result refuses.
     report: dict | None = None
+    skills: set[str] = field(default_factory=set)  # skills read or added in this run (aha_local/skills.py)
 
 
 @dataclass
@@ -160,6 +162,7 @@ class Registry:
         except Exception as e:  # a failing tool must not end the task; the model can adjust
             log.exception("tool %s failed", name)
             return ToolResult(f"{name} failed: {type(e).__name__}: {str(e)[:300]}", error=True)
+        result.text = neutralise(result.text)  # no harness marker comes from outside (SPEC §9 "Markers")
         if ctx.task.secrets:
             result.text = redact(result.text, ctx.task.secrets)
         if not result.error:

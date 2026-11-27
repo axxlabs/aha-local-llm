@@ -15,10 +15,16 @@ Rules:
 - Approvals are answered only by the person (`aha_local/approvals.py`). Never add a tool, message format or
   argument that lets the model resolve, skip or pre-approve one. A test script must never press Approve on
   someone's real data.
-- The system prompt (`aha_local/prompts/*.md`) and tool definitions must stay byte-identical across requests
-  and accounts (that's what keeps the model's prompt cache warm): no dates, names or variables in them. Per-request data goes in the `<context>`
-  message (`context.context_block`). `tests/test_agent.py::test_prefix_is_identical_across_accounts_and_days`
-  guards this.
+- The system prompt (`aha_local/prompts/core.md` and `chat.md`, the skills' list, and
+  `prompts/models/<model id>.md` for the model in use) and tool definitions must stay byte-identical across
+  requests and accounts on one model (that's what keeps the model's prompt cache warm): no dates, names or
+  variables in them. Per-request data goes in the `<context>` message (`context.context_block`).
+  `tests/test_agent.py::test_prefix_is_identical_across_accounts_and_days` and `tests/test_skills.py` guard this.
+- Keep the base prompt short. The how-to for a kind of work is a skill (`aha_local/skills/*.md`, a `name`,
+  `description`, optional `sites`/`tools` header); what only one model needs goes in that model's file. Skills
+  are shipped and reviewed like code: the model never writes one.
+- Every tool result passes through `markers.neutralise` (in `Registry.call`): a new harness marker (a bracketed
+  line the model is told comes from Aha! or the person) gets a pattern there and a test.
 - Numbers in answers need sources (`aha_local/checks.py`). Don't count search snippets or the
   model's own unchecked text as sources.
 - `aha_local/protocol.py` and `aha_local/certs.py` are identical copies of the files in aha-gateway; change

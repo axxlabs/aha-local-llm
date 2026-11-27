@@ -179,8 +179,10 @@ AUDIT_WORDS = re.compile(
 def test_the_model_never_hears_about_cards_or_trust():
     """SPEC §5.1: prompts and tool descriptions say nothing of cards, approvals or trust."""
 
-    prompts = Path(__file__).parents[1] / "aha_local" / "prompts"
-    for f in prompts.glob("*.md"):
+    root = Path(__file__).parents[1] / "aha_local"
+    files = [*(root / "prompts").rglob("*.md"), *(root / "skills").glob("*.md")]
+    assert len(files) > 10
+    for f in files:
         found = AUDIT_WORDS.findall(f.read_text())
         assert not found, (f.name, found)
     from aha_local.tools import background, calendar, guard, mail, memory, registry, web
