@@ -86,6 +86,7 @@ async def test_always_allow_covers_the_same_action_for_the_rest_of_the_request()
     await guard.send(c, "email", "Send this email?", [Field("To", "ana@example.com")], to=["ana@example.com"])
     assert len(c.approvals.asked) == 2  # someone else: its own card
     assert guard.allow_key(Action("type", "waitrose.com")) == "type:waitrose.com"
-    assert guard.allow_key(Action("send", "whatsapp.com")) == "message:whatsapp.com"
-    assert guard.allow_label("message:whatsapp.com") == "Send messages on whatsapp.com"
+    # Chats are user-driven (policy/chats.py): no "always" for a message on any site, or typing on a chat site
+    assert guard.allow_key(Action("send", "linkedin.com")) == guard.allow_key(Action("type", "whatsapp.com")) == ""
+    assert guard.allow_label("message:whatsapp.com") == "Send messages on whatsapp.com"  # an old one, still named
     assert guard.allow_label("search") == "Search Google"

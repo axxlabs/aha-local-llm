@@ -225,16 +225,18 @@ class Form:
         return json.loads(values[0])
 
 
-def form_for(name: str, args: dict, site: str, signer: str = "") -> Form:
+def form_for(name: str, args: dict, site: str, signer: str = "", chat: str = "") -> Form:
     """The card for a browser call. `signer`: it types into a message box, signed in that name in code
     (SPEC §3.4), on the card, so the person sees the signature and can change it."""
     where = f" on {site}" if site else ""
     if name in TYPING:
         form = TYPING[name].form(args, where)
         if signer:
-            form.title = f"Send this message on {site}?"
+            form.title = f"Send this message to {chat} on {site}?" if chat else f"Send this message on {site}?"
             for f in form.fields:
                 if f.label == "Text" or MESSAGE_BOX.search(f.label):
                     f.value = messages.signed(f.value, signer, medium="chat")
+            if chat:  # last, so the edited values still map to the call's fields in order
+                form.fields.append(Field("To", chat, "info"))
         return form
     return Form(f"Run “{name}”{where}?", [Field("Arguments", json.dumps(args, ensure_ascii=False))])

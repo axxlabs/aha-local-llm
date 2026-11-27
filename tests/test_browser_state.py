@@ -12,6 +12,7 @@ import re
 import pytest
 
 from aha_local import approvals
+from aha_local.policy import chats
 from aha_local.tools import human, signins
 
 from .conftest import person, settle
@@ -367,8 +368,8 @@ async def test_a_new_windows_blank_page_reopens_the_last_page_in_code(setup, llm
 
 
 async def test_on_whatsapp_web_the_message_box_is_always_a_card_and_the_page_is_private(setup, llm, chat, accounts):
-    """SPEC §5.2: typing into a messaging site's message box sends a message to someone: a card, trusted or not.
-    The search box there follows trust; and the chats are the person's private data."""
+    """SPEC §5.2: WhatsApp is user-driven (policy/chats.py): everything typed there is a card, trusted or not, with
+    no "always"; a message's card names the chat open on the page, read by the harness."""
     from aha_local.tools import trusted
 
     agent, _, fake = setup
@@ -379,18 +380,25 @@ async def test_on_whatsapp_web_the_message_box_is_always_a_card_and_the_page_is_
     llm.call("browser_type", element="Message", target="e2", text="On my way")
     llm.answer("Sent.")
     await agent.inbound(fe, "tell Sam on WhatsApp I'm on my way")
+    search = await chat.next()  # trusted, yet a card: a chat site
+    assert search.card["title"] == "Type into Search input textbox on whatsapp.com?" and not search.card.get("always")
+    assert search.card["why"].startswith("Everything typed on whatsapp.com is shown to you first")
+    await agent.approval_reply(fe, search.card["id"], "approve")
     card = await chat.next()
-    assert card.card["title"] == "Send this message on whatsapp.com?"
+    assert card.card["title"] == "Send this message to Sam on whatsapp.com?" and not card.card.get("always")
     signed = "On my way\n(Written by Aha!, Fe's Private AI Assistant)"  # signed in code (SPEC §3.4)
-    assert [(f["label"], f["value"], f["kind"]) for f in card.card["fields"]] == [("Text", signed, "longtext")]
-    assert card.card["why"].startswith("Sending a message to someone always asks first")  # the card's (i)
-    assert fake.contexts[-1].fields == {"e1": "Sam"}  # the search ran without a card: the site is trusted
+    assert [(f["label"], f["value"], f["kind"]) for f in card.card["fields"]] == [
+        ("Text", signed, "longtext"),
+        ("To", "Sam", "info"),
+    ]
+    assert card.card["why"].startswith("A message typed into a chat always asks first")  # the card's (i)
+    assert any(c == chats.WHATSAPP for c in fake.contexts[-1].codes)  # the harness read the chat
     await agent.approval_reply(fe, card.card["id"], "approve")
     await settle(agent)
     assert fake.contexts[-1].fields == {"e1": "Sam", "e2": signed}
     typed = [c for c in fake.contexts[-1].codes if "aria-ref=e2" in c and "keyboard.type" in c][-1]
     assert "press('Shift+Enter')" in typed and "press('Enter')" not in typed  # a new line mustn't send it early
-    assert sum(1 for m in chat.sent if m.card) == 1
+    assert sum(1 for m in chat.sent if m.card) == 2
     # Seen: the model took the signature for a mistake and tried to have it deleted: it's told it's meant.
     typed_result = next(r for r in tool_results(llm) if r.startswith("Typed: “On my way"))
     assert "added by Aha! on purpose and approved by the person" in typed_result
@@ -398,6 +406,22 @@ async def test_on_whatsapp_web_the_message_box_is_always_a_card_and_the_page_is_
     from aha_local.messages import signed as sign
 
     assert sign(signed, "Fe", medium="chat") == signed  # never signed twice
+
+
+async def test_on_whatsapp_web_no_open_chat_means_nothing_is_typed(setup, llm, chat, accounts, monkeypatch):
+    """A message whose chat the page doesn't show (none open, or unreadable) isn't typed: no card, nothing sent."""
+    from .test_signin import FakeContext
+
+    monkeypatch.setattr(FakeContext, "open_chat", "")
+    agent, _, fake = setup
+    fe = person(accounts)
+    llm.call("browser_navigate", url="https://web.whatsapp.com/")
+    llm.call("browser_type", element="Message", target="e2", text="On my way")
+    llm.answer("Couldn't send it.")
+    await agent.inbound(fe, "tell Sam on WhatsApp I'm on my way")
+    await settle(agent)
+    assert not any(m.card for m in chat.sent) and "e2" not in fake.contexts[-1].fields
+    assert any(r.startswith("Not typed: no chat is open on whatsapp.com") for r in tool_results(llm))
 
 
 async def test_a_message_box_on_any_site_is_a_signed_card(setup, llm, chat, accounts):

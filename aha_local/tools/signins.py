@@ -62,7 +62,7 @@ def last_page(account: Account) -> str:
 
 async def remember_page(account: Account, session) -> None:
     """After a task: note the page that's open (a blank one keeps the last)."""
-    url = _result(await session.call("browser_run_code_unsafe", {"code": GET_URL}, timeout=TIMEOUT))
+    url = code_result(await session.call("browser_run_code_unsafe", {"code": GET_URL}, timeout=TIMEOUT))
     if isinstance(url, str) and url.startswith(("https://", "http://")):
         data = load(account)
         data["page"] = url[:2000]
@@ -83,7 +83,7 @@ async def sites(account: Account, session) -> list[str]:
     """The sites the browser keeps cookies for, sorted."""
     names: set[str] = set()
     if session is not None:
-        domains = _result(await session.call("browser_run_code_unsafe", {"code": COOKIE_DOMAINS}, timeout=TIMEOUT))
+        domains = code_result(await session.call("browser_run_code_unsafe", {"code": COOKIE_DOMAINS}, timeout=TIMEOUT))
         names = {site_of(str(d).lstrip(".")) for d in json.loads(domains)} if isinstance(domains, str) else set()
     return sorted(names - {""})
 
@@ -112,7 +112,7 @@ async def forget(account: Account, session, site: str) -> bool:
         return False
     known = name in await sites(account, session)
     if session is not None:
-        _result(await session.call("browser_run_code_unsafe", {"code": forget_code(name)}, timeout=TIMEOUT))
+        code_result(await session.call("browser_run_code_unsafe", {"code": forget_code(name)}, timeout=TIMEOUT))
     data = load(account)
     host = data.get("page", "").split("://", 1)[-1].split("/", 1)[0]
     if host and matches(host, name):
@@ -121,7 +121,7 @@ async def forget(account: Account, session, site: str) -> bool:
     return known
 
 
-def _result(r: mt.CallToolResult):
+def code_result(r: mt.CallToolResult):
     """The value a `browser_run_code_unsafe` call returned: '### Result' then a JSON value."""
     text = "\n".join(c.text for c in r.content if isinstance(c, mt.TextContent))
     if r.isError or "### Result" not in text:

@@ -16,6 +16,7 @@ import mcp.types as mt
 import pytest
 
 from aha_local.agent import Agent
+from aha_local.policy import chats
 from aha_local.tools import browser, browser_page, logins, signins
 from aha_local.tools.browser_pool import BrowserPool, BrowserSession
 
@@ -48,6 +49,8 @@ SUBMITTED = "await page.keyboard.press('Enter'); return 'ok'; }"
 
 
 class FakeContext:
+    open_chat = "Sam"  # the chat open on WhatsApp Web (policy/chats.py)
+
     def __init__(self) -> None:
         self.url = "about:blank"
         self.fields: dict[str, str] = {}
@@ -65,6 +68,8 @@ class FakeContext:
         """What Playwright MCP's browser_run_code_unsafe does with the harness's fixed code."""
         self.codes.append(code)
         echo = f"\n### Ran Playwright code\n```js\n{code}\n```"  # the real one echoes the code: typed text too
+        if code == chats.WHATSAPP:
+            return text_result("### Result\n" + json.dumps(json.dumps({"chat": self.open_chat})) + echo)
         if code == signins.COOKIE_DOMAINS:
             domains = sorted({c["domain"] for c in self.cookies})
             return text_result("### Result\n" + json.dumps(json.dumps(domains)) + echo)

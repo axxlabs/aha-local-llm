@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from . import addresses
+from .chats import is_chat_site
 
 Kind = Literal["read", "type", "open", "search", "send", "block", "other"]
 Outcome = Literal["run", "card", "block", "refuse"]
@@ -28,8 +29,8 @@ class Action:
     # None: no one in particular (a memory, a background task, a deletion, a message typed on a site)
     what: str = ""
     to: tuple[str, ...] | None = None
-    # A message typed on a site: the conversation it goes to, read from the page by the harness (the page's path, or
-    # the message box's own label), never from the model's words; what an "always" tick on it covers (SPEC §5.2)
+    # A message typed on a site: the chat it goes to, read from the page by the harness (policy/chats.py), never
+    # from the model's words; shown on its card
     chat: str = ""
 
 
@@ -54,8 +55,12 @@ def decide(a: Action, f: Facts) -> Verdict:
     """SPEC §5.2, rule by rule."""
     if a.kind == "block":
         return Verdict("block", a.reason or "this action is disabled")
+    if a.kind == "send" and a.site:  # a message typed on a site: a chat, user-driven (policy/chats.py)
+        return Verdict("card", "message")
     if a.kind == "send":
         return Verdict("card", "send")
+    if a.kind == "type" and is_chat_site(a.site):  # anything typed on a chat site, trusted or not
+        return Verdict("card", "chat")
     if a.kind == "search":  # web_search: the words go to the search engine, whatever site is trusted
         return Verdict("card", "search")
     if a.kind == "open":
@@ -92,6 +97,11 @@ TRUST_HINT = " Add {site} to your trusted sites in Settings and it won't ask aga
 WHY = {
     "send": "Sending a message to someone always asks first, on every site, trusted or not: nothing goes out in "
     "your name without your OK. You can change the text before it goes.",
+    "message": "A message typed into a chat always asks first, every time, on every site: nothing goes out in "
+    "your name without your OK, and no setting skips it. The card names the chat it goes to, as the page shows it. "
+    "You can change the text before it goes.",
+    "chat": "Everything typed on {site} is shown to you first, every time, even a search: on a chat site, what "
+    "Aha! types is yours to decide.",
     "type": "{site} isn't one of your trusted sites, so whatever Aha! types into it (a search, a form, an answer) "
     "is shown to you first." + TRUST_HINT,
     "search": "A web search sends its words to the search engine, so each search is shown to you first.",

@@ -14,15 +14,17 @@ arguments; approvals are answered only by the person (approvals.py).
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import replace
 from urllib.parse import urlsplit
 
 from .. import messages
+from ..policy import chats
 from ..policy.browser import TYPING, classify, form_for, is_message_box, offered, opens
 from ..policy.gate import explain
 from ..policy.urls import site_of
-from . import guard, human
+from . import guard, human, signins
 from .browser_page import (
     SECRET_FIELD,
     call_with_snapshot,
@@ -96,13 +98,20 @@ def check_targets(name: str, args: dict, ctx: ToolContext) -> ToolResult | None:
     return None
 
 
-def conversation(url: str, labels: list[str]) -> str:
-    """Which conversation a message typed on a site goes to, from the page alone (SPEC §5.2): the address's path when
-    it names one (a thread's page), else the message box's own label. Empty: the page doesn't say."""
-    path = urlsplit(url).path.rstrip("/")
-    if path:
-        return path
-    return next((" ".join(label.split()) for label in labels if label.strip()), "")
+NO_CHAT = (
+    "Not typed: no chat is open on {site}, or which one couldn't be read from the page. Open the person's chat "
+    "first (check its name at the top), then type the message."
+)
+
+
+async def open_chat(session, site: str) -> str:
+    """The chat open on a chat site, read by the site's own fixed code (policy/chats.py); "" if none or unreadable."""
+    try:
+        r = await session.call("browser_run_code_unsafe", {"code": chats.CHAT_SITES[site]})
+        return chats.clean(json.loads(signins.code_result(r)).get("chat"))
+    except Exception:
+        log.warning("couldn't read the open chat")
+        return ""
 
 
 def labels_of(name: str, args: dict, ctx: ToolContext) -> list[str]:
@@ -147,8 +156,10 @@ def make_handler(name: str):
                 log.warning("couldn't read the current site")
         labels = labels_of(name, args, ctx)
         action = classify(name, args, site, labels)
-        if action.kind == "send" and action.site:
-            action = replace(action, chat=conversation(ctx.task.page_url, labels))
+        if action.kind == "send" and chats.is_chat_site(action.site):  # the open chat, from the page (chats.py)
+            if not (chat := await open_chat(session, action.site)):
+                return ToolResult(NO_CHAT.format(site=action.site), error=True)
+            action = replace(action, chat=chat)
         verdict = guard.check(ctx, action, name)  # SPEC §5.2: the one place that decides
         if verdict.outcome == "block":
             return guard.blocked(verdict.why)
@@ -169,7 +180,7 @@ def make_handler(name: str):
             log.warning("couldn't take a screenshot for the approval")
             shot = None
         signer = ctx.account.label if action.kind == "send" else ""
-        form = form_for(name, labelled(name, args, ctx), action.site, signer)
+        form = form_for(name, labelled(name, args, ctx), action.site, signer, action.chat)
         why = explain(verdict.why, action.site)
         allow = guard.allow_key(action)
         decision, refused = await guard.ask(ctx, "action", form.title, form.fields, shot, why=why, allow=allow)

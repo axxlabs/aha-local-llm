@@ -218,3 +218,20 @@ def test_typing_into_a_message_box_is_a_send_on_any_site():
     for labels in (["Search messages"], ["Pesquisar ou começar uma nova conversa"], ["Postcode"], [""], []):
         assert not sends_message("browser_type", labels), labels
     assert not sends_message("browser_press_key", ["Write a message…"])  # a key alone is typing, not a message
+
+
+def test_chats_are_user_driven():
+    """SPEC §5.2 "Chats are user-driven": a message on any site, and anything typed on a chat site, is a card every
+    time, trusted or not, with no "always"; the open chat's name is cleaned to one short printable line."""
+    from aha_local.policy import chats
+    from aha_local.policy.gate import Action, Facts, decide
+    from aha_local.tools import guard
+
+    trusted = Facts(trusted={"whatsapp.com", "linkedin.com"})
+    for action in (Action("send", "linkedin.com"), Action("send", "whatsapp.com"), Action("type", "whatsapp.com")):
+        assert decide(action, trusted).outcome == "card" and guard.allow_key(action) == ""
+    assert decide(Action("type", "linkedin.com"), trusted).outcome == "run"  # not a chat site: trust still counts
+    assert guard.allow_key(Action("send", what="email", to=("sam@example.com",))) == "email:sam@example.com"
+    assert (
+        chats.clean("  Sam‮ \n Smith ") == "Sam Smith" and chats.clean(None) == "" and len(chats.clean("x" * 500)) == 80
+    )

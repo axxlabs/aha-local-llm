@@ -12,7 +12,9 @@ def test_every_card_says_why_in_code():
 
     plain = Facts()
     cases = [
-        (Action("send", "whatsapp.com"), plain, "send"),
+        (Action("send", "linkedin.com"), plain, "message"),
+        (Action("send", what="email"), plain, "send"),
+        (Action("type", "whatsapp.com"), Facts(trusted={"whatsapp.com"}), "chat"),
         (Action("type", "waitrose.com"), plain, "type"),
         (Action("search", "google.com", "https://www.google.com/search?q=x"), plain, "search"),
         (Action("open", "x.com", "https://x.com/"), plain, "open"),

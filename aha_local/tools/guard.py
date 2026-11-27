@@ -20,6 +20,7 @@ from ..approvals import Decision, Field
 from ..items import Image
 from ..policy import addresses
 from ..policy.browser import open_action
+from ..policy.chats import user_driven
 from ..policy.gate import Action, Facts, Verdict, decide, explain
 from ..policy.urls import check_url
 from . import trusted
@@ -40,9 +41,9 @@ def facts(ctx: ToolContext) -> Facts:
 
 def allow_key(action: Action) -> str:
     """What an "always" tick on this action's card covers: the same kind of action, to the same place or people."""
+    if user_driven(action.kind, action.site):  # a chat: no "always" (policy/chats.py)
+        return ""
     if action.kind == "send":
-        if action.site:  # a message typed on a site: to that conversation only, when the page says which
-            return f"message:{action.site}:{action.chat}" if action.chat else f"message:{action.site}"
         return f"{action.what}:{','.join(sorted(action.to))}" if action.to else action.what
     if action.kind == "search":
         return "search"
@@ -70,9 +71,6 @@ ALLOW_WORDS = {
 def allow_label(key: str) -> str:
     """The person's words for an "always" (the Tasks panel's approved permissions)."""
     kind, _, x = key.partition(":")
-    if kind == "message" and ":" in x:
-        site, _, chat = x.partition(":")
-        return f"Send messages on {site} ({chat})"
     words = ALLOW_WORDS.get(kind, kind.replace("_", " ").capitalize())
     return words.replace("{x}", x.replace(",", ", ")) if x else words.replace(" to {x}", "").replace(" on {x}", "")
 
@@ -81,7 +79,7 @@ def check(ctx: ToolContext, action: Action, tool: str) -> Verdict:
     """The gate's verdict, then the task's "always": a card the person ticked runs from then on. A run because of
     trust or an "always" is audited (the tool and what it covers, never the values)."""
     verdict = decide(action, facts(ctx))
-    if verdict.outcome == "card" and allow_key(action) in ctx.task.allowed:
+    if verdict.outcome == "card" and (key := allow_key(action)) and key in ctx.task.allowed:
         verdict = Verdict("run", "allowed")
     if verdict.why in ("trusted", "allowed") and ctx.account is not None:
         covered = allow_key(action) if verdict.why == "allowed" else action.site or action.what or action.kind
