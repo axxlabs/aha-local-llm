@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from . import addresses
-from .grants import Grant
 
 Kind = Literal["read", "type", "open", "search", "send", "block", "other"]
 Outcome = Literal["run", "card", "block", "refuse"]
@@ -25,8 +24,8 @@ class Action:
     site: str = ""  # the destination's registrable domain, from the browser's address or the URL
     url: str = ""  # for open
     reason: str = ""  # why it's blocked
-    # A send's kind (email, draft, calendar…) and who receives it, when that can be allowed up front (grants);
-    # None: nothing a grant covers (a memory, a background task, a deletion, a message typed on a site)
+    # A send's kind (email, draft, calendar…) and who receives it (an "always" tick is for that kind and those people);
+    # None: no one in particular (a memory, a background task, a deletion, a message typed on a site)
     what: str = ""
     to: tuple[str, ...] | None = None
 
@@ -38,13 +37,12 @@ class Facts:
     trusted: set[str] = field(default_factory=set)  # the person's trusted sites (§5.7)
     shown: set[tuple] = field(default_factory=set)  # addresses shown to the task (addresses.key)
     opened: set[str] = field(default_factory=set)  # sites opened in the task
-    granted: Grant = field(default_factory=Grant)  # allowed up front by the person, for this topic (grants)
 
 
 @dataclass(frozen=True)
 class Verdict:
     outcome: Outcome
-    # run: "trusted" or "granted" (audited); card: which rule asked (WHY, shown on the card's (i)); block: the reason;
+    # run: "trusted" (audited); card: which rule asked (WHY, shown on the card's (i)); block: the reason;
     # refuse: an address it may not open, said to the model ("made_up", "search")
     why: str = ""
 
@@ -54,9 +52,9 @@ def decide(a: Action, f: Facts) -> Verdict:
     if a.kind == "block":
         return Verdict("block", a.reason or "this action is disabled")
     if a.kind == "send":
-        return Verdict("run", "granted") if f.granted.covers(a.what, a.to) else Verdict("card", "send")
+        return Verdict("card", "send")
     if a.kind == "search":  # web_search: the words go to the search engine, whatever site is trusted
-        return Verdict("run", "granted") if f.granted.search else Verdict("card", "search")
+        return Verdict("card", "search")
     if a.kind == "open":
         return opening(a, f)
     if a.kind == "type" and a.site in f.trusted and a.site:
@@ -64,7 +62,7 @@ def decide(a: Action, f: Facts) -> Verdict:
     if a.kind == "read":
         return Verdict("run")
     if a.kind == "type":
-        return Verdict("run", "granted") if f.granted.types(a.site) else Verdict("card", "type")
+        return Verdict("card", "type")
     return Verdict("card", "other")  # not classified yet
 
 
@@ -82,7 +80,7 @@ def opening(a: Action, f: Facts) -> Verdict:
         return Verdict("run", "trusted")
     if a.site in f.opened:
         return Verdict("run")
-    return Verdict("run", "granted") if f.granted.opens(a.site) else Verdict("card", "open")
+    return Verdict("card", "open")
 
 
 # Why a card is shown: the rule that asked, for the person (the (i) on the card, SPEC §7.4). Code decides cards

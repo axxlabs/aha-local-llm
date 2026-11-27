@@ -18,7 +18,7 @@ import httpx
 
 from .. import dates, messages
 from ..approvals import Field
-from ..policy import grants
+from ..policy.emails import emails_in
 from . import google, guard
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
@@ -286,7 +286,7 @@ async def calendar_add(args: dict, ctx: ToolContext) -> ToolResult:
     )
     fields += [Field("Calendar", cal.name, "info"), day_field(fields[1].value)]
     invite = " and invite the guests" if fields[5].value else ""
-    guests = grants.emails_in(fields[5].value)
+    guests = emails_in(fields[5].value)
     decision, refused = await guard.send(ctx, "calendar", f"Add this to {cal.label}{invite}?", fields, to=guests)
     if refused:
         return refused
@@ -359,7 +359,7 @@ async def calendar_update(args: dict, ctx: ToolContext) -> ToolResult:
     )
     fields += [Field("Calendar", cal.name, "info"), day_field(fields[1].value)]
     title = f"Change “{event.get('summary', 'this event')}”?"
-    guests = grants.emails_in(fields[5].value)
+    guests = emails_in(fields[5].value)
     decision, refused = await guard.send(ctx, "calendar", title, fields, to=guests, what="calendar_change")
     if refused:
         return refused

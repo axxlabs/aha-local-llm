@@ -83,6 +83,7 @@ def test_old_shapes_are_brought_to_todays(tmp_path):
         "task_fields",
         "leftover_files",
         "task_done_when",
+        "task_no_grant",
     ]
     assert version(tmp_path) == LATEST
     conv = acct.load_context()
@@ -92,7 +93,7 @@ def test_old_shapes_are_brought_to_todays(tmp_path):
     [task] = v.read_json(acct.dir / "tasks.json", None)
     assert "manual" not in task and task["last_how"] == "ended_early"
     assert task["done_when"] == "never"  # a task from before: it went on until cancelled
-    assert task["grant"] == {"type": ["royalmail.com"], "calendar_add": True, "calendar_change": True}
+    assert "grant" not in task  # no up-front permissions any more
     for gone in (acct.dir / "sign-ins.json", acct.dir / "schedule.json", tmp_path / "keys" / "search-secret"):
         assert not gone.exists(), gone
     assert upgrade(v) == []  # once

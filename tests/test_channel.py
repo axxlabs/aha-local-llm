@@ -43,7 +43,7 @@ class FakeAgent:
         self.said.append(text)
         self.photos.append(image)
 
-    async def approval_reply(self, account, approval_id, decision, values=None, note=""):
+    async def approval_reply(self, account, approval_id, decision, values=None, note="", always=False):
         self.replies.append((approval_id, decision, values, note))
 
     async def stop(self, account, quiet=False):

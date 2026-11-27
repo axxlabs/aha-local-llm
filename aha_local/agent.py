@@ -22,7 +22,6 @@ from .config import Config
 from .items import Image
 from .llm import Model, ModelUnavailable
 from .policy import addresses
-from .policy.grants import Grant
 from .tools import background, signins
 from .tools.registry import Registry, TaskState, ToolContext, redacted
 
@@ -136,9 +135,9 @@ class Job:
         """The task's note for the chat, or None: nothing is sent and the turn isn't kept."""
         return background.finish(account, self.id, outcome, message, stopped)
 
-    def grant(self, account: Account) -> Grant:
-        """What the person allowed up front when the task was started: its checks keep it (SPEC §3.4)."""
-        return background.grant_of(account, self.id)
+    def allowed(self, account: Account) -> set[str]:
+        """What the person ticked "always" on in this task's checks: every check keeps it (SPEC §5.3)."""
+        return background.allowed_of(account, self.id)
 
     def links(self, account: Account) -> list[str]:
         """The addresses its instructions may open: what the request that started it was shown, or the person wrote
@@ -325,12 +324,18 @@ class Agent:
         live.task = asyncio.create_task(self.run(account, text))
 
     async def approval_reply(
-        self, account: Account, approval_id: str, decision: str, values: list | None = None, note: str = ""
+        self,
+        account: Account,
+        approval_id: str,
+        decision: str,
+        values: list | None = None,
+        note: str = "",
+        always: bool = False,
     ) -> None:
         account.transcript({"kind": "approval_reply", "id": approval_id, "decision": decision})
         self._input()
         await self._yield_to_people(answering=account.address)
-        await self.approvals.answer(account, approval_id, decision, values, note)
+        await self.approvals.answer(account, approval_id, decision, values, note, always)
 
     async def stop(self, account: Account, quiet: bool = False) -> None:
         """Cancel the running task. `quiet`: say nothing, and wait for it to wind down (Clear history, §3.8.1)."""
@@ -462,7 +467,7 @@ class Agent:
                     account,
                     text,
                     quiet,
-                    job.grant(account) if job else None,
+                    job,
                     job.links(account) if job else None,
                     record,
                     report if job else None,
@@ -569,15 +574,15 @@ class Agent:
         account: Account,
         text: str,
         quiet: bool = False,
-        grant: Grant | None = None,
+        job: Job | None = None,
         links: list[str] | None = None,
         record: list[str] | None = None,
         report: dict | None = None,
     ) -> tuple[str, str]:
         """Returns the answer and everything the person said during the task.
         `quiet` (a background check): no tool lines, and the person's messages wait for a task of their own.
-        `grant`: a background task's own permissions (SPEC §5.2 "Allowed up front"); a request the person is
-        watching has none: each action asks as it happens. `record`: filled with what it changes, one line each
+        `job`: the background task whose check this is: what its cards were allowed "always" carries over (SPEC
+        §5.3). `record`: filled with what it changes, one line each
         (SPEC §4 "What a request did"), kept by the caller even if it stops. `report`: a background check's, filled
         by its check_result call (SPEC §3.4)."""
 
@@ -602,7 +607,8 @@ class Agent:
         approvals = _Pausing(self.approvals, self.llm, account.address)  # a card frees the model meanwhile
         topic = folding.segment_start(account.recent_items())  # the topic going on (§4)
         state = TaskState(
-            grant=grant if grant is not None else Grant(),
+            allowed=job.allowed(account) if job else set(),
+            background=job.id if job else "",
             record=record if record is not None else [],
             report=report,
         )
@@ -712,8 +718,11 @@ class Agent:
                         **({"did": receipt(ctx.task.record[before:])} if len(ctx.task.record) > before else {}),
                     }
                 )
-                if not quiet:  # each thing it did, in the chat where it happened (SPEC §7.4 "What Aha! did")
-                    for line in receipt(ctx.task.record[before:]):
+                if not quiet:  # every call, in the chat where it happened (SPEC §7.4 "What Aha! did")
+                    lines = receipt(ctx.task.record[before:]) or [
+                        messages.call_line(call.name, _args(call.arguments), result.error)
+                    ]
+                    for line in lines:
                         await self.out.act(account, line)
                 task.append(
                     {
@@ -760,6 +769,14 @@ def receipt(record: list[str] | None) -> list[str]:
         text = line.split(": ", 1)[-1].strip()
         out.append(text if len(text) <= MAX_RECEIPT_LINE else text[: MAX_RECEIPT_LINE - 1] + "…")
     return out
+
+
+def _args(arguments: str) -> dict:
+    try:
+        parsed = json.loads(arguments or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _short(arguments: str) -> str:

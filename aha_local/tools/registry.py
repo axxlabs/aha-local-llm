@@ -18,7 +18,6 @@ from ..accounts import Account
 from ..approvals import MASK, Approvals
 from ..config import Config
 from ..items import Image
-from ..policy.grants import Grant
 
 log = logging.getLogger("aha.tools")
 
@@ -84,9 +83,10 @@ class TaskState:
     # exactly isn't the model writing an address (SPEC §5.2 rule 7).
     seen_urls: set[tuple] = field(default_factory=set)
     banners_tried: set[tuple[str, str]] = field(default_factory=set)  # cookie banners closed: (page, button)
-    # What a background task's checks may do without asking (SPEC §5.2 "Allowed up front"): ticked by the person
-    # on its card, or in the Tasks panel. A request the person is watching has none.
-    grant: Grant = field(default_factory=Grant)
+    # What the person ticked "Always allow for this task" on (tools/guard.allow_key): no card for it again in this
+    # run; for a background task's check (`background`: its id) the task keeps it, for every check (SPEC §5.3).
+    allowed: set[str] = field(default_factory=set)
+    background: str = ""
     # What the task changed, one line per action that worked, set by the registry from each result's `did`: kept
     # with the request's answer, so a later request knows, even when this one stopped before saying so (SPEC §4).
     record: list[str] = field(default_factory=list)

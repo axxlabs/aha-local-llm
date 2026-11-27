@@ -15,7 +15,8 @@
       "id",
       "decision",
       "values?",
-      "note?"
+      "note?",
+      "always?"
     ],
     "stop": [],
     "cut": [],
@@ -50,7 +51,8 @@
       "done_when?",
       "every?",
       "at?",
-      "next?"
+      "next?",
+      "allowed?"
     ],
     "trace_request": [
       "seq"
@@ -123,7 +125,8 @@
       "fields",
       "buttons",
       "image?",
-      "why?"
+      "why?",
+      "always?"
     ],
     "approval_state": [
       "seq",

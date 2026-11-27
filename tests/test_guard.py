@@ -36,7 +36,7 @@ class Approvals:
     def __init__(self, answer: Decision) -> None:
         self.answer, self.asked = answer, []
 
-    async def ask(self, account, kind, title, fields, image=None, why=""):
+    async def ask(self, account, kind, title, fields, image=None, why="", always=False):
         self.asked.append((kind, title, [f.value for f in fields], why))
         return self.answer
 
@@ -67,3 +67,25 @@ async def test_a_declined_check_says_the_person_gave_up():
     c = ctx(Decision(False, note="later", reason="declined"))
     _, refused = await guard.ask(c, "check", "Show x.com you're human", [], declined="They gave up.")
     assert refused.text == "They gave up. They said: “later”. Follow that."
+
+
+async def test_always_allow_covers_the_same_action_for_the_rest_of_the_request():
+    """SPEC §5.3: every action card offers "Always allow for this task"; ticked, the same action (searching, typing
+    on that site, an email to those people) runs without a card again, and nothing else does."""
+    from aha_local.policy.gate import Action
+
+    c = ctx(Decision(True, ["x"], always=True))
+    _, refused = await guard.send(
+        c, "email", "Send this email?", [Field("To", "sam@example.com")], to=["sam@example.com"]
+    )
+    assert refused is None and len(c.approvals.asked) == 1 and c.task.allowed == {"email:sam@example.com"}
+    _, refused = await guard.send(
+        c, "email", "Send this email?", [Field("To", "sam@example.com")], to=["sam@example.com"]
+    )
+    assert refused is None and len(c.approvals.asked) == 1  # the same: no card
+    await guard.send(c, "email", "Send this email?", [Field("To", "ana@example.com")], to=["ana@example.com"])
+    assert len(c.approvals.asked) == 2  # someone else: its own card
+    assert guard.allow_key(Action("type", "waitrose.com")) == "type:waitrose.com"
+    assert guard.allow_key(Action("send", "whatsapp.com")) == "message:whatsapp.com"
+    assert guard.allow_label("message:whatsapp.com") == "Send messages on whatsapp.com"
+    assert guard.allow_label("search") == "Search Google"

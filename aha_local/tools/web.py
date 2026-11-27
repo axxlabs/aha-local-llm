@@ -52,9 +52,9 @@ async def web_search(args: dict, ctx: ToolContext) -> ToolResult:
     if verdict.outcome == "block":
         return guard.blocked(verdict.why)
     if verdict.outcome == "card":  # SPEC §5.2 rule 6: the words that would go out, shown first
-        decision, refused = await guard.ask(
-            ctx, "action", "Search Google for this?", [Field("Search", query)], why=explain(verdict.why)
-        )
+        fields = [Field("Search", query)]
+        why = explain(verdict.why)
+        decision, refused = await guard.ask(ctx, "action", "Search Google for this?", fields, why=why, allow="search")
         if refused:
             return refused
         query = " ".join(decision.values[0].split()) or query

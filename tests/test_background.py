@@ -251,7 +251,6 @@ async def test_the_panel_lists_tasks_and_cancel_is_the_persons(runner, agent, ac
         "last_how",
         "allowed",
         "card",
-        "grant",
     }
     assert actions.cancel_background(fe, "def456", via="settings")
     assert not actions.cancel_background(fe, "def456", via="settings")
@@ -502,25 +501,51 @@ async def test_a_task_never_keeps_an_address_the_model_made_up(runner, agent, ll
     assert entry["links"] == [sent] and background.links_of(fe, entry["id"]) == [sent]
 
 
-async def test_the_person_edits_what_a_task_is_allowed(accounts):
+async def test_the_person_takes_back_an_always_and_their_addresses_are_theirs(accounts):
     fe = person(accounts)
-    background.save(fe, [task(grant={"open": ["royalmail.com"]})])
-    assert background.listing(fe)[0]["grant"]["open"] == ["royalmail.com"]
-    grant = {"open": [], "type": ["https://www.FedEx.com/x"], "email": ["Sam <sam@example.com>"], "drafts": True}
-    assert actions.edit_background(fe, "abc123", {"grant": grant}, via="settings") == ""
-    g = background.grant_of(fe, "abc123")
-    assert g.type == {"fedex.com"} and g.open == set() and g.email == {"sam@example.com"} and g.drafts
-    assert (
-        background.listing(fe)[0]["allowed"][0] == "Type and fill in forms on fedex.com (searches, sign-ups, bookings)"
-    )
-    assert actions.edit_background(fe, "abc123", {"grant": {"type": ["not a site"]}}, via="settings")
-    assert actions.edit_background(fe, "abc123", {"grant": {"email": ["a@b.com c@d.com"]}}, via="settings")
-    assert background.grant_of(fe, "abc123").type == {"fedex.com"}  # a bad edit changes nothing
+    background.save(fe, [task(allowed=["search", "type:fedex.com"])])
+    assert background.listing(fe)[0]["allowed"] == [
+        {"key": "search", "label": "Search Google"},
+        {"key": "type:fedex.com", "label": "Type and fill in forms on fedex.com"},
+    ]
+    assert actions.edit_background(fe, "abc123", {"allowed": ["type:fedex.com", "made:up"]}, via="settings") == ""
+    assert background.allowed_of(fe, "abc123") == {"type:fedex.com"}  # only taken away, never added here
     # The person's own words: an address they write into what it checks is theirs to open.
     assert (
         actions.edit_background(fe, "abc123", {"prompt": "Read https://parcel.example/t/1 each time."}, via="x") == ""
     )
     assert background.links_of(fe, "abc123") == ["https://parcel.example/t/1"]
+
+
+async def test_always_allow_on_a_checks_card_is_kept_for_its_next_checks(runner, agent, llm, chat, accounts):
+    """SPEC §5.3: ticked in a background task's check, the same card isn't asked again in its later checks, and
+    the Tasks panel lists it."""
+    fe = person(accounts)
+    background.save(fe, [task()])
+    idle(agent)
+    llm.call("memory_add", text="Likes tea")
+    llm.call("check_result", outcome="waiting", message="nothing yet")
+    await runner.tick()
+    card = await chat.next()
+    while card.card is None:
+        card = await chat.next()
+    assert card.card["always"] is True
+    await agent.approval_reply(fe, card.card["id"], "approve", always=True)
+    await settle(agent)
+    assert background.allowed_of(fe, "abc123") == {"memory"}
+    assert background.listing(fe)[0]["allowed"] == [{"key": "memory", "label": "Save memories"}]
+
+    e = background.load(fe)[0]
+    e["next"] = time.time() - 1
+    background.save(fe, [e])
+    idle(agent)
+    n = len([m for m in chat.sent if m.card])
+    llm.call("memory_add", text="Likes coffee")
+    llm.call("check_result", outcome="waiting", message="nothing yet")
+    await runner.tick()
+    await settle(agent)
+    assert len([m for m in chat.sent if m.card]) == n  # no card the second time
+    assert [m["text"] for m in fe.load_memory()] == ["Likes tea", "Likes coffee"]
 
 
 async def test_a_page_that_didnt_load_waits_for_the_next_check():

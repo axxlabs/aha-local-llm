@@ -461,7 +461,8 @@ class Channel:
         if decision not in ("approve", "decline") or not approval_id or self.agent is None:
             return
         note = clean_text(r.msg.get("note"), 2000) or ""
-        await self.agent.approval_reply(r.account, approval_id, decision, r.msg.get("values"), note)
+        always = r.msg.get("always") is True  # "Always allow for this task" ticked (SPEC §5.3)
+        await self.agent.approval_reply(r.account, approval_id, decision, r.msg.get("values"), note, always)
 
     async def _stats_watch(self, r: Request) -> None:
         """The app is on screen (`on`) or not: live diagnostics go only to a device showing it (SPEC §7.4)."""

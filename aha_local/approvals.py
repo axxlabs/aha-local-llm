@@ -43,6 +43,7 @@ class Decision:
     note: str = ""
     reason: str = ""  # declined | stopped | message (the person wrote instead)
     card: str = ""  # the card it answered (a background task keeps it: the topic that started it, SPEC §7.4)
+    always: bool = False  # "Always allow for this task" was ticked (SPEC §5.3)
 
 
 @dataclass
@@ -55,6 +56,7 @@ class Pending:
     image: Image | None
     future: asyncio.Future
     why: str = ""  # why this card is shown (the (i)); "" → the kind's own reason (KINDS)
+    always: bool = False  # it offers "Always allow for this task" (an action's card; not one the person fills in)
 
 
 class Out(Protocol):
@@ -162,6 +164,8 @@ def card(p: Pending) -> dict:
         out["image"] = p.image.to_dict()
     if why := p.why or kind.why:
         out["why"] = why
+    if p.always:  # the tick's words are the app's: "Always allow for this task" (SPEC §5.3)
+        out["always"] = True
     return out
 
 
@@ -204,11 +208,12 @@ class Approvals:
         fields: list[Field],
         image: Image | None = None,
         why: str = "",
+        always: bool = False,
     ) -> Decision:
         p = Pending(
             secrets.token_hex(4), account, kind, title, fields, image, asyncio.get_running_loop().create_future()
         )
-        p.why = why
+        p.why, p.always = why, always and not KINDS.get(kind, KINDS["action"]).open_inputs
         self._pending[account.address] = p
         account.audit(
             {"approval": p.id, "kind": kind, "title": title, "asked": masked(fields, [f.value for f in fields])}
@@ -233,12 +238,19 @@ class Approvals:
                 "decision": "approved" if decision.approved else decision.reason,
                 "final": masked(fields, decision.values),
                 "note": decision.note,
+                **({"always": True} if decision.always else {}),
             }
         )
         return decision
 
     async def answer(
-        self, account: Account, approval_id: str, decision: str, values: list | None = None, note: str = ""
+        self,
+        account: Account,
+        approval_id: str,
+        decision: str,
+        values: list | None = None,
+        note: str = "",
+        always: bool = False,
     ) -> None:
         """A tap on a card: approve (with the values as edited in the card) or decline."""
         p = self._pending.get(account.address)
@@ -250,7 +262,7 @@ class Approvals:
             if final is None:
                 await self.out.text(account, messages.EDIT_UNCLEAR)
                 return
-            self._resolve(p, Decision(True, final))
+            self._resolve(p, Decision(True, final, always=always and p.always))
         elif decision == "decline":
             self._resolve(p, Decision(False, note=str(note)[:MAX_VALUE].strip(), reason="declined"))
 

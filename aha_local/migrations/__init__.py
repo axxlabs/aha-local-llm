@@ -31,6 +31,7 @@ from . import (
     m0006_leftover_files,
     m0007_task_done_when,
     m0008_task_no_until,
+    m0009_task_no_grant,
 )
 
 if TYPE_CHECKING:
@@ -65,6 +66,7 @@ MIGRATIONS = tuple(
         m0006_leftover_files,
         m0007_task_done_when,
         m0008_task_no_until,
+        m0009_task_no_grant,
     )
 )
 LATEST = MIGRATIONS[-1].number

@@ -26,9 +26,8 @@ from zoneinfo import ZoneInfo
 from .. import dates
 from ..accounts import Account
 from ..approvals import Field
-from ..policy import addresses, grants
-from ..policy.grants import Grant, emails_in
-from . import guard, trusted
+from ..policy import addresses
+from . import guard
 from .registry import Registry, Tool, ToolContext, ToolResult, params, string
 
 log = logging.getLogger("aha.background")
@@ -43,8 +42,6 @@ MAX_PROMPT = 2000
 MAX_LAST = 4000  # the previous check's whole answer, given to the next one
 IDLE_AFTER = 5 * 60  # seconds without input from anyone before a check runs
 CHECK_EVERY = 30.0
-SITES = {"type": "array", "items": {"type": "string"}}
-MAX_ALLOWED = 20  # sites, and people, each, a new task may ask for
 CHECKS = "Checks (every N minutes, or times of day like 08:00, 18:00)"
 MAX_AT = 6
 DONE_WHEN = "Done when (or never)"
@@ -145,7 +142,7 @@ class Entry(TypedDict, total=False):
     last_at: float
     card: str  # the approval card that started it (the app's fold-line icons)
     links: list[str]  # the addresses its checks may open (SPEC §5.2 "Made-up addresses")
-    grant: dict  # what its checks may do without asking (grants.Grant.to_dict)
+    allowed: list[str]  # what the person ticked "Always allow for this task" on in its checks (guard.allow_key)
     now: bool  # Run now: an extra check as soon as the model is free; the planned next check keeps its time
 
 
@@ -178,44 +175,6 @@ def _urls(text: str) -> list[str]:
     return list(dict.fromkeys(u.rstrip(".,;:!?") for u in addresses.URL_IN_TEXT.findall(text or "")))
 
 
-def _sites(values: object) -> tuple[list[str], list[str]]:
-    """(sites, what wasn't a site)."""
-    good, bad = [], []
-    for v in values if isinstance(values, list) else []:
-        site = trusted.valid(str(v))
-        (good if site else bad).append(site or str(v))
-    return list(dict.fromkeys(good)), bad
-
-
-def _people(values: object) -> tuple[list[str], list[str]]:
-    good, bad = [], []
-    for v in values if isinstance(values, list) else []:
-        found = emails_in(str(v))
-        (good if len(found) == 1 else bad).append(found[0] if len(found) == 1 else str(v))
-    return list(dict.fromkeys(good)), bad
-
-
-def asked_items(args: dict, trusted_sites: set[str]) -> tuple[list[tuple[str, Grant]], list[str]]:
-    """What a new task's checks may do without asking, as the model asked it: one tick each on the card, in the
-    person's words, and what wasn't a site or one address. Trusted sites need no tick; typing on a site includes
-    opening it, so a site asked for both is one tick."""
-    opens, bad_opens = _sites(args.get("open"))
-    types, bad_types = _sites(args.get("type"))
-    people, bad_people = _people(args.get("email"))
-    types = [t for t in types if t not in trusted_sites][:MAX_ALLOWED]
-    opens = [o for o in opens if o not in trusted_sites and o not in types][:MAX_ALLOWED]
-    yes = lambda key: args.get(key) is True  # noqa: E731
-    g = grants
-    items = [(g.type_label(t), Grant(type={t})) for t in types]
-    items += [(g.open_label(o), Grant(open={o})) for o in opens]
-    items += [(g.SEARCH_LABEL, Grant(search=True))] if yes("search") else []
-    items += [(g.email_label(p), Grant(email={p})) for p in people[:MAX_ALLOWED]]
-    items += [(g.DRAFTS_LABEL, Grant(drafts=True))] if yes("drafts") else []
-    items += [(g.CALENDAR_ADD_LABEL, Grant(calendar_add=True))] if yes("calendar_add") else []
-    items += [(g.CALENDAR_CHANGE_LABEL, Grant(calendar_change=True))] if yes("calendar_change") else []
-    return items, [*bad_opens, *bad_types, *bad_people]
-
-
 def links_of(account: Account, task_id: str) -> list[str]:
     """The addresses a task's checks may open as given (SPEC §5.2 "Made-up addresses"): what the request that
     started it was shown, or the person wrote in it. A task kept before tasks kept them has none."""
@@ -223,31 +182,15 @@ def links_of(account: Account, task_id: str) -> list[str]:
     return [u for u in (entry or {}).get("links", []) if isinstance(u, str)]
 
 
-def clean_grant(data: object) -> Grant | None:
-    """A grant the person edited in the Tasks panel (SPEC §7.4): sites by name, one address each; None when any
-    isn't one."""
-    if not isinstance(data, dict):
-        return None
-    g = Grant.from_dict(data)
-    sites = {s: trusted.valid(s) for s in g.open | g.type}
-    people = {p: emails_in(p) for p in g.email}
-    if not all(sites.values()) or any(len(v) != 1 for v in people.values()):
-        return None
-    return Grant(
-        {sites[s] for s in g.open},
-        {sites[s] for s in g.type},
-        g.search,
-        {people[p][0] for p in g.email},
-        g.drafts,
-        g.calendar_add,
-        g.calendar_change,
-    )
-
-
-def grant_of(account: Account, task_id: str) -> Grant:
-    """What the person allowed up front when the task was started (SPEC §3.4): its checks run with it."""
+def allowed_of(account: Account, task_id: str) -> set[str]:
+    """What the person ticked "always" on in this task's checks (SPEC §5.3): every check runs with it."""
     entry = next((e for e in load(account) if e.get("id") == task_id), None)
-    return Grant.from_dict(entry.get("grant") if entry else None)
+    return {k for k in (entry or {}).get("allowed", []) if isinstance(k, str)}
+
+
+def allow(account: Account, task_id: str, key: str) -> None:
+    """A card in one of its checks was ticked "always": its later checks don't ask for it (SPEC §5.3)."""
+    update(account, task_id, lambda e: {**e, "allowed": sorted({*e.get("allowed", []), key})})
 
 
 def update(account: Account, task_id: str, fn: Callable[[Entry], Entry | None]) -> Entry | None:
@@ -409,15 +352,6 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
             "again.",
             error=True,
         )
-    # What its checks may do without asking (SPEC §3.4 "Background tasks", §5.2 "Allowed up front"): the model
-    # says, the person ticks on the card. A request the person watches asks for each action as it happens.
-    items, bad = asked_items(args, set(trusted.sites(ctx.account)))
-    if bad:
-        return ToolResult(
-            f"Not created: {', '.join(bad)} isn't a site's name (like fedex.com) or one email address. Fix it and "
-            "call task_create again.",
-            error=True,
-        )
     # It checks later on its own, without the person watching, so they approve it (SPEC §3.4).
     fields = [
         Field("Waiting for", title),
@@ -426,7 +360,6 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
         # How often, and nothing else: no start or end date (2026-11-26); what ends it is `done_when`.
         Field(CHECKS, ", ".join(times) if times else str(minutes)),
     ]
-    fields += [Field(label, "true", "bool") for label, _ in items]
     d, refused = await guard.send(ctx, "task", "Start this background task?", fields)
     if refused:
         return refused
@@ -438,10 +371,6 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
             f"The edited details weren't valid ({why}), so nothing was started. Ask the person.", error=True
         )
     title, prompt, minutes, times, ends = got
-    grant = Grant()
-    for (_, g), ticked in zip(items, v[4:], strict=False):
-        if ticked == "true":
-            grant.add(g)
     entries = load(ctx.account)
     if len(entries) >= MAX_TASKS:
         return ToolResult(f"Not created: there are already {MAX_TASKS} background tasks.", error=True)
@@ -467,7 +396,6 @@ async def task_create(args: dict, ctx: ToolContext) -> ToolResult:
             )
             else {}
         ),
-        **({"grant": grant.to_dict()} if grant else {}),
     }
     entry["next"] = next_check(entry, now)
     save(ctx.account, [*entries, entry])
@@ -509,11 +437,8 @@ def register(reg: Registry) -> None:
             "the user cancels it. Each check runs `prompt` as a new request, with only your memory: write it so it "
             "makes sense on its own later, with what to look at (the site by its name, like fedex.com, and how to "
             "find the page there; names, tracking codes) and how. Put an address in it only if you opened it or "
-            "the user sent it in this request: never one you put together. Say what its checks will need to do "
-            "without asking (`type` for typing the tracking number on fedex.com, `email` for who it writes to…): "
-            "the user ticks each before it starts; anything not ticked waits for them when it happens. Don't say "
-            "in it what to answer: each check is told how to answer. Checks run only while nobody is using Aha!, "
-            "so timing isn't exact.",
+            "the user sent it in this request: never one you put together. Don't say in it what to answer: each "
+            "check is told how to answer. Checks run only while nobody is using Aha!, so timing isn't exact.",
             params(
                 ["title", "prompt", "done_when"],
                 title=string("What you're waiting for, short, e.g. 'Reply from Sam about Saturday'"),
@@ -534,16 +459,6 @@ def register(reg: Registry) -> None:
                     "description": "Instead of every_minutes: local times of day it checks, every day, HH:MM, "
                     "e.g. ['08:00'] for every morning, ['18:00'] for every evening, ['08:00', '18:00'] for both",
                 },
-                type={**SITES, "description": "Sites its checks type on (a search box, a form), like fedex.com"},
-                open={
-                    **SITES,
-                    "description": "Sites whose pages its checks open and only read",
-                },
-                search={"type": "boolean", "description": "Its checks search the web"},
-                email={**SITES, "description": "Email addresses of the people its checks send email to or invite"},
-                drafts={"type": "boolean", "description": "Its checks save email drafts (nothing is sent)"},
-                calendar_add={"type": "boolean", "description": "Its checks add new events to the calendar"},
-                calendar_change={"type": "boolean", "description": "Its checks change events already there"},
             ),
             task_create,
         )
@@ -642,7 +557,7 @@ def interrupted(account: Account, task_id: str) -> None:
     )
 
 
-EDITABLE = ("title", "prompt", "done_when", "every", "at", "next", "grant")  # what the panel sends
+EDITABLE = ("title", "prompt", "done_when", "every", "at", "next", "allowed")  # what the panel sends
 
 
 def edit(account: Account, task_id: str, changes: dict) -> str:
@@ -665,11 +580,9 @@ def edit(account: Account, task_id: str, changes: dict) -> str:
         new["done_when"] = _done_when(changes["done_when"])
         if not new["done_when"]:
             return f"say what ends it, or {NEVER}"
-    if "grant" in changes:
-        grant = clean_grant(changes["grant"])
-        if grant is None:
-            return "a site or an email address isn't valid"
-        new["grant"] = grant.to_dict()
+    if "allowed" in changes:  # the person takes an "always" back (or several)
+        kept = changes["allowed"] if isinstance(changes["allowed"], list) else []
+        new["allowed"] = sorted(k for k in entry.get("allowed", []) if k in kept)
     if "every" in changes:
         if not isinstance(changes["every"], int | float):
             return "how often must be a number"
@@ -726,7 +639,7 @@ def check_prompt(entry: Entry, now: float, tz: ZoneInfo) -> str:
 def listing(account: Account) -> list[dict]:
     """For the app's Tasks panel, newest first (SPEC §6.5)."""
     keys = ("id", "title", "prompt", "done_when", "at", "next", "created", "card")
-    # "grant": what it allows, for the panel's editor; "allowed": the same in the person's words
+    # "allowed": what its cards were allowed "always", in the person's words, with each key to take one back
     rows = sorted(load(account), key=lambda e: e.get("created", 0), reverse=True)
     return [
         {
@@ -737,8 +650,7 @@ def listing(account: Account) -> list[dict]:
             "updates": e.get("updates", 0),
             "now": bool(e.get("now")),
             "last_how": how_it_went(e),
-            "allowed": Grant.from_dict(e.get("grant")).labels(),
-            "grant": Grant.from_dict(e.get("grant")).to_dict(),
+            "allowed": [{"key": k, "label": guard.allow_label(k)} for k in e.get("allowed", [])],
         }
         for e in rows
     ]

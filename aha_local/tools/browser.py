@@ -158,7 +158,8 @@ def make_handler(name: str):
         signer = ctx.account.label if action.kind == "send" else ""
         form = form_for(name, labelled(name, args, ctx), action.site, signer)
         why = explain(verdict.why, action.site)
-        decision, refused = await guard.ask(ctx, "action", form.title, form.fields, shot, why=why)
+        allow = guard.allow_key(action)
+        decision, refused = await guard.ask(ctx, "action", form.title, form.fields, shot, why=why, allow=allow)
         if refused:
             return refused
         return await ran(session, name, form.apply(name, args, decision.values), action, ctx)

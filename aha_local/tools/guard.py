@@ -8,11 +8,15 @@ never learns whether a card was shown, approved as it was, edited, or skipped be
 
 This is the only module that shows cards (`ask`): every tool reaches the person through it, so every card is
 audited and declined the same way (tests check no tool calls `approvals.ask` itself).
+
+"Always allow for this task" (SPEC §5.3): every action card has the tick. Ticked and approved, the same action
+(searching, typing on that site, an email to those people…, its `allow_key`) runs without a card for the rest of
+the request; for a background task, for all its checks, kept on the task and listed in the Tasks panel.
 """
 
 from __future__ import annotations
 
-from ..approvals import KINDS, Decision, Field
+from ..approvals import Decision, Field
 from ..items import Image
 from ..policy import addresses
 from ..policy.browser import open_action
@@ -31,17 +35,64 @@ def facts(ctx: ToolContext) -> Facts:
         trusted=set(trusted.sites(ctx.account)) if ctx.account is not None else set(),
         shown=ctx.task.seen_urls,
         opened=ctx.task.opened_sites,
-        granted=ctx.task.grant,
     )
 
 
+def allow_key(action: Action) -> str:
+    """What an "always" tick on this action's card covers: the same kind of action, to the same place or people."""
+    if action.kind == "send":
+        if action.site:  # a message typed on a site
+            return f"message:{action.site}"
+        return f"{action.what}:{','.join(sorted(action.to))}" if action.to else action.what
+    if action.kind == "search":
+        return "search"
+    return f"{action.kind}:{action.site}" if action.site else action.kind
+
+
+ALLOW_WORDS = {
+    "search": "Search Google",
+    "type": "Type and fill in forms on {x}",
+    "open": "Open {x}",
+    "message": "Send messages on {x}",
+    "email": "Send email to {x}",
+    "draft": "Save email drafts to {x}",
+    "calendar": "Add calendar events (guests: {x})",
+    "calendar_change": "Change calendar events (guests: {x})",
+    "calendar_delete": "Delete calendar events",
+    "memory": "Save memories",
+    "memory_update": "Change memories",
+    "forget": "Forget memories",
+    "task": "Start background tasks",
+    "other": "Run other browser actions on {x}",
+}
+
+
+def allow_label(key: str) -> str:
+    """The person's words for an "always" (the Tasks panel's approved permissions)."""
+    kind, _, x = key.partition(":")
+    words = ALLOW_WORDS.get(kind, kind.replace("_", " ").capitalize())
+    return words.replace("{x}", x.replace(",", ", ")) if x else words.replace(" to {x}", "").replace(" on {x}", "")
+
+
 def check(ctx: ToolContext, action: Action, tool: str) -> Verdict:
-    """The gate's verdict; a run because of trust, or allowed up front, is audited (the tool and the site, never
-    the values)."""
+    """The gate's verdict, then the task's "always": a card the person ticked runs from then on. A run because of
+    trust or an "always" is audited (the tool and what it covers, never the values)."""
     verdict = decide(action, facts(ctx))
-    if verdict.why in ("trusted", "granted") and ctx.account is not None:
-        ctx.account.audit({verdict.why: action.site or action.what or action.kind, "tool": tool})
+    if verdict.outcome == "card" and allow_key(action) in ctx.task.allowed:
+        verdict = Verdict("run", "allowed")
+    if verdict.why in ("trusted", "allowed") and ctx.account is not None:
+        covered = allow_key(action) if verdict.why == "allowed" else action.site or action.what or action.kind
+        ctx.account.audit({verdict.why: covered, "tool": tool})
     return verdict
+
+
+def remember(ctx: ToolContext, key: str) -> None:
+    """The person ticked "always" on a card: this request, or this background task's every check, allows it."""
+    ctx.task.allowed.add(key)
+    if ctx.task.background and ctx.account is not None:
+        from . import background  # the task's own list (the Tasks panel shows it)
+
+        background.allow(ctx.account, ctx.task.background, key)
 
 
 def blocked(why: str) -> ToolResult:
@@ -74,10 +125,15 @@ async def ask(
     then: str = "",
     why: str = "",
     declined: str = "",
+    allow: str = "",
 ) -> tuple[Decision, ToolResult | None]:
     """Show a card. (decision, None) when approved; (decision, the result to return) when not. `why`: the gate's
-    reason, for the card's (i) (policy.gate.explain); without it, the kind's own (approvals.KINDS)."""
-    decision = await ctx.approvals.ask(ctx.account, kind, title, fields, image, why=why)
+    reason, for the card's (i) (policy.gate.explain); without it, the kind's own (approvals.KINDS). `allow`: the
+    action's `allow_key`, for the card's "Always allow for this task" tick (none on cards the person fills in:
+    a sign-in, a human check)."""
+    decision = await ctx.approvals.ask(ctx.account, kind, title, fields, image, why=why, always=bool(allow))
+    if decision.approved and decision.always and allow:
+        remember(ctx, allow)
     return decision, (None if decision.approved else stopped(decision, then, declined))
 
 
@@ -91,24 +147,16 @@ async def send(
     what: str = "",
 ) -> tuple[Decision, ToolResult | None]:
     """Something that goes out in the person's name or changes what they keep (an email, an event, a memory, a
-    background task): a `send` for the gate (SPEC §5.2 rule 2), which shows it on a card, trusted or not, unless
-    the person allowed it up front for who receives it (`to`: the addresses; None when nothing can allow it;
-    `what`: the grant it needs, when not the card's kind, as changing an event).
-    Then it runs as it is, and the chat says what went (the person still sees every send)."""
-    verdict = check(ctx, Action("send", what=what or kind, to=None if to is None else tuple(to)), kind)
+    background task): a `send` for the gate (SPEC §5.2 rule 2), always a card, trusted or not, unless the person
+    ticked "always" on one for the same kind and people in this task (`to`: the addresses; `what`: the kind
+    when not the card's, as changing an event). Then it runs as it is."""
+    action = Action("send", what=what or kind, to=None if to is None else tuple(to))
+    verdict = check(ctx, action, kind)
     if verdict.outcome == "block":
         return Decision(False, reason="blocked"), blocked(verdict.why)
     if verdict.outcome == "run":
-        if ctx.send is not None:
-            await ctx.send(allowed_note(kind, title, fields))
         return Decision(True, [f.value for f in fields]), None
-    return await ask(ctx, kind, title, fields, then=then)
-
-
-def allowed_note(kind: str, title: str, fields: list[Field]) -> str:
-    """The chat's line for a send that ran without its card, allowed up front: what it was, and to whom."""
-    shown = "; ".join(f"{f.label}: {f.value}" for f in fields if f.kind in ("text", "info") and f.value)
-    return f"{KINDS.get(kind, KINDS['action']).icon} {title.rstrip('?')}, as you allowed for this task. {shown}".strip()
+    return await ask(ctx, kind, title, fields, then=then, allow=allow_key(action))
 
 
 async def open_address(ctx: ToolContext, url: str, tool: str) -> tuple[str, Action, ToolResult | None]:
@@ -122,7 +170,8 @@ async def open_address(ctx: ToolContext, url: str, tool: str) -> tuple[str, Acti
         return url, action, ToolResult(SEARCH_INSTEAD if verdict.why == "search" else made_up(url), error=True)
     if verdict.outcome == "card":
         fields = [Field("Address", url, "info")]
-        _, refused = await ask(ctx, "action", f"Open {action.site}?", fields, why=explain(verdict.why, action.site))
+        why = explain(verdict.why, action.site)
+        _, refused = await ask(ctx, "action", f"Open {action.site}?", fields, why=why, allow=allow_key(action))
         if refused:
             return url, action, refused
     return url, action, None

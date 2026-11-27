@@ -31,8 +31,8 @@ async def test_a_requests_records_go_live_under_one_details_line(agent, llm, cha
 
 
 async def test_each_thing_done_is_in_the_chat_where_it_happened(agent, llm, chat, accounts):
-    """SPEC §7.4 "What Aha! did": each action is a chat item of its own, as it happens, between the cards and
-    messages around it, never moved to the end; reads aren't actions."""
+    """SPEC §7.4 "What Aha! did": every tool call is a chat item of its own, as it happens, between the cards and
+    messages around it, never moved to the end: a change in its own words, anything else as what it looked at."""
 
     async def act(args, ctx):
         return ToolResult("done", did="Sent a message on whatsapp.com")
@@ -53,8 +53,8 @@ async def test_each_thing_done_is_in_the_chat_where_it_happened(agent, llm, chat
     await say(agent, "ok", button=card.buttons[0].id)
     await settle(agent)
     [saved] = person(accounts).load_memory()
-    assert [k for k, _ in chat.order] == ["act", "card", "act", "msg"]
-    assert chat.acts == ["Sent a message on whatsapp.com", f"Saved [{saved['id']}]: Likes tea"]
+    assert [k for k, _ in chat.order] == ["act", "act", "card", "act", "msg"]
+    assert chat.acts == ["Used look", "Sent a message on whatsapp.com", f"Saved [{saved['id']}]: Likes tea"]
     assert chat.order[-1] == ("msg", "Sent.")
 
 
@@ -116,3 +116,13 @@ def test_the_gpus_load_is_the_average_since_the_last_reading(monkeypatch):
     reader._gpu, reader._gpu_since = "handle", 5
     assert reader.gpu() == {"load": 50, "temp": 61, "mem": 14.0, "mem_total": 16.0}
     assert reader._gpu_since == 30  # the next reading counts only newer samples
+
+
+def test_every_call_has_its_line_and_reads_never_show_what_they_found():
+    from aha_local.messages import call_line
+
+    assert call_line("web_search", {"query": "Flat Iron hours"}, False) == "Searched Google for “Flat Iron hours”"
+    assert call_line("browser_navigate", {"url": "https://www.waitrose.com/"}, False) == "Opened www.waitrose.com/"
+    assert call_line("email_read", {"id": "m1"}, False) == "Read an email"  # never what it said
+    assert call_line("fetch_url", {"url": "https://x.example/a"}, True) == "Read x.example/a (didn't work)"
+    assert call_line("something_new", {}, False) == "Used something new"

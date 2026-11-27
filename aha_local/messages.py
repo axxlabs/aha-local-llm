@@ -87,3 +87,50 @@ def tool_label(name: str) -> str | None:
     if name in TOOL_LABELS:
         return TOOL_LABELS[name]
     return next((label for prefix, label in TOOL_GROUPS if name.startswith(prefix)), name.replace("_", " "))
+
+
+# What every tool call did, as the person reads it in the chat (SPEC §7.4 "What Aha! did"): one line per call,
+# from the call itself, never the model's words. A call that changed something says it in its own words (its
+# `did`); the others say what they looked at. Email and calendar reads never show what they found.
+def _host(url: str) -> str:
+    rest = str(url).split("://", 1)[-1]
+    return rest[:80] + ("…" if len(rest) > 80 else "")
+
+
+CALL_WORDS = {
+    "web_search": lambda a: f"Searched Google for “{a.get('query', '')}”",
+    "fetch_url": lambda a: f"Read {_host(a.get('url', ''))}",
+    "browser_navigate": lambda a: f"Opened {_host(a.get('url', ''))}",
+    "browser_navigate_back": lambda a: "Went back a page",
+    "browser_snapshot": lambda a: "Read the page",
+    "browser_read_more": lambda a: "Read more of the page",
+    "browser_take_screenshot": lambda a: "Looked at the page",
+    "browser_find": lambda a: f"Looked for “{a.get('text', '')}” on the page",
+    "browser_wait_for": lambda a: "Waited for the page",
+    "browser_tabs": lambda a: "Looked at the browser's tabs",
+    "browser_hover": lambda a: "Pointed at something on the page",
+    "browser_mouse_wheel": lambda a: "Scrolled the page",
+    "browser_mouse_click_xy": lambda a: "Clicked on the page",
+    "browser_press_key": lambda a: f"Pressed {a.get('key', 'a key')}",
+    "show_screenshot": lambda a: "Sent you a screenshot",
+    "email_search": lambda a: "Searched your email",
+    "email_read": lambda a: "Read an email",
+    "calendar_list": lambda a: "Looked at your calendar",
+    "conversation_search": lambda a: f"Searched our earlier conversation for “{a.get('query', '')}”",
+    "current_time": lambda a: "Checked the time",
+    "message_user": lambda a: "Sent you a message",
+    "task_list": lambda a: "Looked at your background tasks",
+    "check_result": lambda a: f"Reported: {a.get('outcome', '')}",
+    "browser_login": lambda a: "Signed in",
+    "browser_human_check": lambda a: "Asked you to do a human check",
+}
+
+
+def call_line(name: str, args: dict, failed: bool) -> str:
+    """The line for a call that didn't change anything (or didn't work)."""
+    words = CALL_WORDS.get(name)
+    try:
+        line = words(args) if words else f"Used {tool_label(name) or name.replace('_', ' ')}"
+    except Exception:
+        line = f"Used {tool_label(name) or name.replace('_', ' ')}"
+    return line + (" (didn't work)" if failed else "")
