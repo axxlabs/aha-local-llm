@@ -47,7 +47,7 @@ async def conversation_search(args: dict, ctx: ToolContext) -> ToolResult:
     if hits:
         out.append("What was said (newest matches first):")
         out += [
-            f"{e.get('ts', '')[:16]} {'User' if e['kind'] == 'user' else 'SHA'}: {e['text'][:500]}"
+            f"{e.get('ts', '')[:16]} {'User' if e['kind'] == 'user' else 'sha'}: {e['text'][:500]}"
             for _, e in hits[:MAX_HITS]
         ]
     return ToolResult("\n".join(out))
@@ -76,9 +76,9 @@ async def topic_read(args: dict, ctx: ToolContext) -> ToolResult:
         if it.get("t") != "msg":
             continue
         when = dt.datetime.fromtimestamp(it.get("ts", 0), tz).strftime("%d/%m/%Y %H:%M")
-        who = "User" if it.get("role") == "me" else "SHA"
+        who = "User" if it.get("role") == "me" else "sha"
         if isinstance(it.get("task"), dict):
-            who = f"SHA (background task “{it['task'].get('title', '')}”, {it['task'].get('kind', 'update')})"
+            who = f"sha (background task “{it['task'].get('title', '')}”, {it['task'].get('kind', 'update')})"
             if it["task"].get("id"):
                 task_ids.append(it["task"]["id"])
         lines.append(f"{when} {who}: {it.get('text', '')}")

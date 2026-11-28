@@ -27,7 +27,7 @@ OWN = {"", "primary", "main", "my calendar", "my own", "mine", "default", "your 
 MAX_EVENTS = 25
 MAX_TEXT = 4_000
 NO_CALENDAR = (
-    "The calendar isn't connected for this person yet: their Google connection was made before SHA could use "
+    "The calendar isn't connected for this person yet: their Google connection was made before sha could use "
     "calendars. Tell them to run `aha mail connect <their name>` again on the computer and allow the calendar on "
     "Google's page. Don't suggest any other way."
 )

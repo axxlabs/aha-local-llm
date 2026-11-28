@@ -129,7 +129,7 @@ def did_note(record: object) -> str:
     still to do, and was asked twice more (2026-11-26)."""
     if not isinstance(record, list) or not record:
         return ""
-    return "\n\n[SHA's record of what this request did:\n" + "\n".join(f"- {d}" for d in record) + "]"
+    return "\n\n[sha's record of what this request did:\n" + "\n".join(f"- {d}" for d in record) + "]"
 
 
 def shorten_task(task: list[dict], budget: float) -> list[dict]:

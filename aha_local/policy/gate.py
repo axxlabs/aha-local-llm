@@ -101,13 +101,13 @@ WHY = {
     'your name without your OK. The card names the chat it goes to, as the page shows it; "Always allow" covers '
     "only that chat. You can change the text before it goes.",
     "chat": "Everything typed on {site} is shown to you first, every time, even a search: on a chat site, what "
-    "SHA types is yours to decide.",
-    "type": "{site} isn't one of your trusted sites, so whatever SHA types into it (a search, a form, an answer) "
+    "sha types is yours to decide.",
+    "type": "{site} isn't one of your trusted sites, so whatever sha types into it (a search, a form, an answer) "
     "is shown to you first." + TRUST_HINT,
     "search": "A web search sends its words to the search engine, so each search is shown to you first.",
-    "open": "SHA wants to open a site it hasn't opened in this task, so it's shown to you first. Links on pages it "
+    "open": "sha wants to open a site it hasn't opened in this task, so it's shown to you first. Links on pages it "
     "read, and sites already opened in this task, don't ask." + TRUST_HINT,
-    "other": "SHA doesn't know yet whether this action sends anything out, so it asks first.",
+    "other": "sha doesn't know yet whether this action sends anything out, so it asks first.",
 }
 
 

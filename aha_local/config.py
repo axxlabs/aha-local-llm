@@ -24,7 +24,7 @@ DEFAULT_TOML = """\
 [gateway]
 url = "{gateway_url}"
 pin = "{pin}"
-app = "{app_url}"          # where pairing links open the SHA app
+app = "{app_url}"          # where pairing links open the sha app
 
 [household]
 name = "{name}"

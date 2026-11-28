@@ -87,7 +87,7 @@ KINDS = {
         "✉️",
         ("Send", "Edit", "Don't send"),
         "Every email asks first, always: nothing is sent in your name without your OK. It's signed as written by "
-        "SHA, and you can change any of it before it goes.",
+        "sha, and you can change any of it before it goes.",
     ),
     "draft": Kind(
         "✉️",
@@ -108,27 +108,27 @@ KINDS = {
     "task": Kind(
         "⏳",
         ("Start", "Edit", "Don't"),
-        "A background task checks on its own later, while you're not using SHA, without you there, so it always "
+        "A background task checks on its own later, while you're not using sha, without you there, so it always "
         "asks first. You can change what it checks, how often and what ends it.",
     ),
     "memory": Kind(
         "🧠",
         ("Save", "Edit", "Don't"),
-        "SHA keeps something in its memory for future chats only with your OK, so you always see what it remembers.",
+        "sha keeps something in its memory for future chats only with your OK, so you always see what it remembers.",
     ),
     "forget": Kind("🧠", ("Forget it", "Edit", "Keep it"), "Forgetting a fact can't be undone, so it asks first."),
     "signin": Kind(
         "🔑",
         ("Sign in", "Edit", "Don't"),
         "A site wants you to sign in. What you type here goes straight into the site's sign-in form: the model "
-        "never sees it, and it isn't kept in the chat. Tick save and SHA signs you in on this site by itself next "
+        "never sees it, and it isn't kept in the chat. Tick save and sha signs you in on this site by itself next "
         "time.",
         open_inputs=True,
     ),
     "check": Kind(
         "🧩",
         ("Send taps", "Edit", "Give up"),
-        "The site wants to check that a person is there (a puzzle or a tap). Only you can answer it: SHA taps "
+        "The site wants to check that a person is there (a puzzle or a tap). Only you can answer it: sha taps "
         "where you tap.",
         open_inputs=True,
     ),

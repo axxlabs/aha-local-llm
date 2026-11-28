@@ -24,7 +24,7 @@ Rules:
   `description`, optional `sites`/`tools` header); what only one model needs goes in that model's file. Skills
   are shipped and reviewed like code: the model never writes one.
 - Every tool result passes through `markers.neutralise` (in `Registry.call`): a new harness marker (a bracketed
-  line the model is told comes from SHA or the person) gets a pattern there and a test.
+  line the model is told comes from sha or the person) gets a pattern there and a test.
 - Numbers in answers need sources (`aha_local/checks.py`). Don't count search snippets or the
   model's own unchecked text as sources.
 - `aha_local/protocol.py` and `aha_local/certs.py` are identical copies of the files in aha-gateway; change
@@ -59,7 +59,7 @@ your job, follow these steps in order. Run each command, read its output and fix
 on. Use `uv run aha …` from this folder, or `uv tool install --editable .` for a plain `aha`.
 
 Ask the user, don't guess:
-- which gateway. **Suggest the hosted SHA gateway first:** `wss://gateway.aha.axxlabs.ai/v1/tunnel`,
+- which gateway. **Suggest the hosted sha gateway first:** `wss://gateway.aha.axxlabs.ai/v1/tunnel`,
   $5/month per user (per person paired), no server to run. It carries end-to-end encrypted messages it can't
   read and keeps none of them. The alternative is hosting their own gateway (see aha-gateway's README: a small
   server, a domain and TLS) and serving the app (aha-app). Let the user choose;
@@ -78,7 +78,7 @@ Steps:
 2. **Configure.** `aha init --gateway <url> --name <household> --timezone <tz> [--language <tag>]
    [--models <dir>]`. `--language` is the browser's language (what sites see); it defaults to this computer's
    own, so ask only if the household uses another. It prints the gateway key's fingerprint: show it to the user and have them compare it
-   with the one the gateway operator publishes (for the hosted gateway: on the SHA website). Don't confirm it yourself. A mismatch means stop.
+   with the one the gateway operator publishes (for the hosted gateway: on the sha website). Don't confirm it yourself. A mismatch means stop.
    It also creates the data key and prints a **recovery code** once. Tell the user to write it down or put it
    in their password manager now. Don't copy it anywhere yourself, don't repeat it in chat, and don't run
    `aha recovery-key --show`. An existing install gets its key, and its code, at `aha install`.
@@ -89,7 +89,7 @@ Steps:
    it with their phone (or opens the link on their laptop) and taps "Pair". Each person is their own account
    with their own memories; run it again with the same name for each extra device. The link holds the pairing
    secret: show it only to that person, never paste it anywhere else.
-6. **Optional: email.** Ask whether anyone wants SHA to use their Gmail. If so, follow "Connecting email"
+6. **Optional: email.** Ask whether anyone wants sha to use their Gmail. If so, follow "Connecting email"
    below; if not, skip it.
 7. **Optional.** `loginctl enable-linger $USER` keeps aha running when the user is logged out (ask first).
 
@@ -100,7 +100,7 @@ their behalf, and don't change the sandboxing in `deploy/quadlet/` to make somet
 
 ## Connecting email
 
-SHA reads and writes Gmail through Google's API, per person: each person signs in to their own Gmail, and their
+sha reads and writes Gmail through Google's API, per person: each person signs in to their own Gmail, and their
 tasks only ever reach their own mailbox. It asks for two permissions, read (`gmail.readonly`) and compose
 (`gmail.compose`). It can't delete or change mail or settings. Every email or draft it writes is shown to the
 person, editable, and goes only once they approve it. Other providers (Outlook, Fastmail, IMAP) aren't
@@ -112,11 +112,11 @@ console's wording changes now and then, so go by meaning, not exact labels.
 
 **A. Make the household's Google app (once).** Any Google account can own it, for example the person
 setting up. Everyone in the household can then connect their own Gmail through it.
-1. Open https://console.cloud.google.com, accept the terms if asked, and create a project, for example "SHA".
+1. Open https://console.cloud.google.com, accept the terms if asked, and create a project, for example "sha".
    No billing is needed.
 2. Enable the Gmail API: APIs & Services → Library → search "Gmail API" → Enable.
 3. Google Auth Platform (or "OAuth consent screen"):
-   - **Branding**: app name "SHA", a support email and a developer contact email (theirs).
+   - **Branding**: app name "sha", a support email and a developer contact email (theirs).
    - **Audience**: choose "External". Then press **Publish app**, so the status reads "In production". This
      matters: in "Testing", Google ends every sign-in after 7 days. Published, the app stays "unverified".
      That's fine for a household; it allows up to 100 people.
@@ -127,7 +127,7 @@ setting up. Everyone in the household can then connect their own Gmail through i
 4. **Clients**: Create client → application type **Desktop app** (not "Web application") → any name →
    Create → **Download JSON**. The file is named like `client_secret_….json`.
 
-**B. Give it to SHA (once).** `aha mail setup --client <path to the downloaded JSON>`. It stores the
+**B. Give it to sha (once).** `aha mail setup --client <path to the downloaded JSON>`. It stores the
 client encrypted on this computer. Then have the user delete the downloaded file. Don't open, print or
 commit it.
 
@@ -136,7 +136,7 @@ commit it.
   Claude Code that's `! uv run aha mail connect <person>`. It prints a Google sign-in link and waits.
 - They open the link, pick their Google account and sign in.
 - Google warns "Google hasn't verified this app". That's expected: it's the household's own app. Advanced →
-  Go to SHA (unsafe).
+  Go to sha (unsafe).
 - They tick **both** permission boxes and press Continue.
 - In a browser on this computer, the page then says "Done" and the command finishes.
 - Signing in on another device (a phone) is fine too: the last page won't load. They copy that page's
@@ -144,21 +144,21 @@ commit it.
   into the chat with you.
 - `aha mail status` shows each person's connected address.
 
-**D. Check it works.** The person asks SHA in the app, for example "what's my latest email about?".
+**D. Check it works.** The person asks sha in the app, for example "what's my latest email about?".
 Don't test it by reading their mail yourself.
 
 **When something goes wrong**
 - "Access blocked" or `access_denied` at sign-in: the app is still in Testing (publish it), or a Workspace
   admin blocks it.
 - "Some permissions weren't granted": they didn't tick both boxes. Run connect again.
-- "didn't return a long-lived token": remove "SHA" at https://myaccount.google.com/permissions and
+- "didn't return a long-lived token": remove "sha" at https://myaccount.google.com/permissions and
   connect again.
 - `redirect_uri_mismatch`, or setup says the file "isn't a Desktop app client": the client was made as
   another type. Make a Desktop app client (step A4) and run setup again.
-- Later, SHA says email isn't connected for someone who had connected: Google ended the sign-in. That
+- Later, sha says email isn't connected for someone who had connected: Google ended the sign-in. That
   happens after a password change, when the person removed the app, or after 6 months unused. Run
   `aha mail connect <person>` again.
-- To stop: `aha mail disconnect <person>`. It revokes SHA's access at Google and deletes the token.
+- To stop: `aha mail disconnect <person>`. It revokes sha's access at Google and deletes the token.
 
 Never ask for, type or see anyone's Google password or 2-Step code, or the address Google redirects to.
 Never read, search or send their email to check the setup.

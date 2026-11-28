@@ -1,6 +1,6 @@
 # Models
 
-SHA runs one model at a time, chosen for the whole household in the app's **Settings → Model** (SPEC §3.2).
+sha runs one model at a time, chosen for the whole household in the app's **Settings → Model** (SPEC §3.2).
 Each choice is a preset of `deploy/models.ini`, and `aha models` downloads them all:
 
 | Choice | File | Notes |

@@ -71,7 +71,7 @@ CHECK = (
 # its new list at once (SPEC §7.4), rather than at its next 30-second refresh.
 WATCHERS: list[Callable[[Account], None]] = []
 REPORT_RETRY = (
-    "[SHA check] You haven't called check_result. Call it now with the outcome that fits what you found (waiting "
+    "[sha check] You haven't called check_result. Call it now with the outcome that fits what you found (waiting "
     "when what you wait for hasn't happened yet) and the message, and never mention this check."
 )
 LAST_TIME = "The last check ({when}) {how}:\n{note}\n\n"
@@ -440,7 +440,7 @@ def register(reg: Registry) -> None:
             "makes sense on its own later, with what to look at (the site by its name, like fedex.com, and how to "
             "find the page there; names, tracking codes) and how. Put an address in it only if you opened it or "
             "the user sent it in this request: never one you put together. Don't say in it what to answer: each "
-            "check is told how to answer. Checks run only while nobody is using SHA, so timing isn't exact.",
+            "check is told how to answer. Checks run only while nobody is using sha, so timing isn't exact.",
             params(
                 ["title", "prompt", "done_when"],
                 title=string("What you're waiting for, short, e.g. 'Reply from Sam about Saturday'"),
@@ -630,7 +630,7 @@ def check_prompt(entry: Entry, now: float, tz: ZoneInfo) -> str:
         done_when=done_when,
         never=NEVER_DONE if done_when == NEVER else "",
         n=entry.get("checks", 0) + 1,
-        late=", later than planned: SHA was busy" if late else "",
+        late=", later than planned: sha was busy" if late else "",
         title=entry["title"],
         prompt=entry["prompt"],
         last=_last_line(entry, tz),

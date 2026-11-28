@@ -150,7 +150,7 @@ async def test_pairing_then_messages_both_ways(tmp_path):
     await phone.send({"t": "hello", "name": "Ana's phone"})
     assert acct.devices[phone.dev].name == "Ana's phone"
     welcome = phone.inbox()
-    assert welcome[0]["t"] == "msg" and "SHA" in welcome[0]["text"] and welcome[0]["seq"] == 1
+    assert welcome[0]["t"] == "msg" and "sha" in welcome[0]["text"] and welcome[0]["seq"] == 1
     await phone.send({"t": "say", "text": "book a table", "cid": "c1"})
     assert rig.agent.said == ["book a table"]
     echo = phone.inbox()

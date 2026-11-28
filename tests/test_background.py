@@ -307,7 +307,7 @@ async def test_run_now_skips_the_idle_wait_but_not_a_busy_model(runner, agent, l
     fe = person(accounts)
     planned = time.time() + 600
     background.save(fe, [task(next=planned)])  # not due for 10 minutes
-    agent.last_input = time.time()  # someone just used SHA: not idle
+    agent.last_input = time.time()  # someone just used sha: not idle
     assert actions.run_background_now(fe, "abc123", via="settings")
     assert background.listing(fe)[0]["now"] is True
 
@@ -451,7 +451,7 @@ async def test_a_check_saying_it_will_check_again_isnt_a_schedule_claim(runner, 
 
 
 async def test_a_check_folds_first_and_a_card_in_it_leaves_no_working(runner, agent, llm, chat, accounts):
-    """Seen: after a check's note, "SHA is working…" stayed: a card in the check was answered, which said
+    """Seen: after a check's note, "sha is working…" stayed: a card in the check was answered, which said
     "working" again, and a check never says it stopped. And the check folds what was going on before it starts,
     so its card and its note are one topic of their own."""
     fe = person(accounts)

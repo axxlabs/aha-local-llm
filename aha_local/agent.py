@@ -118,7 +118,7 @@ class Session:
 TYPING_EVERY = 4.0  # seconds between `typing` frames while a reply is owed (SPEC §3.3)
 STOP_WORDS = {"stop", "cancel", "stop it", "stop that"}
 NEW_MESSAGE = "[New message from the user while you were working]\n{text}"
-UNSENT = "[SHA: your reply above wasn't sent: the user wrote again. Reply to everything in one answer.]"
+UNSENT = "[sha: your reply above wasn't sent: the user wrote again. Reply to everything in one answer.]"
 PHOTO_ONLY = "(sent a photo)"
 
 
@@ -164,7 +164,7 @@ class _Counted:
     async def state(self, account: Account, approval_id: str, state: str) -> None:
         await self.agent.out.state(account, approval_id, state)
         # Answered: working again, said now rather than at the next tick. Not for a background check, which
-        # shows nothing while it works and never turns it off (seen: "SHA is working…" stayed after a check's
+        # shows nothing while it works and never turns it off (seen: "sha is working…" stayed after a check's
         # note, once a card in it was answered).
         if self.agent.state(account.address).kind == "request":
             await self.agent._typing_frame(account, True, self.agent.queued(account))
@@ -267,7 +267,7 @@ class Agent:
         run: str = "",
     ) -> None:
         """`record`: what the request changed, from its tool calls (SPEC §4 "What a request did"), never the model's
-        words; `run`: the request it ends (its "what SHA did" box and Details line, SPEC §7.4)."""
+        words; `run`: the request it ends (its "what sha did" box and Details line, SPEC §7.4)."""
         self.last_activity = time.monotonic()
         self.session(account).sent += 1
         account.transcript({"kind": "out", "text": text, "image": bool(image)})
@@ -420,7 +420,7 @@ class Agent:
             text = "\n\n".join(pending)
 
     async def _typing(self, account: Account) -> None:
-        """While the task runs: whether SHA is working, said every few seconds. The computer is the only source
+        """While the task runs: whether sha is working, said every few seconds. The computer is the only source
         for the app (SPEC §3.3): working, unless a card waits for the person."""
         while True:
             await self._typing_frame(account, self.owes_reply(account), self.queued(account))
@@ -719,7 +719,7 @@ class Agent:
                         **({"did": receipt(ctx.task.record[before:])} if len(ctx.task.record) > before else {}),
                     }
                 )
-                if not quiet:  # every call, in the chat where it happened (SPEC §7.4 "What SHA did")
+                if not quiet:  # every call, in the chat where it happened (SPEC §7.4 "What sha did")
                     lines = receipt(ctx.task.record[before:]) or [
                         messages.call_line(call.name, _args(call.arguments), result.error)
                     ]
@@ -729,7 +729,7 @@ class Agent:
                 # result, and kept when an older page is shortened (context.shorten_task).
                 due = skills.due(ctx.task, call.name)
                 skill = "\n\n".join(skills.added(k) for k in due)
-                if not quiet:  # shown like a skill the model read (SPEC §7.4 "What SHA did")
+                if not quiet:  # shown like a skill the model read (SPEC §7.4 "What sha did")
                     for k in due:
                         await self.out.act(account, messages.skill_line(k.name))
                 task.append(

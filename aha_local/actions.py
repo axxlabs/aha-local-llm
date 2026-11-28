@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
-"""The person's own actions on what SHA keeps for them (SPEC §3.4, §3.8, §5.4, §5.7, §5.8).
+"""The person's own actions on what sha keeps for them (SPEC §3.4, §3.8, §5.4, §5.7, §5.8).
 
 Forgetting a memory, a site or a saved login, trusting a site, clearing the browser, disconnecting an account,
 cancelling a background task: each is one function here, whether the person did it in Settings or with a chat

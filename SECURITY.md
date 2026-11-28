@@ -1,6 +1,6 @@
 # Security
 
-SHA is built so that your messages, memories and documents stay between your devices and your own computer.
+sha is built so that your messages, memories and documents stay between your devices and your own computer.
 If you find a way around that, please tell us privately first.
 
 **Report a vulnerability:** use GitHub's private vulnerability reporting on this repository

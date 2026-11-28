@@ -115,7 +115,7 @@ def remember(ctx: ToolContext, key: str) -> None:
 
 def blocked(why: str) -> ToolResult:
     """An action the policy blocks: the same words wherever it's blocked."""
-    return ToolResult(f"Blocked by SHA's safety policy: {why}.", error=True)
+    return ToolResult(f"Blocked by sha's safety policy: {why}.", error=True)
 
 
 def stopped(decision: Decision, then: str = "", declined: str = "") -> ToolResult:

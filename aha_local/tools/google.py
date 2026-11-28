@@ -32,7 +32,7 @@ SCOPES = (
 TRANSPORT: httpx.AsyncBaseTransport | None = None  # tests put a fake Google here
 
 NOT_CONNECTED = (
-    "Email isn't connected for this person yet. Explain it in plain words: whoever set up SHA on the computer "
+    "Email isn't connected for this person yet. Explain it in plain words: whoever set up sha on the computer "
     "connects it there, once for the household: a free Google Cloud app (about 15 minutes; the steps are in "
     "`aha mail --help` and the Email section of the README at https://github.com/axxlabs/aha-local-llm#email-gmail), "
     "then `aha mail connect <their name>` on the computer while this person signs in with Google. Their mail stays "

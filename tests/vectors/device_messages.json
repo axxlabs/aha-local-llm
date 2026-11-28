@@ -1,5 +1,5 @@
 {
-  "about": "The messages between the SHA app and the computer inside the end-to-end channel (SPEC §6.5), by who sends them. The same file is in aha-local-llm (tests/vectors) and aha-app (test/vectors); each repo's tests check its code against it, and aha-local-llm checks the two copies are the same. `rules` holds the few rules both sides apply and must agree on.",
+  "about": "The messages between the sha app and the computer inside the end-to-end channel (SPEC §6.5), by who sends them. The same file is in aha-local-llm (tests/vectors) and aha-app (test/vectors); each repo's tests check its code against it, and aha-local-llm checks the two copies are the same. `rules` holds the few rules both sides apply and must agree on.",
   "device": {
     "hello": [
       "name",

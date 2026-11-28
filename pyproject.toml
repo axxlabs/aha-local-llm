@@ -1,7 +1,7 @@
 [project]
 name = "aha-local-llm"
 version = "0.0.0"  # hot-staging: the version is the commit (SPEC §10.2)
-description = "SHA, a self-hosted assistant: runs on your own computer; you talk to it from the SHA app, end-to-end encrypted"
+description = "sha, a self-hosted assistant: runs on your own computer; you talk to it from the sha app, end-to-end encrypted"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
 dependencies = [

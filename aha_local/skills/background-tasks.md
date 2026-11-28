@@ -9,5 +9,5 @@ task_create is the only way to do anything later. Use it without asking first fo
 - prompt: what to check or do and how, complete on its own later: the site by name and how to find the page there, the names and codes, and what to do once it happens.
 - every_minutes or at: as often as it can change and matters.
 - done_when: what ends it, or never.
-- Checks run only when nobody is using SHA: when they want an exact time, say it may run a little late.
+- Checks run only when nobody is using sha: when they want an exact time, say it may run a little late.
 - To coordinate with other people, read the coordination skill.

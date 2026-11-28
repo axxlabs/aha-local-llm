@@ -46,13 +46,13 @@ def _when(ts: object) -> str:
 def _item_lines(item: dict, states: dict[str, str]) -> list[str]:
     when = _when(item.get("ts"))
     if item.get("t") == "msg":
-        who = "You" if item.get("role") == "me" else "SHA"
+        who = "You" if item.get("role") == "me" else "sha"
         text = _cut(str(item.get("text", "")), MAX_MESSAGE)
         if item.get("image"):
             text += " [image left out]"
         return [f"[{when}] {who}:", *("  " + line for line in text.splitlines() or [""])]
     if item.get("t") == "approval":
-        lines = [f"[{when}] SHA asked for approval ({item.get('kind', '?')}): {item.get('title', '')}"]
+        lines = [f"[{when}] sha asked for approval ({item.get('kind', '?')}): {item.get('title', '')}"]
         for f in item.get("fields", []):
             lines.append(f"  {f.get('label', '')}: {_cut(str(f.get('value', '')), MAX_MESSAGE)}")
         lines.append(f"  → {states.get(str(item.get('id')), 'not answered')}")
@@ -104,7 +104,7 @@ def build(
         elif details and e.get("kind") == "tool":
             tools += _tool_lines(e)
     if details:
-        out += ["", "Technical details (the tools SHA used for these messages):", *(tools or ["  (none)"])]
+        out += ["", "Technical details (the tools sha used for these messages):", *(tools or ["  (none)"])]
     text = "\n".join(out)
     if len(text) > MAX_REPORT:
         text = text[: MAX_REPORT - 40] + "\n[… report cut to fit]"
@@ -113,7 +113,7 @@ def build(
 
 
 def versions(app: str, aha: str, model: str) -> dict[str, str]:
-    return {"SHA app": app[:20], "SHA": aha[:20], "model": model[:60]}
+    return {"sha app": app[:20], "sha": aha[:20], "model": model[:60]}
 
 
 def parse_count(value: object) -> int:

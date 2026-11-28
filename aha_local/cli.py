@@ -134,7 +134,7 @@ def unseal_data_key(cred: Path) -> bytes | None:
 def show_recovery_code(key: bytes) -> None:
     from .vault import recovery_code
 
-    print("\nRecovery code for your SHA data (shown once; `aha recovery-key --show` shows it again):\n")
+    print("\nRecovery code for your sha data (shown once; `aha recovery-key --show` shows it again):\n")
     print(f"    {recovery_code(key)}\n")
     print("Keep it offline (paper, a password manager). You need it to restore a backup of your data on another")
     print("computer, or after this computer's TPM is cleared. Without it, that data can't be read by anyone.")
@@ -174,7 +174,7 @@ def ensure_profiles(data_key: bytes | None = None, force: bool = False) -> None:
 
 def cmd_recovery_key(a) -> None:
     if not a.show:
-        die("This prints the key that decrypts all your SHA data. Run `aha recovery-key --show` to see it.")
+        die("This prints the key that decrypts all your sha data. Run `aha recovery-key --show` to see it.")
     key = unseal_data_key(DATA_KEY_CRED) if DATA_KEY_CRED.exists() else None
     if key is None:
         die(f"Can't unseal {DATA_KEY_CRED} on this computer.")
@@ -220,7 +220,7 @@ def cmd_init(a) -> None:
         die(f"{HOME_CONFIG} already exists (use --force to replace it).")
     pin = a.pin or fetch_pin(a.gateway)
     print(f"Gateway key fingerprint: {fingerprint(pin)}")
-    print("Check it matches the one your gateway operator publishes. It's pinned now; SHA refuses any other key.")
+    print("Check it matches the one your gateway operator publishes. It's pinned now; sha refuses any other key.")
     HOME_CONFIG.parent.mkdir(parents=True, exist_ok=True)
     HOME_CONFIG.write_text(
         DEFAULT_TOML.format(
@@ -303,14 +303,14 @@ def cmd_install(a) -> None:
         print("Another `aha install --when-idle` is already waiting; it will install the latest code.")
         return
     quiet = int(a.when_idle * 60)
-    print(f"Waiting until nobody has used SHA for {a.when_idle:g} minutes and no card waits…", flush=True)
+    print(f"Waiting until nobody has used sha for {a.when_idle:g} minutes and no card waits…", flush=True)
     while True:
         while not idle_now(quiet):
             time.sleep(IDLE_POLL)
         install()
         if idle_now(quiet):  # still nobody: restart now
             break
-        print("Someone started using SHA while it was building; waiting again.", flush=True)
+        print("Someone started using sha while it was building; waiting again.", flush=True)
     subprocess.run(["systemctl", "--user", "restart", "aha-agent.service"], check=True)
     print("Restarted the agent with the new build.")
 
@@ -350,7 +350,7 @@ def install() -> None:
     BROWSER_CONFIG.write_text(render_browser_config(config))
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     print(f"Installed {len(UNITS)} units in {QUADLET_DIR}. Start with `aha start`.")
-    print("To keep SHA running when you're logged out: loginctl enable-linger $USER")
+    print("To keep sha running when you're logged out: loginctl enable-linger $USER")
 
 
 def cmd_uninstall(a) -> None:
@@ -426,7 +426,7 @@ def cmd_devices(a) -> None:
 
 def cmd_revoke(a) -> None:
     admin({"cmd": "revoke", "account": a.account, "device": a.device})
-    print("Revoked: that device can no longer talk to SHA. Its keys on this computer are deleted.")
+    print("Revoked: that device can no longer talk to sha. Its keys on this computer are deleted.")
 
 
 def cmd_rename(a) -> None:
@@ -587,7 +587,7 @@ def cmd_mail(a) -> None:
     if len(done.get("emails") or []) > 1:
         print(f"{a.account} now has {len(done['emails'])} accounts connected: {', '.join(done['emails'])}.")
     print(
-        f"Connected {email} for {a.account}: their mail and calendar. SHA can now read them, and sends, drafts "
+        f"Connected {email} for {a.account}: their mail and calendar. sha can now read them, and sends, drafts "
         "or changes events only after they approve each one."
     )
 
@@ -612,7 +612,7 @@ def cmd_export(a) -> None:
 def cmd_delete(a) -> None:
     if (
         not a.yes
-        and input(f"Delete everything SHA keeps for {a.account}, and unpair its devices? Type 'delete': ") != "delete"
+        and input(f"Delete everything sha keeps for {a.account}, and unpair its devices? Type 'delete': ") != "delete"
     ):
         die("Not deleted.")
     admin({"cmd": "delete", "account": a.account})
@@ -663,7 +663,7 @@ def cmd_doctor(a) -> None:
     if not disk_encrypted(HOME_DATA):
         print(
             "warn data folder isn't on an encrypted disk\n"
-            "     SHA encrypts its own files, but model files, swap and old plaintext blocks on an SSD aren't;\n"
+            "     sha encrypts its own files, but model files, swap and old plaintext blocks on an SSD aren't;\n"
             "     full-disk encryption (LUKS) covers them."
         )
     if (HOME_DATA / "agent.sock").exists():
@@ -708,7 +708,7 @@ def cmd_run(a) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser(prog="aha", description="SHA, a self-hosted assistant, on your own computer.")
+    p = argparse.ArgumentParser(prog="aha", description="sha, a self-hosted assistant, on your own computer.")
     sub = p.add_subparsers(dest="command", required=True)
 
     s = sub.add_parser("init", help="create the configuration and pin the gateway's key")
@@ -718,7 +718,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--timezone", default="Europe/London")
     s.add_argument("--language", help="the browser's language, e.g. en-GB (default: this computer's)")
     s.add_argument("--models", default="~/aha-models")
-    s.add_argument("--app", default="https://app.aha.axxlabs.ai", help="where pairing links open the SHA app")
+    s.add_argument("--app", default="https://app.aha.axxlabs.ai", help="where pairing links open the sha app")
     s.add_argument("--force", action="store_true")
     s.set_defaults(fn=cmd_init)
     inst = sub.add_parser("install", help="build the agent and install the systemd units")
@@ -728,13 +728,13 @@ def main(argv: list[str] | None = None) -> None:
         nargs="?",
         const=3,
         metavar="MINUTES",
-        help="wait until nobody has used SHA for this long (default 3) and no card waits, then build, install "
+        help="wait until nobody has used sha for this long (default 3) and no card waits, then build, install "
         "and restart the agent; one waiter at a time",
     )
     inst.set_defaults(fn=cmd_install)
     sub.add_parser("uninstall", help="remove the systemd units (keeps your data)").set_defaults(fn=cmd_uninstall)
     for action in ("start", "stop", "restart"):
-        sub.add_parser(action, help=f"{action} SHA").set_defaults(fn=lambda a, x=action: systemctl(x))
+        sub.add_parser(action, help=f"{action} sha").set_defaults(fn=lambda a, x=action: systemctl(x))
     sub.add_parser("status", help="what's running").set_defaults(fn=cmd_status)
     s = sub.add_parser("logs", help="follow a service's log")
     s.add_argument("service", nargs="?", default="agent", choices=["agent", "llm", "browser"])
@@ -774,7 +774,7 @@ def main(argv: list[str] | None = None) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="""Gmail, per person. Once per household, make a Google OAuth client:
   1. https://console.cloud.google.com: create a project, enable the Gmail API and the Google Calendar API.
-  2. Google Auth Platform: Branding (app name "SHA"), Audience "External", then Publish app
+  2. Google Auth Platform: Branding (app name "sha"), Audience "External", then Publish app
      ("In production"; it stays unverified, which is fine for your household: Google shows a warning).
   3. Data access: add the scopes gmail.readonly, gmail.compose, calendar.events and
      calendar.calendarlist.readonly.

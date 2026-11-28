@@ -113,7 +113,7 @@ class Chat:
         self.tools: list[str] = []  # the tools' labels its Details line shows, as they happened (SPEC §7.4)
         self.events: list[dict] = []  # the records sent live, for the Details line
         self.details = 0  # Details lines
-        self.cuts: list[int] = []  # the folds SHA made (a background task's note starts a topic)
+        self.cuts: list[int] = []  # the folds sha made (a background task's note starts a topic)
 
     async def message(self, account, text, image=None, open="", task=None, record=None, run="") -> None:
         self.order.append(("msg", text))

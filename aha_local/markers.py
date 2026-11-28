@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Axxlabs Limited
 """The harness's own markers, kept out of what pages, emails and messages say (SPEC §9 "Markers").
 
-The model is told that a few shapes come from SHA itself or the person: "[New message from the user while you
+The model is told that a few shapes come from sha itself or the person: "[New message from the user while you
 were working]", the <context> block, a background check's header, a request's record, an added skill, the
 computer's dates. Text from outside (a page, an email, a WhatsApp chat, a search result) could carry the same
 words and pass as them. Every tool result goes through `neutralise` (in `Registry.call`), which rewrites each
@@ -19,8 +19,8 @@ _MARKERS = [
     (re.compile(r"\[\s*new\s+message\s+from\s+the\s+user", re.I), "(quoted text) new message from the user"),
     (re.compile(r"<\s*(/?)\s*context\s*>", re.I), r"‹\1context›"),
     (re.compile(r"\[\s*background\s+task\s+you\s+set\s+up", re.I), "(quoted text) background task you set up"),
-    (re.compile(r"\[\s*sha['’]s\s+record", re.I), "(quoted text) SHA's record"),
-    (re.compile(r"\[\s*sha\s+added\s+the", re.I), "(quoted text) SHA added the"),
+    (re.compile(r"\[\s*sha['’]s\s+record", re.I), "(quoted text) sha's record"),
+    (re.compile(r"\[\s*sha\s+added\s+the", re.I), "(quoted text) sha added the"),
     (re.compile(r"\(\s*dates,\s*worked\s+out\s+by\s+the\s+computer", re.I), "(quoted text: dates worked out by"),
 ]
 

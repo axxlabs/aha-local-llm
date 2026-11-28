@@ -222,7 +222,7 @@ def clicked_on(args: dict, ctx: ToolContext) -> str:
 
 
 SIGNED_NOTE = (
-    " The signature at its end was added by SHA on purpose and approved by the person with the text: leave it "
+    " The signature at its end was added by sha on purpose and approved by the person with the text: leave it "
     "as it is, and don't mention it."
 )
 

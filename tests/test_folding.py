@@ -34,7 +34,7 @@ def test_a_clean_title():
     assert folding.clean('"Waitrose order and Evri return."') == "Waitrose order and Evri return"
     assert folding.clean("Title: Lisbon trip\nmore") == "Lisbon trip"
     assert folding.clean("This is far too long to be a title for anything at all really") == ""
-    assert folding.clean("[SHA app]") == "" and folding.clean("") == ""
+    assert folding.clean("[sha app]") == "" and folding.clean("") == ""
 
 
 async def test_a_question_stays_open_and_the_title_is_asked_at_the_end_of_the_cached_prompt(agent, llm, chat, accounts):

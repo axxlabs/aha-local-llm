@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
-"""aha-local-llm: SHA, a self-hosted assistant, on your own computer."""
+"""aha-local-llm: sha, a self-hosted assistant, on your own computer."""
 
 import os
 import subprocess

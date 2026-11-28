@@ -183,7 +183,7 @@ async def test_without_a_connection_the_tools_say_how_to_connect(google, account
         await call("email_search", {"query": "x"}, ctx),
         await mail.email_send({"to": "a@example.com", "body": "hi"}, ctx),
     ):
-        assert result.error and "aha mail connect" in result.text and "whoever set up SHA" in result.text
+        assert result.error and "aha mail connect" in result.text and "whoever set up sha" in result.text
     assert not google.requests
 
 
@@ -200,7 +200,7 @@ async def test_sending_is_a_card_with_the_exact_email_and_edits_are_what_is_sent
         ("To", "sam@example.com", "text"),
         ("Cc", "", "text"),
         ("Subject", "Dinner", "text"),
-        ("Message", "See you at 7.\n\nWritten by SHA\n- Fe's Private AI Assistant", "longtext"),  # signed in code
+        ("Message", "See you at 7.\n\nWritten by sha\n- Fe's Private AI Assistant", "longtext"),  # signed in code
     ]
     path, sent = google.sent[0]
     msg = message_from_bytes(base64.urlsafe_b64decode(sent["raw"]), policy=policy.default)
