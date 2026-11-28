@@ -211,9 +211,9 @@ class Channel:
         run: str = "",
     ) -> None:
         item: dict = {"t": "msg", "role": "aha", "text": text}
-        if record:  # what the request changed, from its tool calls, never the model's words (§7.4 "What Aha! did")
+        if record:  # what the request changed, from its tool calls, never the model's words (§7.4 "What SHA did")
             item["record"] = record
-        if run:  # the request it ends: its "what Aha! did" box, and its Details line after it (§7.4)
+        if run:  # the request it ends: its "what SHA did" box, and its Details line after it (§7.4)
             item["run"] = run
         if image is not None:
             item["image"] = image.to_dict()
@@ -224,7 +224,7 @@ class Channel:
         await self.publish(account, item, notify=True)
 
     async def act(self, account: Account, text: str) -> None:
-        """One thing a request did, as it happened (SPEC §7.4 "What Aha! did"): a chat item of its own, where it
+        """One thing a request did, as it happened (SPEC §7.4 "What SHA did"): a chat item of its own, where it
         happened among the messages and cards, written by the code from the tool call, never by the model."""
         await self.publish(account, {"t": "act", "text": text})
 
@@ -239,7 +239,7 @@ class Channel:
 
     async def title(self, account: Account, start: int, text: str, new: bool = False, waiting: int = 0) -> None:
         """The title of the conversation since item `start`, shown when the app folds it (SPEC §7.4); `new`: a new
-        subject starts there, so the part before it folds now; `waiting`: Aha!'s message (its seq) that waits for
+        subject starts there, so the part before it folds now; `waiting`: SHA's message (its seq) that waits for
         the person's reply, so it stays open."""
         extra = {**({"new": True} if new else {}), **({"waiting": waiting} if waiting else {})}
         # Its part's number (SPEC §7.4 "Topic numbers"): given with the first title, sent, never stored in the item.
@@ -292,7 +292,7 @@ class Channel:
         await self.publish(account, {"t": "approval_state", "id": approval_id, "state": state})
 
     async def typing(self, account: Account, on: bool, queued: bool = False) -> None:
-        """ "Aha! is working…", or, while it waits for another person's request to finish, that it's queued."""
+        """ "SHA is working…", or, while it waits for another person's request to finish, that it's queued."""
         await self.to_devices(account, {"t": "typing", "on": on, **({"queued": True} if queued else {})})
 
     async def publish(self, account: Account, item: dict, notify: bool = False, live: dict | None = None) -> dict:
@@ -551,7 +551,7 @@ class Channel:
             await r.reply({"t": "trace", "seq": seq, "events": trace(r.account.read_transcript(), seq)})
 
     async def _memories(self, r: Request) -> None:
-        """Settings → What Aha! remembers; Forget is the person's own action, so no card (SPEC §5.4)."""
+        """Settings → What SHA remembers; Forget is the person's own action, so no card (SPEC §5.4)."""
         if r.msg.get("t") == "memory_forget":
             actions.forget_memory(r.account, clean_text(r.msg.get("id"), 64) or "", via="settings")
         await r.reply({"t": "memories", "items": actions.memories(r.account), "topics": actions.topics(r.account)})
@@ -609,7 +609,7 @@ class Channel:
         await r.reply({"t": "browser", "sites": await browser.listing(r.account) if browser is not None else []})
 
     async def _connections(self, r: Request) -> None:
-        """Settings → Connections (SPEC §7.4): what this person connected Aha! to. Addresses only, never a token."""
+        """Settings → Connections (SPEC §7.4): what this person connected SHA to. Addresses only, never a token."""
         if r.msg.get("t") == "email_disconnect":
             await actions.disconnect_email(r.account, clean_text(r.msg.get("email"), 320) or "", via="settings")
         await r.reply({"t": "connections", "email": google.address(r.account), "emails": google.addresses(r.account)})

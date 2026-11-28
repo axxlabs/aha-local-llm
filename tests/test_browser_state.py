@@ -360,7 +360,7 @@ async def test_a_new_windows_blank_page_reopens_the_last_page_in_code(setup, llm
     await agent.inbound(fe, "what's in my trolley?")
     await settle(agent)
     [result] = [m for m in llm.requests[n + 1]["messages"] if m.get("role") == "tool"]
-    assert result["content"].startswith("The browser had restarted, so Aha! opened the page that was open last.")
+    assert result["content"].startswith("The browser had restarted, so SHA opened the page that was open last.")
     assert "https://www.shop.example/trolley/visit-1/" in result["content"]
     assert chat.texts()[-1] == "Your trolley has the rice in it."
 
@@ -386,7 +386,7 @@ async def test_on_whatsapp_web_the_message_box_is_always_a_card_and_the_page_is_
     await agent.approval_reply(fe, search.card["id"], "approve")
     card = await chat.next()
     assert card.card["title"] == "Send this message to Sam on whatsapp.com?" and card.card.get("always")
-    signed = "On my way\n(Written by Aha!, Fe's Private AI Assistant)"  # signed in code (SPEC §3.4)
+    signed = "On my way\n(Written by SHA, Fe's Private AI Assistant)"  # signed in code (SPEC §3.4)
     assert [(f["label"], f["value"], f["kind"]) for f in card.card["fields"]] == [
         ("Text", signed, "longtext"),
         ("To", "Sam", "info"),
@@ -401,7 +401,7 @@ async def test_on_whatsapp_web_the_message_box_is_always_a_card_and_the_page_is_
     assert sum(1 for m in chat.sent if m.card) == 2
     # Seen: the model took the signature for a mistake and tried to have it deleted: it's told it's meant.
     typed_result = next(r for r in tool_results(llm) if r.startswith("Typed: “On my way"))
-    assert "added by Aha! on purpose and approved by the person" in typed_result
+    assert "added by SHA on purpose and approved by the person" in typed_result
     assert "on purpose" not in next(r for r in tool_results(llm) if r.startswith("Typed: “Sam"))
     from aha_local.messages import signed as sign
 
@@ -425,7 +425,7 @@ async def test_always_on_a_whatsapp_message_covers_that_chat_only(setup, llm, ch
     await agent.approval_reply(fe, first.card["id"], "approve", always=True)
     second = await chat.next()
     assert second.card["title"] == "Send this message to Ana on whatsapp.com?"
-    assert fake.contexts[-1].fields["e2"] == "5 min\n(Written by Aha!, Fe's Private AI Assistant)"  # no card, signed
+    assert fake.contexts[-1].fields["e2"] == "5 min\n(Written by SHA, Fe's Private AI Assistant)"  # no card, signed
     await agent.approval_reply(fe, second.card["id"], "approve")
     await settle(agent)
     assert sum(1 for m in chat.sent if m.card) == 2
@@ -462,7 +462,7 @@ async def test_a_message_box_on_any_site_is_a_signed_card(setup, llm, chat, acco
     await agent.inbound(fe, "reply to Sam on LinkedIn")
     card = await chat.next()
     assert card.card["title"] == "Send this message on linkedin.com?"
-    signed = "Thanks, see you then\n(Written by Aha!, Fe's Private AI Assistant)"
+    signed = "Thanks, see you then\n(Written by SHA, Fe's Private AI Assistant)"
     assert [f["value"] for f in card.card["fields"]] == [signed]
     assert fake.contexts[-1].fields == {"e1": "Sam"}  # the search box follows trust: no card
     await agent.approval_reply(fe, card.card["id"], "approve")

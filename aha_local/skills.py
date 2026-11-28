@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 from .tools.registry import Registry, TaskState, Tool, ToolContext, ToolResult, params, string
 
 DIR = Path(__file__).parent / "skills"
-ADDED = "[Aha! added the {name} skill for this step]"
+ADDED = "[SHA added the {name} skill for this step]"
 
 
 @dataclass(frozen=True)

@@ -134,7 +134,7 @@ def unseal_data_key(cred: Path) -> bytes | None:
 def show_recovery_code(key: bytes) -> None:
     from .vault import recovery_code
 
-    print("\nRecovery code for your Aha! data (shown once; `aha recovery-key --show` shows it again):\n")
+    print("\nRecovery code for your SHA data (shown once; `aha recovery-key --show` shows it again):\n")
     print(f"    {recovery_code(key)}\n")
     print("Keep it offline (paper, a password manager). You need it to restore a backup of your data on another")
     print("computer, or after this computer's TPM is cleared. Without it, that data can't be read by anyone.")
@@ -174,7 +174,7 @@ def ensure_profiles(data_key: bytes | None = None, force: bool = False) -> None:
 
 def cmd_recovery_key(a) -> None:
     if not a.show:
-        die("This prints the key that decrypts all your Aha! data. Run `aha recovery-key --show` to see it.")
+        die("This prints the key that decrypts all your SHA data. Run `aha recovery-key --show` to see it.")
     key = unseal_data_key(DATA_KEY_CRED) if DATA_KEY_CRED.exists() else None
     if key is None:
         die(f"Can't unseal {DATA_KEY_CRED} on this computer.")
@@ -303,14 +303,14 @@ def cmd_install(a) -> None:
         print("Another `aha install --when-idle` is already waiting; it will install the latest code.")
         return
     quiet = int(a.when_idle * 60)
-    print(f"Waiting until nobody has used Aha! for {a.when_idle:g} minutes and no card waits…", flush=True)
+    print(f"Waiting until nobody has used SHA for {a.when_idle:g} minutes and no card waits…", flush=True)
     while True:
         while not idle_now(quiet):
             time.sleep(IDLE_POLL)
         install()
         if idle_now(quiet):  # still nobody: restart now
             break
-        print("Someone started using Aha! while it was building; waiting again.", flush=True)
+        print("Someone started using SHA while it was building; waiting again.", flush=True)
     subprocess.run(["systemctl", "--user", "restart", "aha-agent.service"], check=True)
     print("Restarted the agent with the new build.")
 
@@ -587,7 +587,7 @@ def cmd_mail(a) -> None:
     if len(done.get("emails") or []) > 1:
         print(f"{a.account} now has {len(done['emails'])} accounts connected: {', '.join(done['emails'])}.")
     print(
-        f"Connected {email} for {a.account}: their mail and calendar. Aha! can now read them, and sends, drafts "
+        f"Connected {email} for {a.account}: their mail and calendar. SHA can now read them, and sends, drafts "
         "or changes events only after they approve each one."
     )
 
@@ -663,7 +663,7 @@ def cmd_doctor(a) -> None:
     if not disk_encrypted(HOME_DATA):
         print(
             "warn data folder isn't on an encrypted disk\n"
-            "     Aha! encrypts its own files, but model files, swap and old plaintext blocks on an SSD aren't;\n"
+            "     SHA encrypts its own files, but model files, swap and old plaintext blocks on an SSD aren't;\n"
             "     full-disk encryption (LUKS) covers them."
         )
     if (HOME_DATA / "agent.sock").exists():
@@ -708,9 +708,7 @@ def cmd_run(a) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser(
-        prog="aha", description="aha! A Truly Private Personal Assistant, on your own computer."
-    )
+    p = argparse.ArgumentParser(prog="aha", description="SHA, a self-hosted assistant, on your own computer.")
     sub = p.add_subparsers(dest="command", required=True)
 
     s = sub.add_parser("init", help="create the configuration and pin the gateway's key")
@@ -720,7 +718,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--timezone", default="Europe/London")
     s.add_argument("--language", help="the browser's language, e.g. en-GB (default: this computer's)")
     s.add_argument("--models", default="~/aha-models")
-    s.add_argument("--app", default="https://app.aha.axxlabs.ai", help="where pairing links open the Aha! app")
+    s.add_argument("--app", default="https://app.aha.axxlabs.ai", help="where pairing links open the SHA app")
     s.add_argument("--force", action="store_true")
     s.set_defaults(fn=cmd_init)
     inst = sub.add_parser("install", help="build the agent and install the systemd units")
@@ -730,7 +728,7 @@ def main(argv: list[str] | None = None) -> None:
         nargs="?",
         const=3,
         metavar="MINUTES",
-        help="wait until nobody has used Aha! for this long (default 3) and no card waits, then build, install "
+        help="wait until nobody has used SHA for this long (default 3) and no card waits, then build, install "
         "and restart the agent; one waiter at a time",
     )
     inst.set_defaults(fn=cmd_install)
@@ -776,7 +774,7 @@ def main(argv: list[str] | None = None) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="""Gmail, per person. Once per household, make a Google OAuth client:
   1. https://console.cloud.google.com: create a project, enable the Gmail API and the Google Calendar API.
-  2. Google Auth Platform: Branding (app name "Aha!"), Audience "External", then Publish app
+  2. Google Auth Platform: Branding (app name "SHA"), Audience "External", then Publish app
      ("In production"; it stays unverified, which is fine for your household: Google shows a warning).
   3. Data access: add the scopes gmail.readonly, gmail.compose, calendar.events and
      calendar.calendarlist.readonly.

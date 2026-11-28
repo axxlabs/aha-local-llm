@@ -139,7 +139,7 @@ async def call_with_snapshot(session, name: str, args: dict, ctx: ToolContext) -
         reopened = await call_with_snapshot(session, "browser_navigate", {"url": last}, ctx)
         if not reopened.error:
             guard.opened(ctx, last)
-            reopened.text = f"The browser had restarted, so Aha! opened the page that was open last.\n\n{reopened.text}"
+            reopened.text = f"The browser had restarted, so SHA opened the page that was open last.\n\n{reopened.text}"
             return reopened
     if SNAPSHOT_LINK.search(result.text):
         snap = to_result(await session.call("browser_snapshot", {}))
@@ -196,7 +196,7 @@ async def close_cookie_banner(session, ctx: ToolContext, result: ToolResult) -> 
     log.info("closed a cookie banner")
     head = result.text.split("### Page", 1)[0]
     result.text = (
-        f'[Aha!: a cookie banner was over this page; it was closed with "{label}". This is the page now.]\n\n'
+        f'[SHA: a cookie banner was over this page; it was closed with "{label}". This is the page now.]\n\n'
         + head
         + "### Page"
         + snap.text.split("### Page", 1)[1]

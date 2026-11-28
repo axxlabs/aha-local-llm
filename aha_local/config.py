@@ -24,7 +24,7 @@ DEFAULT_TOML = """\
 [gateway]
 url = "{gateway_url}"
 pin = "{pin}"
-app = "{app_url}"          # where pairing links open the Aha! app
+app = "{app_url}"          # where pairing links open the SHA app
 
 [household]
 name = "{name}"

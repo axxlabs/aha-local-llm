@@ -1,10 +1,10 @@
 # aha-local-llm
 
-**aha! A Truly Private Personal Assistant.** It runs on your own computer, and you talk to it from the
-[Aha! app](https://github.com/axxlabs/aha-app) on your phone or laptop. Every message is **end-to-end
+**SHA, a self-hosted assistant.** It runs on your own computer, and you talk to it from the
+[SHA app](https://github.com/axxlabs/aha-app) on your phone or laptop. Every message is **end-to-end
 encrypted** between your device and your computer (hybrid post-quantum pairing, then a Double Ratchet). The
 model, your memories, your mail tokens and your conversation history stay on your computer. Before anything
-leaves with your words or data in it (typing into a website, an email) and before Aha! saves something about
+leaves with your words or data in it (typing into a website, an email) and before SHA saves something about
 you, it shows you a card with the exact content: Approve, Edit, Decline.
 
 What it does: searches and reads the web (citing pages), uses websites in its own browser (bookings, forms,
@@ -16,17 +16,17 @@ human?", you tap the check on a card. It reads and writes your Gmail, reads phot
 and remembers what you approve. Each person in the household has their own account, memories, browser and mail.
 
 This repo is the part that runs on your computer. Messages reach it through an
-[Aha! gateway](https://github.com/axxlabs/aha-gateway) (self-hosted, or the hosted one for $5/month per user),
+[SHA gateway](https://github.com/axxlabs/aha-gateway) (self-hosted, or the hosted one for $5/month per user),
 which carries encrypted messages it can't read and keeps nothing. Website: https://axxlabs.ai/aha/
 
 ## Install with a coding agent (easiest)
 
 Open Claude Code (or another coding agent) on the computer that will run aha and say:
 
-> Install Aha! for me from https://github.com/axxlabs/aha-local-llm. Follow its AGENTS.md, section "Setting up aha for a user".
+> Install SHA for me from https://github.com/axxlabs/aha-local-llm. Follow its AGENTS.md, section "Setting up aha for a user".
 
 It checks your machine, asks you a few questions (which gateway, your household's name and timezone), downloads the
-model and sets everything up. It suggests the hosted Aha! gateway ($5/month per user); you can host your own
+model and sets everything up. It suggests the hosted SHA gateway ($5/month per user); you can host your own
 instead.
 
 ## What you need
@@ -80,9 +80,9 @@ the configuration in `~/.config/aha/config.toml`.
 
 ## Email (Gmail)
 
-Each person can connect their own Gmail. Aha! then searches and reads it, and writes, replies and saves drafts;
+Each person can connect their own Gmail. SHA then searches and reads it, and writes, replies and saves drafts;
 every email is shown to them in full, editable, and goes only when they approve. After a task has read mail,
-every web search and page address in that task is shown first too, so a message can't steer Aha! into sending
+every web search and page address in that task is shown first too, so a message can't steer SHA into sending
 their data somewhere. The connection uses Google's OAuth with read and compose permissions only (nothing can
 delete or change mail), and the token is kept encrypted in that person's folder.
 
@@ -90,7 +90,7 @@ Setting it up takes about 15 minutes, once per household, on the computer:
 
 1. **Make the household's Google app** at https://console.cloud.google.com (free, any Google account):
    - create a project and enable the **Gmail API** and the **Google Calendar API** (APIs & Services → Library);
-   - under Google Auth Platform: **Branding** (app name "Aha!", your email), **Audience** "External", then
+   - under Google Auth Platform: **Branding** (app name "SHA", your email), **Audience** "External", then
      **Publish app** so it reads "In production" (in "Testing", Google ends every sign-in after 7 days; it stays
      "unverified", which is fine for a household of up to 100 people);
    - **Data access**: add the scopes `https://www.googleapis.com/auth/gmail.readonly`,
@@ -99,13 +99,13 @@ Setting it up takes about 15 minutes, once per household, on the computer:
    - **Clients**: create a client of type **Desktop app** and download its JSON file.
 2. `aha mail setup --client ~/Downloads/client_secret_….json` (it's stored encrypted; delete the download).
 3. For each person: `aha mail connect <person>`. They open the link it prints and sign in with Google; past
-   "Google hasn't verified this app" (Advanced → Go to Aha!), they tick every permission (mail and calendar). Someone connected before the calendar existed runs
+   "Google hasn't verified this app" (Advanced → Go to SHA), they tick every permission (mail and calendar). Someone connected before the calendar existed runs
    `aha mail connect <person>` again to add it. On a phone, the last
-   page won't load: copy its address into the terminal. Run it again with another Google account to add a second one for the same person: Aha! searches
+   page won't load: copy its address into the terminal. Run it again with another Google account to add a second one for the same person: SHA searches
    all of them, and the email card shows which address it sends from. `aha mail status` shows who's connected;
    `aha mail disconnect <person> [--email <address>]` revokes one (or all).
 
-If Aha! later says email isn't connected for someone who had connected (after a password change, removing
+If SHA later says email isn't connected for someone who had connected (after a password change, removing
 the app in their Google account, or six months unused), run `aha mail connect <person>` again.
 
 ## Encryption at rest

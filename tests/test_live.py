@@ -31,7 +31,7 @@ async def test_a_requests_records_go_live_under_one_details_line(agent, llm, cha
 
 
 async def test_each_thing_done_is_in_the_chat_where_it_happened(agent, llm, chat, accounts):
-    """SPEC §7.4 "What Aha! did": every tool call is a chat item of its own, as it happens, between the cards and
+    """SPEC §7.4 "What SHA did": every tool call is a chat item of its own, as it happens, between the cards and
     messages around it, never moved to the end: a change in its own words, anything else as what it looked at."""
 
     async def act(args, ctx):

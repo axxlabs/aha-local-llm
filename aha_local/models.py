@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
-"""Which model Aha! uses: one choice for the whole household, made in the app's Settings (SPEC §3.2).
+"""Which model SHA uses: one choice for the whole household, made in the app's Settings (SPEC §3.2).
 
 The model server runs in router mode with one model loaded at a time (`--models-max 1`); a request naming
 another preset of `models.ini` makes it swap. The choice is kept encrypted in the data folder, and a model is

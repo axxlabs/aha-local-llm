@@ -96,7 +96,7 @@ def upgrade(vault: Vault) -> list[str]:
     vault.root.mkdir(parents=True, exist_ok=True)
     at = version(vault.root)
     if at > LATEST:
-        raise NewerData(f"the data folder is at storage version {at}; this build of Aha! knows up to {LATEST}")
+        raise NewerData(f"the data folder is at storage version {at}; this build of SHA knows up to {LATEST}")
     ran = []
     for m in MIGRATIONS:
         if m.number <= at:

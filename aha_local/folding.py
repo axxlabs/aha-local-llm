@@ -16,7 +16,7 @@ from dataclasses import dataclass
 SHOWN = ("msg", "approval", "steps", "act")  # what the chat shows; states and titles aren't part of a topic
 MAX_TITLE = 60
 ASK = (
-    "[Aha! app, not from the user. Decide whether the user's latest message starts a new subject, then give a "
+    "[SHA app, not from the user. Decide whether the user's latest message starts a new subject, then give a "
     "title. Their latest message was: “{asked}”.\n"
     "NEW if it is about a different thing from the conversation before it since {since}: another person, place, "
     "company, product, booking, order, email, trip, task or question. It is NEW even when it is the same kind of "

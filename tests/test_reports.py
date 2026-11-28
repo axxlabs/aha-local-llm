@@ -47,7 +47,7 @@ def test_draft_has_only_the_chosen_messages_and_tools_only_when_asked():
     detailed = reports.build(transcript(), 2, "", True, v)
     assert "fetch_url" in detailed.text and "HTTP 408" in detailed.text and "failed" in detailed.text
     assert "old tool" not in detailed.text and "(not given)" in detailed.text
-    assert "qwen" in detailed.text and "Aha! app 0.2.0" in detailed.text
+    assert "qwen" in detailed.text and "SHA app 0.2.0" in detailed.text
     everything = reports.build(transcript(), 99, "", False, v)
     assert "old secret" in everything.text
 

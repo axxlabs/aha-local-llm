@@ -9,17 +9,17 @@ NOTHING_TO_STOP = "Nothing is running."
 MODEL_DOWN = "My language model isn't running right now, so I can't answer. Try again in a minute."
 FAILED = "Something went wrong while working on that, sorry. I've noted the error on the computer."
 RESTARTING = (
-    "Aha! is restarting on your computer, so anything I was working on has stopped. Give it a minute, then ask again."
+    "SHA is restarting on your computer, so anything I was working on has stopped. Give it a minute, then ask again."
 )
 TOO_MANY_STEPS = "I couldn't finish that within my step limit."
 APPROVAL_STALE = "That approval isn't open any more."
 EDIT_UNCLEAR = "I couldn't use those values. Check the card and tap Approve or Decline again."
 
 WELCOME = (
-    "Hi! I'm **Aha!**, a truly private personal assistant, running on your own computer. "
+    "Hi! I'm **SHA**, a truly private personal assistant, running on your own computer. "
     "Ask me anything, or say **help**."
 )
-HELP = """**Aha!** is a truly private personal assistant, and it runs on your own computer. Ask me anything: \
+HELP = """**SHA** is a truly private personal assistant, and it runs on your own computer. Ask me anything: \
 I look things up, read web pages, book things on websites (signing in when you want: you type your password on \
 a card, and I never see it), search and write your email (once it's connected), keep checking on things \
 for you in the background (a reply, a delivery, a price, or something to do at a time), and remember what matters \
@@ -33,17 +33,17 @@ tasks are in the app's Settings and Tasks.
 
 Open source (AGPL-3.0): {source}"""
 
-# What Aha! writes for someone else is signed, in code (SPEC §3.4): on the card, so the person sees it and can
+# What SHA writes for someone else is signed, in code (SPEC §3.4): on the card, so the person sees it and can
 # change it. One signature per medium, and one way to tell it's already there.
 SIGNATURES = {
-    "email": "Written by Aha!\n- {name}'s Private AI Assistant",
+    "email": "Written by SHA\n- {name}'s Private AI Assistant",
     # A message typed on a site: one line, plain (WhatsApp's italics showed as underscores elsewhere)
-    "chat": "(Written by Aha!, {name}'s Private AI Assistant)",
-    "event": "Created by Aha! (A Private AI Assistant)",  # read by guests too: no one's name
+    "chat": "(Written by SHA, {name}'s Private AI Assistant)",
+    "event": "Created by SHA (A Private AI Assistant)",  # read by guests too: no one's name
 }
 SEPARATORS = {"email": "\n\n", "chat": "\n", "event": "\n\n"}
 # Not \b at the start: an older chat signature opens with "(_Written", and "_" is a word character.
-ALREADY_SIGNED = re.compile(r"(?<![a-z])(?:written|created) by aha\b", re.I)
+ALREADY_SIGNED = re.compile(r"(?<![a-z])(?:written|created) by (?:aha|sha)\b", re.I)
 
 
 def signature(name: str, medium: str = "email") -> str:
@@ -91,7 +91,7 @@ def tool_label(name: str) -> str | None:
     return next((label for prefix, label in TOOL_GROUPS if name.startswith(prefix)), name.replace("_", " "))
 
 
-# What every tool call did, as the person reads it in the chat (SPEC §7.4 "What Aha! did"): one line per call,
+# What every tool call did, as the person reads it in the chat (SPEC §7.4 "What SHA did"): one line per call,
 # from the call itself, never the model's words. A call that changed something says it in its own words (its
 # `did`); the others say what they looked at. Email and calendar reads never show what they found.
 def _host(url: str) -> str:
@@ -100,7 +100,7 @@ def _host(url: str) -> str:
 
 
 def skill_line(name: str) -> str:
-    """A skill read, by the model or added by Aha! for a site or tool (SPEC §3.5 "Skills"): its file's name."""
+    """A skill read, by the model or added by SHA for a site or tool (SPEC §3.5 "Skills"): its file's name."""
     return f"Read skill {name}.md"
 
 
