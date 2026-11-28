@@ -353,6 +353,10 @@ class Agent:
         """A request or a check runs for this person (waiting on a card or not)."""
         return self.state(account.address).kind != "idle"
 
+    def runs_in(self, account: Account, topic: int) -> bool:
+        """A request or wakeup runs for this person in that topic."""
+        return self.is_running(account) and self.session(account).topic == topic
+
     def owes_reply(self, account: Account) -> bool:
         """What "typing…" shows (SPEC §3.3): their request is running and isn't waiting for their approval."""
         return self.state(account.address).owes_reply

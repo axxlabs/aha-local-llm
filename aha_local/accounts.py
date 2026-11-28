@@ -211,10 +211,30 @@ class Account:
         return changed
 
     def clear_history(self) -> None:
-        """Delete the transcript, the audit and the conversation context. Sequence numbers carry on."""
+        """Delete the transcript, the audit, the conversation context and every topic, with whatever they were
+        checking on (SPEC §3.8.1). Sequence and topic numbers carry on."""
+        from . import topics
+
         for name in ("transcript.jsonl", "audit.jsonl"):
             self.vault.rewrite(self.dir / name, [])
         (self.dir / "context.json").unlink(missing_ok=True)
+        topics.clear(self)
+
+    def forget_topic(self, n: int) -> None:
+        """Delete topic n's chat items from the transcript (the person's Delete topic, SPEC §4.1)."""
+        path = self.dir / "transcript.jsonl"
+        kept = []
+        for line in self.vault.records(path):
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                kept.append(line)
+                continue
+            item = entry.get("item") if entry.get("kind") == "item" else None
+            if isinstance(item, dict) and item.get("topic") == n:
+                continue
+            kept.append(line)
+        self.vault.rewrite(path, kept)
 
     def load_context(self) -> dict:
         """The turns of the topic going on and the topic memory (SPEC §4, §5.4)."""

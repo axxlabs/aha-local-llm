@@ -36,6 +36,9 @@ class FakeAgent:
     def owes_reply(self, account):
         return self.working
 
+    def runs_in(self, account, topic):
+        return False
+
     async def warm(self):
         self.warmed = getattr(self, "warmed", 0) + 1
 
@@ -594,3 +597,44 @@ async def test_diagnostics_go_only_to_a_device_showing_the_app_and_only_when_cha
     await phone.send({"t": "stats_watch", "on": False})
     await rig.channel.diagnostics_once(reader)
     assert phone.inbox() == []
+
+
+async def test_clear_history_deletes_every_topic_and_what_it_checked_on(tmp_path):
+    """Clear history (SPEC §3.8.1): the topics go too, with their schedules; numbers carry on."""
+    from aha_local import topics
+
+    rig = Rig(tmp_path)
+    _, phone = await rig.pair()
+    acct = rig.accounts.find("Ana")
+    n = topics.new(acct, title="Parcel")
+    topics.update(acct, n, lambda e: {**e, "schedule": {"title": "x", "every": 30, "next": 0}, "state": "scheduled"})
+    await phone.send({"t": "history_clear"})
+    assert topics.all_topics(acct) == [] and topics.new(acct) == n + 1
+
+
+async def test_delete_topic_removes_its_messages_turns_and_memory_on_every_device(tmp_path):
+    """Delete topic (SPEC §4.1): the person's own action; its items, turns and memory entry go, and every device is
+    told with a `topic` item "deleted"."""
+    from aha_local import context, topics
+
+    rig = Rig(tmp_path)
+    _, phone = await rig.pair()
+    acct = rig.accounts.find("Ana")
+    await phone.send({"t": "sync_request", "after": 0})
+    phone.inbox()
+    keep, gone = topics.new(acct, title="Keep"), topics.new(acct, title="Gone")
+    for n in (keep, gone):
+        token = topics.TOPIC.set(n)
+        try:
+            await rig.channel.message(acct, f"in {n}")
+        finally:
+            topics.TOPIC.reset(token)
+        context.record_turn(acct, n, f"q{n}", f"a{n}")
+        context.save_topic(acct, n, f"T{n}", f"memory {n}")
+    await phone.send({"t": "topic_delete", "topic": gone})
+    assert topics.get(acct, gone) is None and topics.get(acct, keep) is not None
+    assert [it["topic"] for it in acct.items() if it.get("t") == "msg"] == [keep]
+    conv = acct.load_context()
+    assert {t["topic"] for t in conv["turns"]} == {keep} and [e["n"] for e in conv["topics"]] == [keep]
+    told = phone.inbox()[-1]
+    assert told["t"] == "topic" and told["topic"] == gone and told["state"] == "deleted"

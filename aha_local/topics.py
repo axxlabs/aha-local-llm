@@ -121,6 +121,20 @@ def answered(account, n: int) -> dict | None:
     return update(account, n, fn)
 
 
+def clear(account) -> None:
+    """Every topic goes, and whatever they were checking on (Clear history, SPEC §3.8.1); numbers carry on."""
+    save(account, {"next": load(account)["next"], "topics": {}})
+
+
+def remove(account, n: int) -> dict | None:
+    """Topic n goes from the list, with its schedule (the person's Delete topic). Returns it as it was."""
+    data = load(account)
+    gone = data["topics"].pop(str(n), None)
+    if gone is not None:
+        save(account, data)
+    return gone
+
+
 def active(account) -> list[dict]:
     """The topics that go on without the person in them: scheduled, or waiting on them."""
     return [e for e in all_topics(account) if e.get("state") in ACTIVE]

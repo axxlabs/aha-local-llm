@@ -91,6 +91,9 @@
       "every?",
       "at?",
       "next?"
+    ],
+    "topic_delete": [
+      "topic"
     ]
   },
   "computer": {

@@ -547,8 +547,9 @@ class Channel:
         await r.reply({"t": "memories", "items": actions.memories(r.account), "topics": actions.topics(r.account)})
 
     async def _topic(self, r: Request) -> None:
-        """A topic's strip (SPEC §4.1 "No Tasks pane"): Run now, Edit its schedule, Stop. The person's own actions,
-        so no card; the topic's new `topic` item goes to every device. `topic_idle`: the idle line's numbers."""
+        """A topic's strip (SPEC §4.1 "No Tasks pane"): Run now, Edit its schedule, Stop; and Delete topic. The
+        person's own actions, so no card; the topic's new `topic` item goes to every device. `topic_idle`: the idle
+        line's numbers."""
         n, t = r.msg.get("topic"), r.msg.get("t")
         if t == "topic_idle" or not isinstance(n, int):
             agent = self.agent
@@ -563,6 +564,13 @@ class Channel:
             return
         if t == "topic_stop" and actions.stop_topic(r.account, n, via="topic"):
             return
+        if t == "topic_delete":
+            # A run in that topic stops first; then it goes, and every device drops it (a `topic` item "deleted").
+            if self.agent is not None and self.agent.runs_in(r.account, n):
+                await self.agent.stop(r.account, quiet=True)
+            if actions.delete_topic(r.account, n, via="topic"):
+                await self.publish(r.account, {"t": "topic", "topic": n, "title": "", "state": "deleted", "last": 0})
+                return
         if t == "topic_edit":
             changes = {k: r.msg[k] for k in background.EDITABLE if k in r.msg}
             for k in ("title", "prompt", "done_when"):
@@ -778,6 +786,7 @@ HANDLERS: dict[str, Callable[[Channel, Request], Awaitable[None]]] = {
     "topic_stop": Channel._topic,
     "topic_run": Channel._topic,
     "topic_edit": Channel._topic,
+    "topic_delete": Channel._topic,
     "browser_request": Channel._browser,
     "browser_forget": Channel._browser,
     "browser_clear": Channel._browser,

@@ -14,6 +14,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from . import context
+from . import topics as topic_list
 from .accounts import Account
 from .tools import background, google, logins, signins, trusted
 
@@ -68,6 +69,20 @@ async def disconnect_email(account: Account, email: str, via: str) -> bool:
         return False
     await google.disconnect(account, email)
     account.audit({"email_disconnected": email or "all", "via": via})
+    return True
+
+
+def delete_topic(account: Account, n: int, via: str) -> bool:
+    """The person's Delete topic (SPEC §4.1): it goes with its messages, its turns, its memory entry and whatever it
+    was checking on. False if there's no such topic."""
+    if topic_list.remove(account, n) is None:
+        return False
+    account.forget_topic(n)
+    conv = account.load_context()
+    conv["turns"] = [t for t in conv["turns"] if t.get("topic") != n]
+    conv["topics"] = [e for e in conv["topics"] if e.get("n") != n]
+    account.save_context(conv)
+    account.audit({"topic_deleted": n, "via": via})
     return True
 
 
