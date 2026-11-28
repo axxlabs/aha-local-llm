@@ -58,7 +58,6 @@ class AgentOut(Protocol):
         account: Account,
         text: str,
         image: Image | None = None,
-        record: list[str] | None = None,
         run: str = "",
     ) -> None: ...
     async def steps(self, account: Account) -> None: ...  # the request's Details line (SPEC §7.4 "Details")
@@ -254,15 +253,13 @@ class Agent:
         account: Account,
         text: str,
         image: Image | None = None,
-        record: list[str] | None = None,
         run: str = "",
     ) -> None:
-        """`record`: what the request changed, from its tool calls (SPEC §4 "What a request did"), never the model's
-        words; `run`: the request it ends (its "what sha did" box and Details line, SPEC §7.4)."""
+        """`run`: the request it ends (its Details line, SPEC §7.4)."""
         self.last_activity = time.monotonic()
         self.session(account).sent += 1
         account.transcript({"kind": "out", "text": text, "image": bool(image)})
-        await self.out.message(account, text[:20_000], image, receipt(record), run)
+        await self.out.message(account, text[:20_000], image, run)
 
     # ---- inbound
 
@@ -482,9 +479,9 @@ class Agent:
                 else:  # what it did before it stopped stays known (seen: a saved fact saved twice more)
                     context.record_turn(account, topic, text, messages.STOPPED, record=record)
                 await self._stop_typing(account, typing, quiet)
-                if record and not job:  # its box keeps what it did, and its Details line comes after "Stopped."
+                if record and not job:  # its Details line comes after "Stopped."
                     with contextlib.suppress(Exception):
-                        await self.send(account, "", record=record, run=TASK.get() or "")
+                        await self.send(account, "", run=TASK.get() or "")
                 raise
             except ModelUnavailable as e:
                 log.error("model unavailable: %s", e)
@@ -497,7 +494,7 @@ class Agent:
             stopped = bool(ended)  # it didn't finish: the reason is `ended` (Stop raises CancelledError above)
             if not answer.strip() and not job:
                 # After "✅ Save" there may be nothing to add; if they've heard nothing at all, say something
-                # (the receipt is something).
+                # (its ✓ lines are something).
                 answer = "" if self.session(account).sent > sent_before or record else "…"
             await self._stop_typing(account, typing, quiet)  # before the answer, so no refresh can land after it
             asked = text
@@ -512,7 +509,7 @@ class Agent:
                 asked = WOKE.format(n=checks_before + 1)
             if answer or record:
                 run = "" if quiet else TASK.get() or ""
-                await self.send(account, answer, record=record, run=run)
+                await self.send(account, answer, run=run)
             account.transcript({"kind": "answer", "text": answer, **({"ended": ended} if ended else {})})
             context.record_turn(account, topic, asked, answer, record)
             # The task's last request, still cached in the person's slot: the topic's title and memory entry are
@@ -703,11 +700,11 @@ class Agent:
                         "result": result.text[:4000],
                         "error": result.error,
                         # What it changed, as the record has it (SPEC §4 "What a request did")
-                        **({"did": receipt(ctx.task.record[before:])} if len(ctx.task.record) > before else {}),
+                        **({"did": action_lines(ctx.task.record[before:])} if len(ctx.task.record) > before else {}),
                     }
                 )
                 # Every call, in its topic, a wakeup's too (SPEC §4.1, §7.4 "What sha did")
-                lines = receipt(ctx.task.record[before:]) or [
+                lines = action_lines(ctx.task.record[before:]) or [
                     messages.call_line(call.name, _args(call.arguments), result.error)
                 ]
                 for line in lines:
@@ -751,20 +748,20 @@ def after_task(prompt: list[dict], answer: str, question: str) -> list[dict]:
 
 def out_of_steps(record: list[str]) -> str:
     """The answer when the step limit ends a task (SPEC §3.3), never the model's last words (seen: "Let me take a
-    fresh snapshot to see the current state." sent as the answer). What it did shows under it, as the receipt."""
+    fresh snapshot to see the current state." sent as the answer). What it did shows above it, as its ✓ lines."""
     return messages.TOO_MANY_STEPS if record else f"{messages.TOO_MANY_STEPS} Nothing was changed."
 
 
-MAX_RECEIPT_LINE = 200
+MAX_ACTION_LINE = 200
 
 
-def receipt(record: list[str] | None) -> list[str]:
-    """The person's view of a request's record (SPEC §4 "What a request did"): each action that changed something,
-    in the tool's own words, without the tool's name; never written by the model."""
+def action_lines(record: list[str] | None) -> list[str]:
+    """A request's record as the chat's ✓ lines (SPEC §7.4 "Action lines"): each action that changed something, in
+    the tool's own words, without the tool's name; never written by the model."""
     out = []
     for line in record or []:
         text = line.split(": ", 1)[-1].strip()
-        out.append(text if len(text) <= MAX_RECEIPT_LINE else text[: MAX_RECEIPT_LINE - 1] + "…")
+        out.append(text if len(text) <= MAX_ACTION_LINE else text[: MAX_ACTION_LINE - 1] + "…")
     return out
 
 

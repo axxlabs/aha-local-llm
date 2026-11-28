@@ -106,12 +106,13 @@ async def test_out_of_steps_says_what_was_done_not_the_models_last_words(agent, 
     await settle(agent)
     [saved] = person(accounts).load_memory()
     assert chat.texts()[-1] == messages.TOO_MANY_STEPS
-    assert chat.sent[-1].record == [f"Saved [{saved['id']}]: Likes tea"]  # the receipt, not the model's words
+    assert chat.acts[0] == f"Saved [{saved['id']}]: Likes tea"  # what was done, not the model's words
+    assert not any("coffee" in a for a in chat.acts)  # declined: nothing was done
 
 
-async def test_every_change_shows_under_the_answer_even_the_ones_the_answer_leaves_out(agent, llm, chat, accounts):
+async def test_every_change_shows_in_the_chat_even_the_ones_the_answer_leaves_out(agent, llm, chat, accounts):
     """Seen 2026-11-26: a background task was started, cancelled and started again in one request; the answer said
-    only that one was set up. The receipt is the tool calls', so what was done shows, in the tool's words (SPEC §4)."""
+    only that one was set up. The ✓ lines are the tool calls', so what was done shows, in the tool's words (SPEC §4)."""
     from aha_local.tools import background
 
     background.register(agent.registry)
@@ -122,7 +123,6 @@ async def test_every_change_shows_under_the_answer_even_the_ones_the_answer_leav
     card = await chat.next()
     await say(agent, "ok", button=card.buttons[0].id)
     await settle(agent)
-    answer = chat.sent[-1]
-    assert answer.text == "I'll keep an eye out."
-    assert [line.split(" ", 2)[:2] for line in answer.record] == [["Set", "topic"]]
-    assert "Reply from Natalia" in answer.record[0]
+    assert chat.sent[-1].text == "I'll keep an eye out."
+    assert [line.split(" ", 2)[:2] for line in chat.acts] == [["Set", "topic"]]
+    assert "Reply from Natalia" in chat.acts[0]
