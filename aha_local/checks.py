@@ -22,7 +22,7 @@ FROM_SCRATCH = (
 
 def retry(instruction: str) -> str:
     """What the model is told when a draft goes back: the problem and what to do, then the same closing."""
-    return f"[aha check] {instruction} {FROM_SCRATCH}"
+    return f"[SHA check] {instruction} {FROM_SCRATCH}"
 
 
 @dataclass(frozen=True)

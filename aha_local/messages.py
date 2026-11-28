@@ -43,7 +43,7 @@ SIGNATURES = {
 }
 SEPARATORS = {"email": "\n\n", "chat": "\n", "event": "\n\n"}
 # Not \b at the start: an older chat signature opens with "(_Written", and "_" is a word character.
-ALREADY_SIGNED = re.compile(r"(?<![a-z])(?:written|created) by (?:aha|sha)\b", re.I)
+ALREADY_SIGNED = re.compile(r"(?<![a-z])(?:written|created) by sha\b", re.I)
 
 
 def signature(name: str, medium: str = "email") -> str:

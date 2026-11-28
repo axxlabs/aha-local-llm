@@ -47,7 +47,7 @@ async def conversation_search(args: dict, ctx: ToolContext) -> ToolResult:
     if hits:
         out.append("What was said (newest matches first):")
         out += [
-            f"{e.get('ts', '')[:16]} {'User' if e['kind'] == 'user' else 'aha'}: {e['text'][:500]}"
+            f"{e.get('ts', '')[:16]} {'User' if e['kind'] == 'user' else 'SHA'}: {e['text'][:500]}"
             for _, e in hits[:MAX_HITS]
         ]
     return ToolResult("\n".join(out))

@@ -19,8 +19,8 @@ _MARKERS = [
     (re.compile(r"\[\s*new\s+message\s+from\s+the\s+user", re.I), "(quoted text) new message from the user"),
     (re.compile(r"<\s*(/?)\s*context\s*>", re.I), r"‹\1context›"),
     (re.compile(r"\[\s*background\s+task\s+you\s+set\s+up", re.I), "(quoted text) background task you set up"),
-    (re.compile(r"\[\s*(?:aha!?|sha)['’]s\s+record", re.I), "(quoted text) SHA's record"),
-    (re.compile(r"\[\s*(?:aha!?|sha)\s+added\s+the", re.I), "(quoted text) SHA added the"),
+    (re.compile(r"\[\s*sha['’]s\s+record", re.I), "(quoted text) SHA's record"),
+    (re.compile(r"\[\s*sha\s+added\s+the", re.I), "(quoted text) SHA added the"),
     (re.compile(r"\(\s*dates,\s*worked\s+out\s+by\s+the\s+computer", re.I), "(quoted text: dates worked out by"),
 ]
 

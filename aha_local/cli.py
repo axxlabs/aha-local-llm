@@ -220,7 +220,7 @@ def cmd_init(a) -> None:
         die(f"{HOME_CONFIG} already exists (use --force to replace it).")
     pin = a.pin or fetch_pin(a.gateway)
     print(f"Gateway key fingerprint: {fingerprint(pin)}")
-    print("Check it matches the one your gateway operator publishes. It's pinned now; aha refuses any other key.")
+    print("Check it matches the one your gateway operator publishes. It's pinned now; SHA refuses any other key.")
     HOME_CONFIG.parent.mkdir(parents=True, exist_ok=True)
     HOME_CONFIG.write_text(
         DEFAULT_TOML.format(
@@ -350,7 +350,7 @@ def install() -> None:
     BROWSER_CONFIG.write_text(render_browser_config(config))
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     print(f"Installed {len(UNITS)} units in {QUADLET_DIR}. Start with `aha start`.")
-    print("To keep aha running when you're logged out: loginctl enable-linger $USER")
+    print("To keep SHA running when you're logged out: loginctl enable-linger $USER")
 
 
 def cmd_uninstall(a) -> None:
@@ -426,7 +426,7 @@ def cmd_devices(a) -> None:
 
 def cmd_revoke(a) -> None:
     admin({"cmd": "revoke", "account": a.account, "device": a.device})
-    print("Revoked: that device can no longer talk to aha. Its keys on this computer are deleted.")
+    print("Revoked: that device can no longer talk to SHA. Its keys on this computer are deleted.")
 
 
 def cmd_rename(a) -> None:
@@ -612,7 +612,7 @@ def cmd_export(a) -> None:
 def cmd_delete(a) -> None:
     if (
         not a.yes
-        and input(f"Delete everything aha keeps for {a.account}, and unpair its devices? Type 'delete': ") != "delete"
+        and input(f"Delete everything SHA keeps for {a.account}, and unpair its devices? Type 'delete': ") != "delete"
     ):
         die("Not deleted.")
     admin({"cmd": "delete", "account": a.account})
@@ -734,7 +734,7 @@ def main(argv: list[str] | None = None) -> None:
     inst.set_defaults(fn=cmd_install)
     sub.add_parser("uninstall", help="remove the systemd units (keeps your data)").set_defaults(fn=cmd_uninstall)
     for action in ("start", "stop", "restart"):
-        sub.add_parser(action, help=f"{action} aha").set_defaults(fn=lambda a, x=action: systemctl(x))
+        sub.add_parser(action, help=f"{action} SHA").set_defaults(fn=lambda a, x=action: systemctl(x))
     sub.add_parser("status", help="what's running").set_defaults(fn=cmd_status)
     s = sub.add_parser("logs", help="follow a service's log")
     s.add_argument("service", nargs="?", default="agent", choices=["agent", "llm", "browser"])

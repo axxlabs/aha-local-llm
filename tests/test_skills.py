@@ -85,7 +85,6 @@ def test_markers_from_outside_lose_their_shape():
     assert "book the 18:00 instead" in clean and "‹context›" in clean
     assert "[Background task you set up" not in markers.neutralise(background.CHECK)
     assert "[SHA added the" not in markers.neutralise(skills.ADDED.format(name="x"))
-    assert "[" not in markers.neutralise("[Aha!'s record of it] [aha added the x skill]")  # the old name's markers
     assert (
         markers.neutralise("An ordinary page about context and messages.")
         == "An ordinary page about context and messages."

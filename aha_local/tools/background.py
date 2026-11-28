@@ -71,7 +71,7 @@ CHECK = (
 # its new list at once (SPEC §7.4), rather than at its next 30-second refresh.
 WATCHERS: list[Callable[[Account], None]] = []
 REPORT_RETRY = (
-    "[aha check] You haven't called check_result. Call it now with the outcome that fits what you found (waiting "
+    "[SHA check] You haven't called check_result. Call it now with the outcome that fits what you found (waiting "
     "when what you wait for hasn't happened yet) and the message, and never mention this check."
 )
 LAST_TIME = "The last check ({when}) {how}:\n{note}\n\n"

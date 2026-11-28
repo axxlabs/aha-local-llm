@@ -113,7 +113,7 @@ def build(
 
 
 def versions(app: str, aha: str, model: str) -> dict[str, str]:
-    return {"SHA app": app[:20], "aha": aha[:20], "model": model[:60]}
+    return {"SHA app": app[:20], "SHA": aha[:20], "model": model[:60]}
 
 
 def parse_count(value: object) -> int:
