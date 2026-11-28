@@ -99,12 +99,24 @@ def active_topics(account: Account) -> str:
     return ("Topics going on in the background:\n" + "\n".join(lines) + "\n\n") if lines else ""
 
 
+CUT = "[{count} earlier messages of this topic aren't shown here; topic_read {topic} reads them]\n\n"
+
+
 def topic_turns(turns: list[dict], topic: int) -> list[dict]:
-    """The turns of topic `topic`, the newest that fit the budget."""
-    kept = [t for t in turns if t.get("topic") == topic]
-    while kept and estimate(kept) > TURNS_BUDGET:
-        kept = kept[2:]
-    return kept
+    """The turns of topic `topic` within the budget: its first exchange always (the goal and its limits, SPEC §4.1),
+    then the newest that fit. Where turns were left out, the first one after the gap says so, with how to read them
+    (the harness's words, only when something was cut)."""
+    mine = [t for t in turns if t.get("topic") == topic]
+    if estimate(mine) <= TURNS_BUDGET:
+        return mine
+    first, rest = mine[:2], mine[2:]
+    cut = 0
+    while rest and estimate(first + rest) > TURNS_BUDGET:
+        rest, cut = rest[2:], cut + 2
+    if not rest:
+        return first
+    head = {**rest[0], "content": CUT.format(count=cut, topic=topic) + rest[0]["content"]}
+    return [*first, head, *rest[1:]]
 
 
 def build(

@@ -147,18 +147,33 @@ class CacheStats:
     a run's first call (where a switch of person or topic costs), its later steps, a wakeup's first call and later
     steps, and the title question. Since the agent started; every call is logged too."""
 
-    calls: dict[str, list[int]] = field(default_factory=dict)  # kind → [calls, prompt tokens, cached tokens]
+    # kind → [calls, prompt tokens, cached tokens, ms reading the prompt]
+    calls: dict[str, list[float]] = field(default_factory=dict)
 
-    def add(self, kind: str, prompt: int, cached: int) -> None:
-        c = self.calls.setdefault(kind, [0, 0, 0])
-        c[0], c[1], c[2] = c[0] + 1, c[1] + max(prompt, 0), c[2] + max(cached, 0)
+    def add(self, kind: str, prompt: int, cached: int, read_ms: float = 0) -> None:
+        c = self.calls.setdefault(kind, [0, 0, 0, 0.0])
+        c[0], c[1], c[2], c[3] = c[0] + 1, c[1] + max(prompt, 0), c[2] + max(cached, 0), c[3] + max(read_ms, 0)
         rate = round(100 * cached / prompt) if prompt > 0 else 0
-        log.info("cache %s: %d of %d prompt tokens cached (%d%%)", kind, cached, prompt, rate)
+        log.info(
+            "cache %s: %d of %d prompt tokens cached (%d%%), %d read in %.1f s",
+            kind,
+            cached,
+            prompt,
+            rate,
+            max(prompt - cached, 0),
+            read_ms / 1000,
+        )
 
     def summary(self) -> dict[str, dict[str, int]]:
         return {
-            k: {"calls": n, "prompt": p, "cached": c, "rate": round(100 * c / p) if p else 0}
-            for k, (n, p, c) in self.calls.items()
+            k: {
+                "calls": int(n),
+                "prompt": int(p),
+                "cached": int(c),
+                "rate": round(100 * c / p) if p else 0,
+                "read_ms": round(ms / n) if n else 0,  # the average time reading the prompt
+            }
+            for k, (n, p, c, ms) in self.calls.items()
         }
 
 
@@ -569,7 +584,7 @@ class Agent:
             )
         except ModelUnavailable:
             return
-        self.cache.add("title", reply.prompt_tokens, reply.cached_tokens)
+        self.cache.add("title", reply.prompt_tokens, reply.cached_tokens, reply.timings.get("prompt_ms", 0))
         found = folding.parse(reply.content or "")
         entry = topics.set_title(account, topic, found.title) if found.title else topics.get(account, topic)
         title = (entry or {}).get("title", "")
@@ -677,7 +692,7 @@ class Agent:
             self.session(account).last_prompt = msgs  # the title is asked at its end (SPEC §7.4 "Folding")
             kind = ("wake" if job else "request") + (" first" if not called else " step")
             called = True
-            self.cache.add(kind, reply.prompt_tokens, reply.cached_tokens)
+            self.cache.add(kind, reply.prompt_tokens, reply.cached_tokens, reply.timings.get("prompt_ms", 0))
             await record(model_record(self.llm.model, reply))
             if not reply.tool_calls:
                 answer = reply.content or ""

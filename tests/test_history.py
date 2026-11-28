@@ -212,3 +212,26 @@ def test_the_date_comes_before_the_memory(tmp_path):
     memory.add_fact(acct, "Lives in Lisbon")
     block = context.context_block(acct, "Europe/London", "Home", dt.datetime(2026, 11, 25, 9, 0))
     assert block.index("Today: 25/11/2026") < block.index("What you remember") < block.index("Lisbon")
+
+
+def test_a_long_topic_keeps_its_first_exchange_and_says_what_was_cut():
+    """SPEC §4.1: past the budget, the topic's first exchange (the goal and its limits) stays, then the newest
+    turns; the first turn after the gap says how many were left out and how to read them."""
+    long = "x" * 8000
+    turns = []
+    for i in range(30):
+        turns += [
+            {"role": "user", "content": f"ask {i} {long}", "topic": 7},
+            {"role": "assistant", "content": f"answer {i}", "topic": 7},
+        ]
+    turns.insert(0, {"role": "user", "content": "other topic", "topic": 8})
+    kept = context.topic_turns(turns, 7)
+    assert kept[0]["content"].startswith("ask 0 ") and kept[1]["content"] == "answer 0"
+    assert (
+        kept[2]["content"].startswith("[") and "earlier messages of this topic aren't shown here" in kept[2]["content"]
+    )
+    assert "topic_read 7" in kept[2]["content"] and kept[-1]["content"] == "answer 29"
+    assert [t["role"] for t in kept] == ["user", "assistant"] * (len(kept) // 2)
+    assert context.estimate(kept) <= context.TURNS_BUDGET + 100
+    short = context.topic_turns(turns[:5], 7)
+    assert not any("aren't shown" in t["content"] for t in short)  # nothing cut: nothing said

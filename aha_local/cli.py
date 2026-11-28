@@ -381,8 +381,9 @@ def cmd_status(a) -> None:
         )
         if cache := st.get("cache"):  # the model server's cache hits since the agent started (SPEC §3.2)
             order = ["request first", "request step", "wake first", "wake step", "title"]
-            parts = [f"{k} {v['rate']}% ({v['calls']})" for k in order if (v := cache.get(k))]
-            print("cache    " + " · ".join(parts) + "  (cached share of prompt tokens, calls; since start)")
+            got = [(k, v) for k in order if (v := cache.get(k))]
+            parts = [f"{k} {v['rate']}% {v.get('read_ms', 0) / 1000:.1f}s ({v['calls']})" for k, v in got]
+            print("cache    " + " · ".join(parts) + "  (cached share, average prompt reading time, calls; since start)")
 
 
 def cmd_logs(a) -> None:
