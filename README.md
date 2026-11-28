@@ -17,7 +17,7 @@ and remembers what you approve. Each person in the household has their own accou
 
 This repo is the part that runs on your computer. Messages reach it through an
 [sha gateway](https://github.com/axxlabs/aha-gateway) (self-hosted, or the hosted one for $5/month per user),
-which carries encrypted messages it can't read and keeps nothing. Website: https://axxlabs.ai/aha/
+which carries encrypted messages it can't read and keeps nothing. Website: https://axxlabs.ai/sha/
 
 ## Install with a coding agent (easiest)
 
