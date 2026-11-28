@@ -92,8 +92,6 @@ class Device:
         return Cert.model_validate(self.cert) if self.cert else None
 
 
-
-
 @dataclass
 class Account:
     id: str

@@ -486,7 +486,12 @@ class Channel:
         items = fit(r.account.items(after=after, since=since, limit=SYNC_LIMIT))
         working = self.agent is not None and self.agent.owes_reply(r.account)  # it may have missed `typing`
         start = r.account.history_start()
-        await r.reply({"t": "sync", "items": items, "last": r.account.seq, "start": start, "working": working})
+        # Every topic's title and state, whatever the device keeps: a topic scheduled long ago still shows its strip
+        # and its state icon (SPEC §4.1).
+        known = [topics.for_app(e) for e in topics.all_topics(r.account)]
+        await r.reply(
+            {"t": "sync", "items": items, "last": r.account.seq, "start": start, "working": working, "topics": known}
+        )
 
     async def _history(self, r: Request) -> None:
         before, limit = r.msg.get("before"), r.msg.get("limit")
