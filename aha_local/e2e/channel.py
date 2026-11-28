@@ -269,13 +269,12 @@ class Channel:
     async def state(self, account: Account, approval_id: str, state: str) -> None:
         await self.publish(account, {"t": "approval_state", "id": approval_id, "state": state})
 
-    async def typing(self, account: Account, on: bool, queued: bool = False) -> None:
-        """ "sha is working…", or, while it waits for another person's request to finish, that it's queued."""
+    async def typing(self, account: Account, on: bool, queued: bool = False, wake: bool = False) -> None:
+        """ "sha is working…", or, while it waits for another person's request to finish, that it's queued.
+        `wake`: a topic's wakeup, shown on its line only (SPEC §4.1)."""
         topic = topics.TOPIC.get()  # the topic it works in: the app shows "working…" there (SPEC §4.1)
-        await self.to_devices(
-            account,
-            {"t": "typing", "on": on, **({"queued": True} if queued else {}), **({"topic": topic} if topic else {})},
-        )
+        frame = {"t": "typing", "on": on, **({"queued": True} if queued else {}), **({"topic": topic} if topic else {})}
+        await self.to_devices(account, {**frame, **({"wake": True} if wake else {})})
 
     async def publish(self, account: Account, item: dict, notify: bool = False, live: dict | None = None) -> dict:
         """Number the item, keep it in the transcript, send it to every device of the account. `live`: what the

@@ -142,7 +142,10 @@ class Chat:
     async def text(self, account, text) -> None:
         await self.message(account, text)
 
-    async def typing(self, account, on, queued=False) -> None:
+    async def typing(self, account, on, queued=False, wake=False) -> None:
+        if wake:  # a wakeup: only its topic's line shows it (SPEC §4.1)
+            self.woke = [*getattr(self, "woke", []), on]
+            return
         self.typed.append("queued" if on and queued else on)
 
     async def card(self, account, card) -> None:

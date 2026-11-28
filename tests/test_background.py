@@ -126,6 +126,7 @@ async def test_wakeups_wait_for_idle_and_a_quiet_one_leaves_only_its_action_line
     assert "Tell me when Sam answers about Saturday" in str(sent)  # the topic's own turns are in view
     assert agent.last_input == since  # a wakeup is no input
     assert not chat.sent and True not in chat.typed  # no message, no "working…"
+    assert chat.woke == [True, False]  # only its topic's line says it works
     assert chat.acts and chat.details == 0  # only its ✓ lines show
     s = topics.get(fe, n)["schedule"]
     assert s["last"] == "no reply from Sam yet" and s["checks"] == 1

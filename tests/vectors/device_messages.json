@@ -130,7 +130,8 @@
     "typing": [
       "on",
       "queued?",
-      "topic?"
+      "topic?",
+      "wake?"
     ],
     "sync": [
       "items",

@@ -63,7 +63,7 @@ class AgentOut(Protocol):
     async def steps(self, account: Account) -> None: ...  # the request's Details line (SPEC §7.4 "Details")
     async def act(self, account: Account, text: str) -> None: ...  # one thing a request did, as it happens
     async def step(self, account: Account, event: dict) -> None: ...  # one of its records, as it happens
-    async def typing(self, account: Account, on: bool, queued: bool = False) -> None: ...
+    async def typing(self, account: Account, on: bool, queued: bool = False, wake: bool = False) -> None: ...
     async def card(self, account: Account, card: dict) -> None: ...
     async def state(self, account: Account, approval_id: str, state: str) -> None: ...
     async def text(self, account: Account, text: str) -> None: ...
@@ -428,17 +428,19 @@ class Agent:
             await asyncio.sleep(self.typing_every)
 
     async def _stop_typing(self, account: Account, typing: asyncio.Task, quiet: bool = False) -> None:
-        """Said off at the end of every run, a quiet check's too: harmless when it was never on."""
+        """Said off at the end of every run, a wakeup's too: harmless when it was never on."""
         typing.cancel()
-        await self._typing_frame(account, False)
+        await self._typing_frame(account, False, wake=quiet)
 
     def queued(self, account: Account) -> bool:
         """Its task waits for the model while another person's runs (SPEC §3.3): the app says so."""
         return self.llm.queued(account.address)
 
-    async def _typing_frame(self, account: Account, on: bool, queued: bool = False) -> None:
+    async def _typing_frame(self, account: Account, on: bool, queued: bool = False, wake: bool = False) -> None:
+        """`wake`: a topic's wakeup works (or stopped): the app shows it on the topic's line only, no "working…"
+        and no Stop (SPEC §4.1 "Icons")."""
         try:
-            await self.out.typing(account, on, queued)
+            await self.out.typing(account, on, queued, wake)
         except Exception:
             log.warning("couldn't send a typing message")
 
@@ -455,7 +457,7 @@ class Agent:
         quiet = job is not None  # a wakeup: no "working…", no Details line; its ✓ lines and cards still show
         record: list[str] = []  # what it changed, kept with its answer (SPEC §4 "What a request did")
         report: dict = {}  # a background check's check_result: {"outcome", "message"} (SPEC §3.4)
-        typing = asyncio.create_task(asyncio.sleep(0) if quiet else self._typing(account))
+        typing = asyncio.create_task(self._typing_frame(account, True, wake=True) if quiet else self._typing(account))
         # The model is this person's for the whole task, its title and summary included: its cache stays theirs
         # (SPEC §3.3 "One task at a time"). Waiting for the turn shows as "finishing someone else's request".
         turn = self._turn(account)
