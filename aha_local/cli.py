@@ -379,6 +379,10 @@ def cmd_status(a) -> None:
             f"\ntools    {st['tools']}\nrunning  {st['running']} task(s)\nversion  {st['version']}"
             f"\ncomputer {st.get('fingerprint', '?')}  (fingerprint: compare with the app's Settings)"
         )
+        if cache := st.get("cache"):  # the model server's cache hits since the agent started (SPEC §3.2)
+            order = ["request first", "request step", "wake first", "wake step", "title"]
+            parts = [f"{k} {v['rate']}% ({v['calls']})" for k in order if (v := cache.get(k))]
+            print("cache    " + " · ".join(parts) + "  (cached share of prompt tokens, calls; since start)")
 
 
 def cmd_logs(a) -> None:

@@ -436,3 +436,14 @@ async def test_tool_use_is_said_as_it_happens_once_per_run(agent, llm, chat):
     await say(agent, "where is my parcel?")
     await settle(agent)
     assert chat.tools == ["conversation history", "screenshot"]
+
+
+async def test_cache_hits_are_counted_by_kind_of_call(agent, llm, chat):
+    """SPEC §3.2 "Cache slots": every model call's cached share is logged and counted, by kind: a run's first call,
+    its later steps, and the title question (wakeups likewise, as wake first / wake step)."""
+    llm.call("current_time")
+    llm.answer("It's noon.")
+    await say(agent, "what time is it?")
+    await settle(agent)
+    calls = {k: v["calls"] for k, v in agent.cache.summary().items()}
+    assert calls == {"request first": 1, "request step": 1, "title": 1}

@@ -153,6 +153,7 @@ class Service:
                 "cards": sum(1 for a in self.accounts.all() if self.agent.approvals.pending_for(a.address)),
                 "idle": int(time.monotonic() - self.agent.last_activity),
                 "uptime": int(time.time() - self.started),
+                "cache": self.agent.cache.summary(),
             }
         if cmd == "pair":
             name = str(req.get("name", "")).strip()
