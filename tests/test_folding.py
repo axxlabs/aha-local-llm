@@ -67,7 +67,7 @@ async def test_a_task_that_stopped_stays_open_and_isnt_titled(agent, llm, chat, 
     monkeypatch.setattr(agent, "solve", broken)
     await agent.inbound(fe, "do the thing")
     await settle(agent)
-    assert chat.sent[-1].text == messages.FAILED and chat.sent[-1].open == "stopped"
+    assert chat.sent[-1].text == messages.FAILED
     assert topics.get(fe, chat.sent[-1].topic)["title"] == ""
 
 

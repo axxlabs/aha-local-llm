@@ -26,7 +26,7 @@ class Action:
     url: str = ""  # for open
     reason: str = ""  # why it's blocked
     # A send's kind (email, draft, calendar…) and who receives it (an "always" tick is for that kind and those people);
-    # None: no one in particular (a memory, a background task, a deletion, a message typed on a site)
+    # None: no one in particular (a memory, a topic deferred, a deletion, a message typed on a site)
     what: str = ""
     to: tuple[str, ...] | None = None
     # A message typed on a site: the chat it goes to, read from the page by the harness (policy/chats.py), never

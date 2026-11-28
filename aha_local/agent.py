@@ -58,8 +58,6 @@ class AgentOut(Protocol):
         account: Account,
         text: str,
         image: Image | None = None,
-        open: str = "",
-        task: dict | None = None,
         record: list[str] | None = None,
         run: str = "",
     ) -> None: ...
@@ -225,7 +223,7 @@ class Agent:
         return any(self.state(a).model_busy for a in self.sessions)
 
     def working(self) -> bool:
-        """A person's request is being worked on (the Tasks panel says so)."""
+        """A person's request is being worked on (the idle line says so)."""
         return any(self.state(a).owes_reply for a in self.sessions)
 
     def idle(self, now: float | None = None) -> bool:
@@ -256,8 +254,6 @@ class Agent:
         account: Account,
         text: str,
         image: Image | None = None,
-        open: str = "",
-        task: dict | None = None,
         record: list[str] | None = None,
         run: str = "",
     ) -> None:
@@ -266,7 +262,7 @@ class Agent:
         self.last_activity = time.monotonic()
         self.session(account).sent += 1
         account.transcript({"kind": "out", "text": text, "image": bool(image)})
-        await self.out.message(account, text[:20_000], image, open, task, receipt(record), run)
+        await self.out.message(account, text[:20_000], image, receipt(record), run)
 
     # ---- inbound
 
@@ -511,9 +507,8 @@ class Agent:
                 answer = report.get("message", answer)
                 asked = WOKE.format(n=checks_before + 1)
             if answer or record:
-                # Unfinished stays open (SPEC §7.4 "Folding"): a task that stopped.
                 run = "" if quiet else TASK.get() or ""
-                await self.send(account, answer, open="stopped" if stopped else "", record=record, run=run)
+                await self.send(account, answer, record=record, run=run)
             account.transcript({"kind": "answer", "text": answer, **({"ended": ended} if ended else {})})
             context.record_turn(account, topic, asked, answer, record)
             # The task's last request, still cached in the person's slot: the topic's title and memory entry are

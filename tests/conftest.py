@@ -113,7 +113,7 @@ class Chat:
         self.events: list[dict] = []  # the records sent live, for the Details line
         self.details = 0  # Details lines
 
-    async def message(self, account, text, image=None, open="", task=None, record=None, run="") -> None:
+    async def message(self, account, text, image=None, record=None, run="") -> None:
         self.order.append(("msg", text))
         topic = topics.TOPIC.get()  # the topic it was sent in, as the real channel tags it (SPEC §4.1)
         self.sent.append(
@@ -122,8 +122,6 @@ class Chat:
                 buttons=[],
                 image=image,
                 card=None,
-                open=open,
-                task=task,
                 record=record or [],
                 run=run,
                 topic=topic,

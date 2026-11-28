@@ -54,34 +54,6 @@ def allow_key(action: Action) -> str:
     return f"{action.kind}:{action.site}" if action.site else action.kind
 
 
-ALLOW_WORDS = {
-    "search": "Search Google",
-    "type": "Type and fill in forms on {x}",
-    "open": "Open {x}",
-    "message": "Send messages on {x}",
-    "email": "Send email to {x}",
-    "draft": "Save email drafts to {x}",
-    "calendar": "Add calendar events (guests: {x})",
-    "calendar_change": "Change calendar events (guests: {x})",
-    "calendar_delete": "Delete calendar events",
-    "memory": "Save memories",
-    "memory_update": "Change memories",
-    "forget": "Forget memories",
-    "task": "Send topics to the background",
-    "other": "Run other browser actions on {x}",
-}
-
-
-def allow_label(key: str) -> str:
-    """The person's words for an "always" (the Tasks panel's approved permissions)."""
-    kind, _, x = key.partition(":")
-    if kind == "message" and ":" in x:
-        site, _, chat = x.partition(":")
-        return f"Send messages to {chat} on {site}"
-    words = ALLOW_WORDS.get(kind, kind.replace("_", " ").capitalize())
-    return words.replace("{x}", x.replace(",", ", ")) if x else words.replace(" to {x}", "").replace(" on {x}", "")
-
-
 def check(ctx: ToolContext, action: Action, tool: str) -> Verdict:
     """The gate's verdict, then the task's "always": a card the person ticked runs from then on. A run because of
     trust or an "always" is audited (the tool and what it covers, never the values)."""
@@ -156,7 +128,7 @@ async def send(
     what: str = "",
 ) -> tuple[Decision, ToolResult | None]:
     """Something that goes out in the person's name or changes what they keep (an email, an event, a memory, a
-    background task): a `send` for the gate (SPEC §5.2 rule 2), always a card, trusted or not, unless the person
+    topic deferred): a `send` for the gate (SPEC §5.2 rule 2), always a card, trusted or not, unless the person
     ticked "always" on one for the same kind and people in this task (`to`: the addresses; `what`: the kind
     when not the card's, as changing an event). Then it runs as it is."""
     action = Action("send", what=what or kind, to=None if to is None else tuple(to))

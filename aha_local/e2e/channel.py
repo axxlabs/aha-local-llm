@@ -184,7 +184,7 @@ class Channel:
         self.history_days = history_days
         self.push_preview = push_preview
         self.agent = None  # set by the service once the agent exists (it needs this channel as its output)
-        self.background = None  # the background tasks' runner (tools.background.Runner), set by the service
+        self.background = None  # the topics' wakeup runner (tools.background.Runner), set by the service
         self.online: set[str] = set()
         self.pairings: dict[str, PairingState] = {}
         self._cert_waiters: dict[str, asyncio.Future] = {}
@@ -205,8 +205,6 @@ class Channel:
         account: Account,
         text: str,
         image: Image | None = None,
-        open: str = "",
-        task: dict | None = None,
         record: list[str] | None = None,
         run: str = "",
     ) -> None:
@@ -217,8 +215,6 @@ class Channel:
             item["run"] = run
         if image is not None:
             item["image"] = image.to_dict()
-        if open:  # "stopped": the app keeps it unfolded after a break (SPEC §7.4 "Folding")
-            item["open"] = open
         await self.publish(account, item, notify=True)
 
     async def act(self, account: Account, text: str) -> None:

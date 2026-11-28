@@ -36,7 +36,7 @@ class Approvals:
     def __init__(self, answer: Decision) -> None:
         self.answer, self.asked = answer, []
 
-    async def ask(self, account, kind, title, fields, image=None, why="", always=False, task=None):
+    async def ask(self, account, kind, title, fields, image=None, why="", always=False):
         self.asked.append((kind, title, [f.value for f in fields], why))
         return self.answer
 
@@ -89,5 +89,3 @@ async def test_always_allow_covers_the_same_action_for_the_rest_of_the_request()
     # Chats are user-driven (policy/chats.py): no "always" for a message whose chat the page didn't name, or typing
     # on a chat site
     assert guard.allow_key(Action("send", "linkedin.com")) == guard.allow_key(Action("type", "whatsapp.com")) == ""
-    assert guard.allow_label("message:whatsapp.com") == "Send messages on whatsapp.com"  # an old one, still named
-    assert guard.allow_label("search") == "Search Google"

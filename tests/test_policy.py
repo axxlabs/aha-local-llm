@@ -233,10 +233,9 @@ def test_chats_are_user_driven():
     # "always" on a chat message covers the chat the page named, and only that one
     sam = guard.allow_key(Action("send", "whatsapp.com", chat="Sam"))
     assert sam == "message:whatsapp.com:Sam" != guard.allow_key(Action("send", "whatsapp.com", chat="Ana"))
-    assert guard.allow_label(sam) == "Send messages to Sam on whatsapp.com"
     assert decide(Action("type", "linkedin.com"), trusted).outcome == "run"  # not a chat site: trust still counts
     assert guard.allow_key(Action("send", what="email", to=("sam@example.com",))) == "email:sam@example.com"
-    assert guard.allow_key(Action("send", what="task")) == ""  # starting a background task: no "always" either
+    assert guard.allow_key(Action("send", what="task")) == ""  # deferring a topic: no "always" either
     assert (
         chats.clean("  Sam‮ \n Smith ") == "Sam Smith" and chats.clean(None) == "" and len(chats.clean("x" * 500)) == 80
     )

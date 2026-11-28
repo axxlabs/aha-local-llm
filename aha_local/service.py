@@ -118,7 +118,7 @@ class Service:
             if account.address not in running:
                 continue
             try:
-                await self.agent.send(account, messages.RESTARTING, open="stopped")
+                await self.agent.send(account, messages.RESTARTING)
             except Exception:
                 log.warning("couldn't tell an account that aha is restarting")
 
