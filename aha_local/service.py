@@ -11,7 +11,7 @@ import logging
 import os
 import time
 
-from . import __version__, messages, skills
+from . import __version__, messages, skills, topics
 from .accounts import Accounts
 from .agent import Agent
 from .certs import public_b64
@@ -70,7 +70,7 @@ class Service:
         self.agent = Agent(config, self.accounts, self.llm, self.registry, self.channel, self.browser)
         self.channel.agent = self.agent
         self.background = background.Runner(self.accounts, self.agent, config.timezone)
-        background.WATCHERS.append(self.channel.tasks_changed)
+        topics.WATCHERS.append(self.channel.topic_changed)
         self.channel.background = self.background  # Run now starts a check at once
         self.started = time.time()
 

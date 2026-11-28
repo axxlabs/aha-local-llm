@@ -92,11 +92,6 @@ class Device:
         return Cert.model_validate(self.cert) if self.cert else None
 
 
-RECENT = 2000  # chat items kept in memory per person: far more than one part of the chat
-
-
-def _brief(item: dict) -> dict:
-    return {k: item[k] for k in ("seq", "ts", "t", "from", "new") if k in item}
 
 
 @dataclass
@@ -110,9 +105,6 @@ class Account:
     seq: int = 0
     devices: dict[str, Device] = field(default_factory=dict)
     history_days: int | None = None  # how long the computer keeps this person's history; None: forever (§3.8.1)
-    # The latest chat items, in short (seq, ts, t, from, new): read from the transcript once, then kept up to date
-    # as items are written, so finding the current part of the chat (SPEC §7.4) never reads the whole history.
-    _recent: list[dict] | None = field(default=None, repr=False, compare=False)
 
     @property
     def address(self) -> str:
@@ -161,18 +153,6 @@ class Account:
     def transcript(self, entry: dict) -> None:
         entry = {**entry, "task": task} if (task := TASK.get()) else entry
         self.vault.append(self.dir / "transcript.jsonl", _log_line(entry))
-        if self._recent is not None and entry.get("kind") == "item" and isinstance(entry.get("item"), dict):
-            self._recent.append(_brief(entry["item"]))
-            del self._recent[:-RECENT]
-
-    def recent_items(self) -> list[dict]:
-        """The latest chat items, in short (SPEC §7.4): the transcript is read only the first time."""
-        if self._recent is None:
-            items = [
-                r["item"] for r in self.read_transcript() if r.get("kind") == "item" and isinstance(r.get("item"), dict)
-            ]
-            self._recent = [_brief(it) for it in items[-RECENT:]]
-        return list(self._recent)
 
     def audit(self, entry: dict) -> None:
         self.vault.append(self.dir / "audit.jsonl", _log_line(entry))
@@ -187,9 +167,7 @@ class Account:
         return out
 
     def items(self, after: int = 0, before: int | None = None, since: float = 0, limit: int = 10_000) -> list[dict]:
-        """Items shown in the app (messages, approval cards and their states), by sequence number."""
-        from . import numbers
-
+        """Items shown in the app (messages, approval cards and their states, topics), by sequence number."""
         out = []
         for e in self.read_transcript():
             item = e.get("item") if e.get("kind") == "item" else None
@@ -198,11 +176,6 @@ class Account:
             if since and item.get("ts", 0) < since:
                 continue
             out.append(item)
-        # A title carries its part's number (SPEC §7.4 "Topic numbers"): from numbers.json, not the item.
-        known = numbers.parts(self) if any(it.get("t") == "title" for it in out) else {}
-        out = [
-            {**it, "n": known[it["from"]]} if it.get("t") == "title" and it.get("from") in known else it for it in out
-        ]
         return out[-limit:]
 
     # ---- history length and clearing (SPEC §3.8.1)
@@ -229,7 +202,6 @@ class Account:
             return False
         cutoff = (time.time() if now is None else now) - self.history_days * 86400
         changed = self._keep_log("transcript.jsonl", cutoff)
-        self._recent = None  # read again when needed
         changed = self._keep_log("audit.jsonl", cutoff) or changed
         conv = self.load_context()
         turns = [t for t in conv.get("turns", []) if not _before(t.get("t", t.get("ts")), cutoff)]
@@ -244,7 +216,6 @@ class Account:
         """Delete the transcript, the audit and the conversation context. Sequence numbers carry on."""
         for name in ("transcript.jsonl", "audit.jsonl"):
             self.vault.rewrite(self.dir / name, [])
-        self._recent = None
         (self.dir / "context.json").unlink(missing_ok=True)
 
     def load_context(self) -> dict:

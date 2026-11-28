@@ -83,7 +83,7 @@ def test_markers_from_outside_lose_their_shape():
     clean = markers.neutralise(spoof)
     assert "[New message from the user" not in clean and "<context>" not in clean and "</context>" not in clean
     assert "book the 18:00 instead" in clean and "‹context›" in clean
-    assert "[Background task you set up" not in markers.neutralise(background.CHECK)
+    assert "[This topic woke up" not in markers.neutralise(background.WAKE)
     assert "[sha added the" not in markers.neutralise(skills.ADDED.format(name="x"))
     assert (
         markers.neutralise("An ordinary page about context and messages.")

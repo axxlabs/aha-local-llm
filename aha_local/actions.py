@@ -71,25 +71,26 @@ async def disconnect_email(account: Account, email: str, via: str) -> bool:
     return True
 
 
-def cancel_background(account: Account, task_id: str, via: str) -> bool:
-    if background.update(account, task_id, lambda e: None) is None:
+def stop_topic(account: Account, n: int, via: str) -> bool:
+    """The topic's Stop: it no longer checks on its own (SPEC §4.1)."""
+    if background.stop(account, n) is None:
         return False
-    account.audit({"background_task_cancelled": task_id, "via": via})
+    account.audit({"topic_schedule_stopped": n, "via": via})
     return True
 
 
-def edit_background(account: Account, task_id: str, changes: dict, via: str) -> str:
-    """ "" when the task was changed, else why not."""
-    if why := background.edit(account, task_id, changes):
+def edit_topic(account: Account, n: int, changes: dict, via: str) -> str:
+    """ "" when the topic's schedule was changed, else why not."""
+    if why := background.edit(account, n, changes):
         return why
-    account.audit({"background_task_edited": task_id, "fields": sorted(changes), "via": via})
+    account.audit({"topic_schedule_edited": n, "fields": sorted(changes), "via": via})
     return ""
 
 
-def run_background_now(account: Account, task_id: str, via: str) -> bool:
-    if not background.run_now(account, task_id):
+def run_topic_now(account: Account, n: int, via: str) -> bool:
+    if not background.run_now(account, n):
         return False
-    account.audit({"background_task_run_now": task_id, "via": via})
+    account.audit({"topic_run_now": n, "via": via})
     return True
 
 

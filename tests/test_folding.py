@@ -1,33 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Axxlabs Limited
-"""Topics (SPEC §7.4 "Folding"): where the topic going on starts, its title, what stays open."""
+"""A topic's title, memory and whether it waits for the person (SPEC §4.1, §7.4): asked at the end of each
+request; which topic a message goes to is the person's choice, never the model's."""
 
 from __future__ import annotations
 
-import datetime as dt
-from zoneinfo import ZoneInfo
-
-from aha_local import folding, messages
-from aha_local.llm import Reply
+from aha_local import folding, messages, topics
 
 from .conftest import person, settle
-
-LONDON = ZoneInfo("Europe/London")
-
-
-def at(day: int, hour: int, minute: int = 0) -> int:
-    return int(dt.datetime(2026, 11, day, hour, minute, tzinfo=LONDON).timestamp())
-
-
-def items(*stamps, t="msg"):
-    return [{"seq": i + 1, "ts": ts, "t": t} for i, ts in enumerate(stamps)]
-
-
-def test_a_topic_starts_at_a_new_subject_or_a_cut_never_at_a_break_in_time():
-    assert folding.segment_start(items(at(24, 9), at(24, 11, 30), at(25, 12))) == (1, at(24, 9))
-    states = [*items(at(24, 9)), {"seq": 2, "ts": at(24, 15), "t": "approval_state"}]
-    assert folding.segment_start(states) == (1, at(24, 9))  # only what the chat shows counts
-    assert folding.segment_start([]) is None
 
 
 def test_a_clean_title():
@@ -37,24 +17,48 @@ def test_a_clean_title():
     assert folding.clean("[sha app]") == "" and folding.clean("") == ""
 
 
-async def test_a_question_stays_open_and_the_title_is_asked_at_the_end_of_the_cached_prompt(agent, llm, chat, accounts):
+def test_the_reply_gives_title_waiting_and_memory():
+    T = folding.Topic
+    assert folding.parse("TITLE: Evri parcel tracking") == T("Evri parcel tracking", "", False)
+    assert folding.parse("**TITLE** - Flat Iron booking.") == T("Flat Iron booking", "", False)
+    assert folding.parse("Lisbon trip") == T("Lisbon trip", "", False)
+    assert folding.parse("TITLE: Evri parcel\nWAITING: no\nMEMORY:\n- Tracking H01\n- Collect 26/11/2026") == T(
+        "Evri parcel", "- Tracking H01\n- Collect 26/11/2026", False
+    )
+    assert folding.parse("TITLE: Trip\n**WAITING:** Yes\n**MEMORY:** none") == T("Trip", "", True)
+
+
+def test_the_question_quotes_the_message_and_never_asks_about_new_subjects():
+    asked = folding.ask("ok, let's change topics.")
+    assert "“ok, let's change topics.”" in asked and "TITLE:" in asked and "NEW" not in asked
+
+
+async def test_a_question_waits_for_the_person_and_the_title_is_asked_at_the_end_of_the_cached_prompt(
+    agent, llm, chat, accounts
+):
     fe = person(accounts)
-    fe.transcript({"kind": "item", "item": {"seq": 7, "ts": int(dt.datetime.now().timestamp()), "t": "msg"}})
-    llm.topic_reply = "SAME: Flat Iron booking\nWAITING: yes\nMEMORY: none"
-    fe.seq = 9  # the answer's chat item (the real channel numbers it as it's sent)
+    llm.topic_reply = "TITLE: Flat Iron booking\nWAITING: yes\nMEMORY: none"
     llm.answer("There are two tables free tonight. Which one would you like?")
     await agent.inbound(fe, "book Flat Iron Friday")
     await settle(agent)
-    assert chat.sent[-1].open == ""  # the model says it waits, not a "?" in its words
-    assert chat.titles == [(7, "Flat Iron booking")] and chat.waiting == [9]
+    n = chat.sent[-1].topic
+    entry = topics.get(fe, n)
+    assert entry["title"] == "Flat Iron booking" and entry["state"] == "waiting"
+    assert entry["question"] == "There are two tables free tonight. Which one would you like?"
     asked = llm.titles[0]
     assert asked[: len(llm.requests[-1]["messages"])] == llm.requests[-1]["messages"]  # same prefix: cached
     assert asked[-2] == {"role": "assistant", "content": "There are two tables free tonight. Which one would you like?"}
-    assert "First line: NEW:" in asked[-1]["content"] and "WAITING:" in asked[-1]["content"]
     assert "Reply with one line only" not in str(fe.load_context())  # never part of the conversation
+    # The person answers in the topic: it no longer waits on them.
+    llm.topic_reply = "TITLE: Flat Iron booking\nWAITING: no\nMEMORY: none"
+    llm.answer("Booked the window table.")
+    await agent.inbound(fe, "the window one", topic=n)
+    await settle(agent)
+    assert topics.get(fe, n)["state"] == "" and "question" not in topics.get(fe, n)
+    assert chat.sent[-1].topic == n
 
 
-async def test_a_task_that_stopped_stays_open_and_gets_no_title(agent, llm, chat, accounts, monkeypatch):
+async def test_a_task_that_stopped_stays_open_and_isnt_titled(agent, llm, chat, accounts, monkeypatch):
     fe = person(accounts)
 
     async def broken(*a, **k):
@@ -64,59 +68,23 @@ async def test_a_task_that_stopped_stays_open_and_gets_no_title(agent, llm, chat
     await agent.inbound(fe, "do the thing")
     await settle(agent)
     assert chat.sent[-1].text == messages.FAILED and chat.sent[-1].open == "stopped"
-    assert chat.titles == []
+    assert topics.get(fe, chat.sent[-1].topic)["title"] == ""
 
 
-def test_a_new_subject_starts_a_part():
-    T = folding.Topic
-    assert folding.parse("NEW: Evri parcel tracking") == T(True, "Evri parcel tracking", "", False)
-    assert folding.parse("SAME: Waitrose order and memories") == T(False, "Waitrose order and memories", "", False)
-    assert folding.parse("**NEW** - Flat Iron booking.") == T(True, "Flat Iron booking", "", False)
-    assert folding.parse("Lisbon trip") == T(False, "Lisbon trip", "", False)
-    assert folding.parse("SAME: Evri parcel\nWAITING: no\nMEMORY:\n- Tracking H01\n- Collect 26/11/2026") == T(
-        False, "Evri parcel", "- Tracking H01\n- Collect 26/11/2026", False
-    )
-    assert folding.parse("NEW: Trip\n**WAITING:** Yes\n**MEMORY:** none") == T(True, "Trip", "", True)
-    shown = items(at(24, 10), at(24, 10, 5), at(24, 10, 49), at(24, 10, 50))
-    topic = {"seq": 9, "ts": at(24, 10, 50), "t": "title", "from": 3, "new": True}
-    assert folding.segment_start([*shown, topic]) == (3, at(24, 10, 49))  # from the new subject on
-
-
-async def test_when_the_model_says_new_the_part_starts_at_the_persons_message(agent, llm, chat, accounts):
+async def test_each_topic_sees_only_its_own_turns(agent, llm, chat, accounts):
+    """A request sees its own topic only (SPEC §4.1 "Context"): another topic's messages aren't in view."""
     fe = person(accounts)
-    now = int(dt.datetime.now().timestamp())
-    fe.transcript({"kind": "item", "item": {"seq": 7, "ts": now - 600, "t": "msg"}})
-    fe.seq = 8  # the person's new message was item 8
-    fe.transcript({"kind": "item", "item": {"seq": 8, "ts": now, "t": "msg"}})
-
-    async def titled(messages, tools=None, max_tokens=4096, who=None, tool_choice="auto", thinking=True):
-        if tool_choice == "none":
-            return Reply("NEW: Email search")
-        return await plain(messages, tools, max_tokens, who)
-
-    plain = llm.chat
-    llm.chat = titled
-    llm.answer("Nothing new in your inbox.")
-    await agent.inbound(fe, "any new emails?")
+    llm.answer("The parcel is at the depot.")
+    await agent.inbound(fe, "where is my evri parcel")
     await settle(agent)
-    assert chat.titles == [(8, "Email search", "new")]
-
-
-def test_the_question_quotes_the_message_and_explains_new():
-    assert "“ok, let's change topics.”" in folding.ask("10:24", "ok, let's change topics.")
-    assert "two “who is …” questions about different people are two subjects" in folding.ask("10:24", "x")
-
-
-def test_the_current_part_is_found_without_reading_the_whole_history(accounts, monkeypatch):
-    """Review: every task read the whole transcript to find where the part starts; now only the first time."""
-    fe = person(accounts)
-    fe.transcript({"kind": "item", "item": {"seq": 1, "ts": at(24, 9), "t": "msg", "text": "hi"}})
-    assert [i["seq"] for i in fe.recent_items()] == [1]
-    reads = []
-    monkeypatch.setattr(type(fe), "read_transcript", lambda self: reads.append(1) or [])
-    fe.transcript({"kind": "item", "item": {"seq": 2, "ts": at(24, 9, 5), "t": "msg", "text": "secret"}})
-    fe.transcript({"kind": "tool", "name": "web_search"})
-    assert fe.recent_items() == [{"seq": 1, "ts": at(24, 9), "t": "msg"}, {"seq": 2, "ts": at(24, 9, 5), "t": "msg"}]
-    assert reads == []  # kept up to date as items were written, and no text kept
-    fe.clear_history()
-    assert fe.recent_items() == [] and reads == [1]  # read again after the history changed
+    parcel = chat.sent[-1].topic
+    llm.answer("Sunny, 24°C.")
+    await agent.inbound(fe, "weather in Lisbon?")
+    await settle(agent)
+    lisbon = chat.sent[-1].topic
+    assert lisbon != parcel
+    llm.answer("It should arrive tomorrow.")
+    await agent.inbound(fe, "and when will it arrive?", topic=parcel)
+    await settle(agent)
+    seen = str(llm.requests[-1]["messages"])
+    assert "evri parcel" in seen and "Lisbon" not in seen

@@ -81,7 +81,7 @@ TOOL_GROUPS = (
     ("email_", "email"),
     ("calendar_", "calendar"),
     ("memory_", "memory"),
-    ("task_", "background tasks"),
+    ("topic_", "topics"),
 )
 
 
@@ -128,7 +128,7 @@ CALL_WORDS = {
     "skill_read": lambda a: skill_line(str(a.get("name", "")).strip().lower()),
     "topic_read": lambda a: f"Read topic {str(a.get('number', '')).strip().lstrip('#')}",
     "message_user": lambda a: "Sent you a message",
-    "task_list": lambda a: "Looked at your background tasks",
+    "topic_stop": lambda a: f"Stopped topic {str(a.get('number', '')).strip().lstrip('#')} checking on its own",
     "check_result": lambda a: f"Reported: {a.get('outcome', '')}",
     "browser_login": lambda a: "Signed in",
     "browser_human_check": lambda a: "Asked you to do a human check",

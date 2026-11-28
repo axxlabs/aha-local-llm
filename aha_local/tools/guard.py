@@ -9,9 +9,9 @@ never learns whether a card was shown, approved as it was, edited, or skipped be
 This is the only module that shows cards (`ask`): every tool reaches the person through it, so every card is
 audited and declined the same way (tests check no tool calls `approvals.ask` itself).
 
-"Always allow for this task" (SPEC §5.3): every action card has the tick. Ticked and approved, the same action
-(searching, typing on that site, an email to those people…, its `allow_key`) runs without a card for the rest of
-the request; for a background task, for all its checks, kept on the task and listed in the Tasks panel.
+"Always allow for this topic" (SPEC §4.1, §5.3): every action card has the tick. Ticked and approved, the same
+action (searching, typing on that site, an email to those people…, its `allow_key`) runs without a card in that
+topic from then on, its wakeups included, kept on the topic until it's done.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def allow_key(action: Action) -> str:
         return f"message:{action.site}:{action.chat}" if action.chat else ""
     if user_driven(action.kind, action.site):  # typing on a chat site (its search box): never "always"
         return ""
-    if action.kind == "send" and action.what == "task":  # each background task is its own decision (2026-11-27)
+    if action.kind == "send" and action.what == "task":  # each deferral is its own decision (2026-11-27)
         return ""
     if action.kind == "send":
         return f"{action.what}:{','.join(sorted(action.to))}" if action.to else action.what
@@ -67,7 +67,7 @@ ALLOW_WORDS = {
     "memory": "Save memories",
     "memory_update": "Change memories",
     "forget": "Forget memories",
-    "task": "Start background tasks",
+    "task": "Send topics to the background",
     "other": "Run other browser actions on {x}",
 }
 
@@ -94,23 +94,14 @@ def check(ctx: ToolContext, action: Action, tool: str) -> Verdict:
     return verdict
 
 
-def task_box(ctx: ToolContext) -> dict | None:
-    """The background task a card is raised in, for the app to draw it in that task's box (SPEC §7.4)."""
-    if not ctx.task.background or ctx.account is None:
-        return None
-    from . import background
-
-    entry = next((e for e in background.load(ctx.account) if e.get("id") == ctx.task.background), None)
-    return {"id": ctx.task.background, "title": entry["title"] if entry else ""}
-
-
 def remember(ctx: ToolContext, key: str) -> None:
-    """The person ticked "always" on a card: this request, or this background task's every check, allows it."""
+    """The person ticked "always" on a card: its topic allows it, in this run and every later one, until the
+    topic is done (SPEC §4.1, §5.3)."""
     ctx.task.allowed.add(key)
-    if ctx.task.background and ctx.account is not None:
-        from . import background  # the task's own list (the Tasks panel shows it)
+    if ctx.task.topic and ctx.account is not None:
+        from .. import topics
 
-        background.allow(ctx.account, ctx.task.background, key)
+        topics.update(ctx.account, ctx.task.topic, lambda e: {**e, "allowed": sorted({*e.get("allowed", []), key})})
 
 
 def blocked(why: str) -> ToolResult:
@@ -149,9 +140,7 @@ async def ask(
     reason, for the card's (i) (policy.gate.explain); without it, the kind's own (approvals.KINDS). `allow`: the
     action's `allow_key`, for the card's "Always allow for this task" tick (none on cards the person fills in:
     a sign-in, a human check)."""
-    decision = await ctx.approvals.ask(
-        ctx.account, kind, title, fields, image, why=why, always=bool(allow), task=task_box(ctx)
-    )
+    decision = await ctx.approvals.ask(ctx.account, kind, title, fields, image, why=why, always=bool(allow))
     if decision.approved and decision.always and allow:
         remember(ctx, allow)
     return decision, (None if decision.approved else stopped(decision, then, declined))

@@ -111,17 +111,19 @@ async def test_fetch_url_opens_only_addresses_it_has(accounts, config):
 async def test_a_link_the_person_sent_is_theirs_but_a_checks_own_instructions_arent(
     agent, llm, chat, accounts, registry
 ):
-    """A background check runs its task's instructions as the request: an address in them isn't the person's
-    (seen: the model wrote a tracking address into the task from memory, so its check trusted it)."""
+    """A wakeup runs its topic's instructions as the request: an address in them isn't the person's (seen: the
+    model wrote a tracking address into the task from memory, so its check trusted it)."""
+    from aha_local import topics
     from aha_local.agent import Job
 
     web.register(registry)
     fe = person(accounts)
+    n = topics.new(fe)
     url = "https://track.example.invalid/parcel?n=1"  # never resolves: an error after the gate, not a refusal
-    for job in (Job("t1"), None):
+    for job in (Job(n), None):
         llm.call("fetch_url", url=url)
         llm.answer("WAITING: no" if job else "Couldn't.")
-        await agent.run(fe, f"Check {url}", job)
+        await agent.run(fe, f"Check {url}", n, job)
         await settle(agent)
         result = [m["content"] for m in llm.requests[-1]["messages"] if m.get("role") == "tool"][-1]
         assert result.startswith(f"Not opened: {url}") is (job is not None)

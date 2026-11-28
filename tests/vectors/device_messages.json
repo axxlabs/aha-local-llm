@@ -9,7 +9,8 @@
     "say": [
       "cid",
       "text",
-      "image?"
+      "image?",
+      "topic?"
     ],
     "approval_reply": [
       "id",
@@ -19,7 +20,6 @@
       "always?"
     ],
     "stop": [],
-    "cut": [],
     "sync_request": [
       "after",
       "days?"
@@ -36,23 +36,6 @@
     "memories_request": [],
     "memory_forget": [
       "id"
-    ],
-    "tasks_request": [],
-    "task_cancel": [
-      "id"
-    ],
-    "task_run": [
-      "id"
-    ],
-    "task_edit": [
-      "id",
-      "title?",
-      "prompt?",
-      "done_when?",
-      "every?",
-      "at?",
-      "next?",
-      "allowed?"
     ],
     "trace_request": [
       "seq"
@@ -92,6 +75,22 @@
     ],
     "stats_watch": [
       "on"
+    ],
+    "topic_idle": [],
+    "topic_stop": [
+      "topic"
+    ],
+    "topic_run": [
+      "topic"
+    ],
+    "topic_edit": [
+      "topic",
+      "title?",
+      "prompt?",
+      "done_when?",
+      "every?",
+      "at?",
+      "next?"
     ]
   },
   "computer": {
@@ -100,20 +99,12 @@
       "ts",
       "role",
       "text",
+      "topic?",
       "cid?",
       "image?",
       "open?",
-      "task?",
       "record?",
       "run?"
-    ],
-    "title": [
-      "seq",
-      "ts",
-      "from",
-      "text",
-      "new?",
-      "waiting?"
     ],
     "approval": [
       "seq",
@@ -124,10 +115,10 @@
       "title",
       "fields",
       "buttons",
+      "topic?",
       "image?",
       "why?",
-      "always?",
-      "task?"
+      "always?"
     ],
     "approval_state": [
       "seq",
@@ -135,13 +126,10 @@
       "id",
       "state"
     ],
-    "cut": [
-      "seq",
-      "ts"
-    ],
     "typing": [
       "on",
-      "queued?"
+      "queued?",
+      "topic?"
     ],
     "sync": [
       "items",
@@ -161,12 +149,6 @@
     "memories": [
       "items",
       "topics"
-    ],
-    "tasks": [
-      "items",
-      "idle_since",
-      "idle_after",
-      "busy"
     ],
     "trace": [
       "seq",
@@ -204,7 +186,8 @@
     "steps": [
       "seq",
       "ts",
-      "task"
+      "task",
+      "topic?"
     ],
     "step": [
       "task",
@@ -218,7 +201,23 @@
     "act": [
       "seq",
       "ts",
-      "text"
+      "text",
+      "topic?"
+    ],
+    "topic": [
+      "seq",
+      "ts",
+      "topic",
+      "title",
+      "state",
+      "last",
+      "question?",
+      "schedule?"
+    ],
+    "topic_idle": [
+      "idle_since",
+      "idle_after",
+      "busy"
     ]
   },
   "pairing": {

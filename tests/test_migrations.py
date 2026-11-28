@@ -65,6 +65,10 @@ def test_old_shapes_are_brought_to_todays(tmp_path):
         [
             {
                 "id": "t1",
+                "title": "Parcel from evri",
+                "prompt": "Check evri.com with H01",
+                "every": 30,
+                "next": 1795000000,
                 "manual": True,
                 "last_how": "interrupted",
                 "grant": {"sites": ["royalmail.com"], "calendar": True},
@@ -85,17 +89,31 @@ def test_old_shapes_are_brought_to_todays(tmp_path):
         "task_done_when",
         "task_no_grant",
         "part_numbers",
+        "topics",
     ]
     assert version(tmp_path) == LATEST
-    assert v.read_json(acct.dir / "numbers.json", None) == {"next": 1, "parts": {}}
+    assert not (acct.dir / "numbers.json").exists() and not (acct.dir / "tasks.json").exists()
     conv = acct.load_context()
     assert "summary" not in conv and conv["topics"][0]["title"] == "Earlier conversation"
     assert conv["turns"][0]["record"] == ["memory_add: Saved"] and "done" not in conv["turns"][0]
     assert v.read_json(acct.dir / "browser.json", None) == {"v": 3, "page": "https://x.example/"}
-    [task] = v.read_json(acct.dir / "tasks.json", None)
-    assert "manual" not in task and task["last_how"] == "ended_early"
-    assert task["done_when"] == "never"  # a task from before: it went on until cancelled
-    assert "grant" not in task  # no up-front permissions any more
+    # The background task is a topic checking on its own now, its first message its instruction (SPEC §4.1).
+    found = v.read_json(acct.dir / "topics.json", None)["topics"]
+    [task] = [e for e in found.values() if e.get("schedule")]
+    s = task["schedule"]
+    assert (
+        task["state"] == "scheduled"
+        and task["title"] == "Parcel from evri"
+        and s["prompt"] == "Check evri.com with H01"
+    )
+    assert "manual" not in s and s["last_how"] == "ended_early"
+    assert s["done_when"] == "never"  # a task from before: it went on until cancelled
+    assert "grant" not in s  # no up-front permissions any more
+    earlier = conv["topics"][0]["n"]
+    assert found[str(earlier)]["title"] == "Earlier conversation" and conv["turns"][0]["topic"] == earlier
+    items = acct.items()
+    assert any(it.get("t") == "msg" and it.get("topic") == task["n"] and "evri.com" in it["text"] for it in items)
+    assert {it["topic"] for it in items if it.get("t") == "topic"} == {int(k) for k in found}
     for gone in (acct.dir / "sign-ins.json", acct.dir / "schedule.json", tmp_path / "keys" / "search-secret"):
         assert not gone.exists(), gone
     assert upgrade(v) == []  # once

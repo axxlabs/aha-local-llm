@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import datetime as dt
 import json
 import logging
 import secrets
@@ -15,8 +14,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from . import actions, checks, context, dates, folding, messages, skills
-from .accounts import TASK, Account, Accounts, turn_time
+from . import actions, checks, context, folding, messages, skills, topics
+from .accounts import TASK, Account, Accounts
 from .approvals import Approvals
 from .config import Config
 from .items import Image
@@ -64,8 +63,6 @@ class AgentOut(Protocol):
         record: list[str] | None = None,
         run: str = "",
     ) -> None: ...
-    async def cut(self, account: Account) -> None: ...
-    async def title(self, account: Account, start: int, text: str, new: bool = False, waiting: int = 0) -> None: ...
     async def steps(self, account: Account) -> None: ...  # the request's Details line (SPEC §7.4 "Details")
     async def act(self, account: Account, text: str) -> None: ...  # one thing a request did, as it happens
     async def step(self, account: Account, event: dict) -> None: ...  # one of its records, as it happens
@@ -77,8 +74,8 @@ class AgentOut(Protocol):
 
 @dataclass(frozen=True)
 class State:
-    """What runs for one person (SPEC §3.3): nothing, their request, or a background check; and whether it waits
-    on a card for them (then the model is free for others)."""
+    """What runs for one person (SPEC §3.3): nothing, their request, or a topic's wakeup ("check"); and whether it
+    waits on a card for them (then the model is free for others)."""
 
     kind: str  # idle | request | check
     card: bool = False  # waiting on a card
@@ -99,18 +96,19 @@ class Session:
     Kept together so it's reset together (seen: Stop dropped the waiting messages but not a waiting photo, which
     then went with the next, unrelated request)."""
 
-    # The request or check running for them; while a check folds the chat before it starts, a bare Future holds
-    # the place, so nothing else starts meanwhile.
-    task: asyncio.Future | None = None
-    inbox: list[str] = field(default_factory=list)  # their messages that came in while the task ran
+    task: asyncio.Future | None = None  # the request or wakeup running for them
+    topic: int = 0  # the topic it works in (SPEC §4.1)
+    wake: bool = False  # it's a wakeup: the topic woke up on its own
+    inbox: list[str] = field(default_factory=list)  # their messages to that topic that came in while it ran
+    queue: list[tuple[int, str]] = field(default_factory=list)  # their messages to other topics: each runs next
     photos: list[Image] = field(default_factory=list)  # their photos, for the next model call
     sent: int = 0  # messages sent to them, to know whether they've heard back in a task
     last_prompt: list[dict] | None = None  # the task's latest model request: its title is asked at the end
-    background: str = ""  # the background task whose check is running, if that's what runs (SPEC §3.4)
 
     def reset(self) -> None:
         """Drop what's waiting (Stop, Clear history, the account deleted)."""
         self.inbox.clear()
+        self.queue.clear()
         self.photos.clear()
         self.last_prompt = None
 
@@ -122,31 +120,28 @@ UNSENT = "[sha: your reply above wasn't sent: the user wrote again. Reply to eve
 PHOTO_ONLY = "(sent a photo)"
 
 
+WOKE = "[This topic woke up on its own, check {n}]"  # a wakeup's turn, as later runs in the topic see it
+
+
 @dataclass(frozen=True)
 class Job:
-    """A run the person didn't start (SPEC §3.4): a background task's check. It shows nothing while it works, and
-    its module decides what of the answer reaches the chat."""
+    """A run the person didn't start (SPEC §4.1): a topic's wakeup. It shows no "working…", only what it does (its
+    ✓ lines and cards, in the topic); its schedule decides what of its answer reaches the chat."""
 
-    id: str
-    start: int = 0  # the first item after the fold the check made before it started: its note's part
-    quiet: bool = True  # no "typing…", no tool lines
+    topic: int
 
-    def finish(self, account: Account, outcome: str, message: str, stopped: bool) -> background.Note | None:
-        """The task's note for the chat, or None: nothing is sent and the turn isn't kept."""
-        return background.finish(account, self.id, outcome, message, stopped)
-
-    def allowed(self, account: Account) -> set[str]:
-        """What the person ticked "always" on in this task's checks: every check keeps it (SPEC §5.3)."""
-        return background.allowed_of(account, self.id)
+    def finish(self, account: Account, outcome: str, message: str, stopped: bool) -> str:
+        """What to show of its answer: "" for nothing, else its outcome (background.finish)."""
+        return background.finish(account, self.topic, outcome, message, stopped)
 
     def links(self, account: Account) -> list[str]:
-        """The addresses its instructions may open: what the request that started it was shown, or the person wrote
-        in it (SPEC §5.2 "Made-up addresses")."""
-        return background.links_of(account, self.id)
+        """The addresses its instructions may open: what the request that deferred it was shown, or the person
+        wrote in it (SPEC §5.2 "Made-up addresses")."""
+        return background.links_of(account, self.topic)
 
     def interrupted(self, account: Account) -> None:
-        """Stopped before it finished (someone's input, Stop): the next check is told."""
-        background.interrupted(account, self.id)
+        """Stopped before it finished (someone's input, Stop): the next wakeup is told."""
+        background.interrupted(account, self.topic)
 
 
 class _Counted:
@@ -217,7 +212,7 @@ class Agent:
         live = self.sessions.get(address)
         if live is None or live.task is None:
             return State("idle")
-        return State("check" if live.background else "request", self.approvals.pending_for(address) is not None)
+        return State("check" if live.wake else "request", self.approvals.pending_for(address) is not None)
 
     @property
     def running(self) -> dict[str, asyncio.Future]:
@@ -247,7 +242,7 @@ class Agent:
         one being answered) stops, so the model is theirs. It runs again at the next idle time."""
         for address, live in list(self.sessions.items()):
             task = live.task
-            if not live.background or task is None or address == answering:
+            if not live.wake or task is None or address == answering:
                 continue
             if self.approvals.pending_for(address) is not None:
                 continue
@@ -273,24 +268,19 @@ class Agent:
         account.transcript({"kind": "out", "text": text, "image": bool(image)})
         await self.out.message(account, text[:20_000], image, open, task, receipt(record), run)
 
-    async def task_note(
-        self, account: Account, note: background.Note, start: int, record: list[str] | None = None
-    ) -> None:
-        """A background task's news (SPEC §3.4, §7.4 "Task notes"): always in a topic of its own. Its check folded
-        what was going on before it started (`start`: the first item after that fold). The part is titled with the
-        task's title."""
-        await self.send(account, note.text, task=note.for_app(), record=record)
-        await self.out.title(account, start, note.title)
-
-    async def _fold(self, account: Account) -> int:
-        """Fold what's going on (a cut; the channel skips it when nothing is open): the seq the next part starts at."""
-        await self.out.cut(account)
-        return account.seq + 1
-
     # ---- inbound
 
-    async def inbound(self, account: Account, text: str, image: Image | None = None) -> None:
-        """A message the person typed, maybe with a photo (already shown on their devices by the channel)."""
+    async def inbound(self, account: Account, text: str, image: Image | None = None, topic: int = 0) -> None:
+        """A message the person typed in `topic`, maybe with a photo (already shown on their devices by the
+        channel, which chose the topic: the one open in their app, or a new one, SPEC §4.1 "Routing")."""
+        topic = topic or topics.new(account, first=account.seq)  # every message belongs to a topic (SPEC §4.1)
+        token = topics.TOPIC.set(topic)  # what's said straight back (help, stopped) goes in that topic
+        try:
+            await self._inbound(account, text, image, topic)
+        finally:
+            topics.TOPIC.reset(token)
+
+    async def _inbound(self, account: Account, text: str, image: Image | None, topic: int) -> None:
         text = text.strip()
         self._input()
         await self._yield_to_people()
@@ -301,7 +291,7 @@ class Agent:
             self.session(account).photos.append(image)
             text = text or PHOTO_ONLY
             self.approvals.cancel_for_message(account)
-            await self._start(account, text)
+            await self._start(account, text, topic)
             return
         command = text.lower().rstrip(".!")
 
@@ -314,14 +304,23 @@ class Agent:
             return
         if not text:
             return
-        await self._start(account, text)
+        await self._start(account, text, topic)
 
-    async def _start(self, account: Account, text: str) -> None:
+    async def _start(self, account: Account, text: str, topic: int) -> None:
+        if topic:
+            topics.touch(account, topic)
+            if not self.session(account).wake or self.session(account).topic != topic:
+                topics.answered(account, topic)  # it no longer waits on them
+                background.resume(account, topic)
         live = self.session(account)
         if live.task is not None:
-            live.inbox.append(text)  # the running task reads it; "typing…" already shows
+            if live.topic == topic and not live.wake:
+                live.inbox.append(text)  # the running task reads it; "typing…" already shows
+            else:
+                live.queue.append((topic, text))  # another topic: it runs next (SPEC §4.1 "One run per topic")
             return
-        live.task = asyncio.create_task(self.run(account, text))
+        live.topic, live.wake = topic, False
+        live.task = asyncio.create_task(self.run(account, text, topic))
 
     async def approval_reply(
         self,
@@ -372,28 +371,22 @@ class Agent:
         except Exception as e:
             log.warning("warming the model failed: %s", e)
 
-    async def start_background(self, account: Account, task_id: str, text: str) -> None:
-        """A background task's check, while the household is idle or on Run now (SPEC §3.4): run as this account,
-        quietly. What was going on folds first, so all the check shows (a card, its note) is a topic of its own."""
+    async def start_wake(self, account: Account, n: int, text: str) -> None:
+        """Topic n wakes up on its own, while the household is idle or on Run now (SPEC §4.1): it runs in the topic,
+        with its turns in view, as this account."""
         live = self.session(account)
-        live.background = task_id  # set before the fold's await: the runner sees it busy
-        held = live.task = asyncio.get_running_loop().create_future()  # held while folding: nothing else starts
-        start = await self._fold(account)
-        if held.cancelled():  # someone wrote while it folded: the check waits for the next idle time
-            live.task, live.background = None, ""
+        if live.task is not None:
             return
-        account.transcript({"kind": "background", "id": task_id})
-        live.task = asyncio.create_task(self.run(account, text, Job(task_id, start)))
+        live.topic, live.wake = n, True
+        account.transcript({"kind": "wake", "topic": n})
+        live.task = asyncio.create_task(self.run(account, text, n, Job(n)))
 
-    async def run(self, account: Account, text: str, job: Job | None = None) -> None:
+    async def run(self, account: Account, text: str, topic: int = 0, job: Job | None = None) -> None:
         try:
-            await self._run(account, text, job)
+            await self._run(account, text, topic, job)
         finally:
             live = self.session(account)
-            checking = live.background
-            live.task, live.background = None, ""
-            if checking:
-                background.changed(account)  # the open Tasks panels: no longer checking
+            live.task, live.topic, live.wake = None, 0, False
             await self.note_page(account)
 
     # ---- the person's browser (SPEC §3.4 "Browser profiles": it keeps everything in its own profile)
@@ -408,16 +401,27 @@ class Agent:
         except Exception:
             log.warning("couldn't note the browser's page")
 
-    async def _run(self, account: Account, text: str, job: Job | None = None) -> None:
+    async def _run(self, account: Account, text: str, topic: int, job: Job | None = None) -> None:
+        live = self.session(account)
         while True:
-            await self._request(account, text, job)
-            job = None  # a follow-up is the person's own message
-            self.session(account).background = ""
-            # Messages that came in after the task's last model call: one follow-up task for all of them.
-            pending, self.session(account).inbox = self.session(account).inbox, []
-            if not pending:
+            token = topics.TOPIC.set(topic or None)
+            try:
+                await self._request(account, text, topic, job)
+            finally:
+                topics.TOPIC.reset(token)
+            job, live.wake = None, False  # a follow-up is the person's own message
+            # Messages to this topic that came in after the task's last model call: one follow-up for all of them;
+            # then each other topic the person wrote in meanwhile, in order.
+            pending, live.inbox = live.inbox, []
+            if pending:
+                text = "\n\n".join(pending)
+                continue
+            if not live.queue:
                 break
-            text = "\n\n".join(pending)
+            topic, text = live.queue.pop(0)
+            live.inbox = [t for n, t in live.queue if n == topic]
+            live.queue = [(n, t) for n, t in live.queue if n != topic]
+            live.topic = topic
 
     async def _typing(self, account: Account) -> None:
         """While the task runs: whether sha is working, said every few seconds. The computer is the only source
@@ -441,19 +445,17 @@ class Agent:
         except Exception:
             log.warning("couldn't send a typing message")
 
-    async def _request(self, account: Account, text: str, job: Job | None = None) -> None:
+    async def _request(self, account: Account, text: str, topic: int, job: Job | None = None) -> None:
         # The task's records in the transcript carry its id, so a message's details can be found (SPEC §3.8).
         token = TASK.set(secrets.token_hex(6))
         try:
-            await self._request_body(account, text, job)
+            await self._request_body(account, text, topic, job)
         finally:
             TASK.reset(token)
 
-    async def _request_body(self, account: Account, text: str, job: Job | None = None) -> None:
+    async def _request_body(self, account: Account, text: str, topic: int, job: Job | None = None) -> None:
         sent_before = self.session(account).sent
-        began = time.time()
-        asked_at = 0 if job else account.seq  # the item of the message that started it (SPEC §7.4)
-        quiet = job is not None and job.quiet
+        quiet = job is not None  # a wakeup: no "working…", no Details line; its ✓ lines and cards still show
         record: list[str] = []  # what it changed, kept with its answer (SPEC §4 "What a request did")
         report: dict = {}  # a background check's check_result: {"outcome", "message"} (SPEC §3.4)
         typing = asyncio.create_task(asyncio.sleep(0) if quiet else self._typing(account))
@@ -471,13 +473,14 @@ class Agent:
                     job.links(account) if job else None,
                     record,
                     report if job else None,
+                    topic,
                 )
             except asyncio.CancelledError:
                 account.transcript({"kind": "stopped"})
                 if job:
                     job.interrupted(account)
                 else:  # what it did before it stopped stays known (seen: a saved fact saved twice more)
-                    context.record_turn(account, text, messages.STOPPED, record=record)
+                    context.record_turn(account, topic, text, messages.STOPPED, record=record)
                 await self._stop_typing(account, typing, quiet)
                 if record and not job:  # its box keeps what it did, and its Details line comes after "Stopped."
                     with contextlib.suppress(Exception):
@@ -497,77 +500,61 @@ class Agent:
                 # (the receipt is something).
                 answer = "" if self.session(account).sent > sent_before or record else "…"
             await self._stop_typing(account, typing, quiet)  # before the answer, so no refresh can land after it
-            noted = False  # a background task's note: its own topic, already sent and titled
+            asked = text
             if job:
-                result = job.finish(account, report.get("outcome", ""), report.get("message", answer), stopped)
-                if result is None:
-                    account.transcript({"kind": "answer", "text": "", "job": "background", "quiet": True})
-                    if record:  # no news, but it changed something: that's never silent (SPEC §4)
-                        await self.send(account, "", record=record)
-                    return  # nothing to tell yet: say nothing more, keep the chat clean
-                await self.task_note(account, result, job.start, record)
-                answer, noted = result.as_text(), True
-            answered = 0  # the answer's chat item: the topic call says whether it waits for the person
-            if (answer or record) and not noted:
-                # Unfinished stays unfolded after a break (SPEC §7.4 "Folding"): a task that stopped.
+                checks_before = (background.schedule_of(account, topic) or {}).get("checks", 0)
+                kind = job.finish(account, report.get("outcome", ""), report.get("message", answer), stopped)
+                if not kind:
+                    # Nothing to tell yet: only its ✓ lines show, and the topic's turns don't grow (SPEC §4.1).
+                    account.transcript({"kind": "answer", "text": "", "job": "wake", "quiet": True})
+                    return
+                answer = report.get("message", answer)
+                asked = WOKE.format(n=checks_before + 1)
+            if answer or record:
+                # Unfinished stays open (SPEC §7.4 "Folding"): a task that stopped.
                 run = "" if quiet else TASK.get() or ""
                 await self.send(account, answer, open="stopped" if stopped else "", record=record, run=run)
-                answered = account.seq
             account.transcript({"kind": "answer", "text": answer, **({"ended": ended} if ended else {})})
-            context.record_turn(account, text, answer, record)
+            context.record_turn(account, topic, asked, answer, record)
             # The task's last request, still cached in the person's slot: the topic's title and memory entry are
             # asked at its end, so they cost only their own words (SPEC §3.2 "Cache slots", §5.4, §7.4).
             prompt, self.session(account).last_prompt = self.session(account).last_prompt, None
-            if answer:
-                titled = not stopped and not noted  # a note keeps the task's title; its memory entry is still asked
-                await self._topic(account, answer, prompt, asked_at, text, titled, began, answered)
+            if answer and topic:
+                await self._topic(account, topic, answer, prompt, text, waits=not stopped and not job)
         finally:
             await turn.__aexit__(None, None, None)
 
     async def _topic(
         self,
         account: Account,
+        topic: int,
         answer: str,
         prompt: list[dict] | None,
-        asked_at: int = 0,
         asked: str = "",
-        titled: bool = True,
-        began: float = 0,
-        answered: int = 0,
+        waits: bool = True,
     ) -> None:
-        """Name the topic going on, for when the app folds it (SPEC §7.4 "Folding"), and write its memory entry,
-        what the model will know of it once its messages leave the context (§5.4). `titled`: False for a task that
-        stopped, which stays unfolded (§7.4) but still leaves its memory. `answered`: the answer's chat item, kept
-        open when the model says it waits for the person's reply.
+        """Name the topic and write its memory entry, what the model will know of it once its messages leave the
+        context (§5.4); `waits`: whether the model may say its answer waits for the person's reply (the topic then
+        shows under Needs input, SPEC §4.1). A wakeup's waiting is its check_result's.
 
         Asked at the end of the task's own last request, so the model server's cached prompt still matches and
         it costs only the new words; the question and the reply are never part of the conversation."""
-        asked = asked.split("\n\n", 1)[0]  # the message that started the task, not later notes
-        tz = dates.tz(self.config)
-        items = account.recent_items()
-        found = folding.segment_start(items)
         if prompt is None:
             return
-        # No chat items (a task without the app): one topic, since the first turn kept.
-        first_turn = min((turn_time(t) for t in account.load_context()["turns"]), default=began)
-        start = found or (0, min(first_turn, began))
-        began_at = dt.datetime.fromtimestamp(start[1], tz)
-        since = began_at.strftime("%H:%M" if began_at.date() == dates.now(self.config).date() else "%d/%m/%Y %H:%M")
-        request = after_task(prompt, answer, folding.ask(since, asked))
+        asked = asked.split("\n\n", 1)[0]  # the message that started the task, not later notes
+        request = after_task(prompt, answer, folding.ask(asked))
         try:
             reply = await self.llm.chat(
                 request, self.registry.specs(), max_tokens=500, who=account.address, tool_choice="none", thinking=False
             )
         except ModelUnavailable:
             return
-        topic = folding.parse(reply.content or "")
-        new, title, entry = topic.new and asked_at > start[0], topic.title, topic.memory
-        waiting = answered if topic.waiting else 0
-        # A new subject: a new topic starts at the person's message (SPEC §7.4).
-        first = (asked_at, next((it["ts"] for it in items if it.get("seq") == asked_at), start[1])) if new else start
-        context.save_topic(account, first[0], first[1], title, entry)
-        if found and (new or (titled and title) or waiting):  # a new topic is said even for a task that stopped
-            await self.out.title(account, first[0], title or "", new=new, waiting=waiting)
+        found = folding.parse(reply.content or "")
+        entry = topics.set_title(account, topic, found.title) if found.title else topics.get(account, topic)
+        title = (entry or {}).get("title", "")
+        context.save_topic(account, topic, title, found.memory)
+        if waits and found.waiting:
+            topics.wait_on_person(account, topic, answer)
 
     async def solve(
         self,
@@ -578,13 +565,14 @@ class Agent:
         links: list[str] | None = None,
         record: list[str] | None = None,
         report: dict | None = None,
+        topic: int = 0,
     ) -> tuple[str, str]:
         """Returns the answer and everything the person said during the task.
-        `quiet` (a background check): no tool lines, and the person's messages wait for a task of their own.
-        `job`: the background task whose check this is: what its cards were allowed "always" carries over (SPEC
-        §5.3). `record`: filled with what it changes, one line each
-        (SPEC §4 "What a request did"), kept by the caller even if it stops. `report`: a background check's, filled
-        by its check_result call (SPEC §3.4)."""
+        `quiet` (a wakeup): no Details line, and the person's messages wait for a run of their own. `job`: the
+        wakeup's topic schedule. `record`: filled with what it changes, one line each (SPEC §4 "What a request
+        did"), kept by the caller even if it stops. `report`: a wakeup's, filled by its check_result call. `topic`:
+        the topic it works in: its turns are in view, and what its cards were allowed "always" carries over
+        (SPEC §4.1, §5.3)."""
 
         task: list[dict] = [{"role": "user", "content": text}]
 
@@ -605,10 +593,10 @@ class Agent:
         # The browser is reached only through this account's own context (SPEC §3.4).
         browser = self.browser.for_account(account.id) if self.browser else None
         approvals = _Pausing(self.approvals, self.llm, account.address)  # a card frees the model meanwhile
-        topic = folding.segment_start(account.recent_items())  # the topic going on (§4)
         state = TaskState(
-            allowed=job.allowed(account) if job else set(),
-            background=job.id if job else "",
+            allowed=set((topics.get(account, topic) or {}).get("allowed", [])),
+            topic=topic,
+            wake=job is not None,
             record=record if record is not None else [],
             report=report,
         )
@@ -719,12 +707,12 @@ class Agent:
                         **({"did": receipt(ctx.task.record[before:])} if len(ctx.task.record) > before else {}),
                     }
                 )
-                if not quiet:  # every call, in the chat where it happened (SPEC §7.4 "What sha did")
-                    lines = receipt(ctx.task.record[before:]) or [
-                        messages.call_line(call.name, _args(call.arguments), result.error)
-                    ]
-                    for line in lines:
-                        await self.out.act(account, line)
+                # Every call, in its topic, a wakeup's too (SPEC §4.1, §7.4 "What sha did")
+                lines = receipt(ctx.task.record[before:]) or [
+                    messages.call_line(call.name, _args(call.arguments), result.error)
+                ]
+                for line in lines:
+                    await self.out.act(account, line)
                 # A site's or a tool's skill, the first time the task reaches it (SPEC §3.5 "Skills"): after the
                 # result, and kept when an older page is shortened (context.shorten_task).
                 due = skills.due(ctx.task, call.name)

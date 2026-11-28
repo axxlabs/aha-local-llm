@@ -37,7 +37,7 @@ def test_a_topic_entry_is_forgotten_like_a_fact(accounts):
     from aha_local import context
 
     fe = accounts.create("Test Person")
-    context.save_topic(fe, 7, time.time(), "Evri parcel", "Tracking H01ABC123")
+    context.save_topic(fe, 7, "Evri parcel", "Tracking H01ABC123", time.time())
     assert [t["title"] for t in actions.topics(fe)] == ["Evri parcel"]
     assert actions.forget_memory(fe, "t7", "settings") and actions.topics(fe) == []
     assert {"memory_forgotten": "t7", "via": "settings"} in [

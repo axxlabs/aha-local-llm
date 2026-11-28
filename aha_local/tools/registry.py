@@ -61,9 +61,8 @@ def redacted(value: Any, secrets: list[str]) -> Any:
 
 @dataclass
 class TaskState:
-    """What tools may remember during one run: a request the person made, or one background task's check
-    (`ctx.task` in the tools). "Task" alone, elsewhere, means one of those runs; a background task (tasks.json)
-    is always called that."""
+    """What tools may remember during one run: a request the person made, or a topic's wakeup (`ctx.task` in the
+    tools). "Task" alone, elsewhere, means one of those runs."""
 
     opened_sites: set[str] = field(default_factory=set)  # sites opened in the task (SPEC §5.2)
     last_snapshot: str = ""  # the latest page snapshot, to label approvals from the page itself
@@ -84,15 +83,16 @@ class TaskState:
     # exactly isn't the model writing an address (SPEC §5.2 rule 7).
     seen_urls: set[tuple] = field(default_factory=set)
     banners_tried: set[tuple[str, str]] = field(default_factory=set)  # cookie banners closed: (page, button)
-    # What the person ticked "Always allow for this task" on (tools/guard.allow_key): no card for it again in this
-    # run; for a background task's check (`background`: its id) the task keeps it, for every check (SPEC §5.3).
+    # What the person ticked "Always allow for this topic" on (tools/guard.allow_key): no card for it again in its
+    # topic, this run or any later one, until the topic is done (SPEC §4.1, §5.3).
     allowed: set[str] = field(default_factory=set)
-    background: str = ""
+    topic: int = 0  # the topic this run works in (SPEC §4.1)
+    wake: bool = False  # a wakeup: the topic woke up on its own
     # What the task changed, one line per action that worked, set by the registry from each result's `did`: kept
     # with the request's answer, so a later request knows, even when this one stopped before saying so (SPEC §4).
     record: list[str] = field(default_factory=list)
-    # A background task's check (SPEC §3.4): where its check_result call puts {"outcome", "message"}. None: this
-    # isn't a check, and check_result refuses.
+    # A wakeup (SPEC §4.1): where its check_result call puts {"outcome", "message"}. None: this isn't one, and
+    # check_result refuses.
     report: dict | None = None
     skills: set[str] = field(default_factory=set)  # skills read or added in this run (aha_local/skills.py)
 

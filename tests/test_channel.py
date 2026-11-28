@@ -39,9 +39,10 @@ class FakeAgent:
     async def warm(self):
         self.warmed = getattr(self, "warmed", 0) + 1
 
-    async def inbound(self, account, text, image=None):
+    async def inbound(self, account, text, image=None, topic=0):
         self.said.append(text)
         self.photos.append(image)
+        self.topics = [*getattr(self, "topics", []), topic]
 
     async def approval_reply(self, account, approval_id, decision, values=None, note="", always=False):
         self.replies.append((approval_id, decision, values, note))
@@ -246,9 +247,6 @@ async def test_approval_cards_and_replies(tmp_path):
     assert rig.agent.replies == [("abcd1234", "approve", ["x"], "")]
     await phone.send({"t": "stop"})
     assert rig.agent.stopped == 1
-    await phone.send({"t": "cut"})  # [collapse]: a cut item, kept and sent to every device
-    cut = phone.inbox()[-1]
-    assert cut["t"] == "cut" and cut["item"] is True and isinstance(cut["seq"], int)
     await phone.send({"t": "nonsense"})
     assert phone.inbox()[-1] == {"t": "error", "code": "unknown_type"}
 
@@ -494,33 +492,50 @@ async def test_settings_show_and_disconnect_the_persons_email(tmp_path, monkeypa
     assert revoked == ["ana.work@example.com"]
 
 
-def test_collapse_publishes_a_cut_and_the_next_part_starts_after_it():
-    """[collapse] in the app: a cut item for every device; the computer's titles start after it (SPEC §7.4)."""
-    from aha_local import folding
+async def test_a_message_goes_to_the_open_topic_or_starts_a_new_one(tmp_path):
+    """Routing (SPEC §4.1): the topic open in the app gets the message; with every topic collapsed (no topic, or
+    one that doesn't exist), a new topic starts. The echo carries its topic."""
+    from aha_local import topics
 
-    items = [
-        {"t": "msg", "seq": 1, "ts": 1000},
-        {"t": "msg", "seq": 2, "ts": 1060},
-        {"t": "cut", "seq": 3, "ts": 1100},
-    ]
-    assert folding.segment_start(items) is None  # nothing going on after the cut
-    items.append({"t": "msg", "seq": 4, "ts": 1200})
-    assert folding.segment_start(items) == (4, 1200)
-
-
-async def test_a_fold_with_nothing_open_since_the_last_one_is_skipped(tmp_path):
-    """A background check folds before each run (SPEC §3.4 "Task notes"): quiet checks mustn't pile up cuts."""
     rig = Rig(tmp_path)
-    await rig.pair()
+    _, phone = await rig.pair()
     acct = rig.accounts.find("Ana")
-    await rig.channel.message(acct, "hello")
-    await rig.channel.cut(acct)
-    await rig.channel.cut(acct)  # nothing shown since: no second cut
-    cuts = [it for it in acct.recent_items() if it.get("t") == "cut"]
-    assert len(cuts) == 1
-    await rig.channel.message(acct, "again")
-    await rig.channel.cut(acct)
-    assert len([it for it in acct.recent_items() if it.get("t") == "cut"]) == 2
+    await phone.send({"t": "say", "text": "first", "cid": "a"})
+    seen = phone.inbox()  # what the phone was sent (taken: each call returns only what's new)
+    echo = next(m for m in seen if m.get("t") == "msg" and m.get("cid") == "a")
+    first = echo["topic"]
+    assert topics.get(acct, first) is not None
+    await phone.send({"t": "say", "text": "more", "cid": "b", "topic": first})
+    await phone.send({"t": "say", "text": "other", "cid": "c"})
+    await phone.send({"t": "say", "text": "stray", "cid": "d", "topic": 999})
+    seen += phone.inbox()
+    got = {m["cid"]: m["topic"] for m in seen if m.get("t") == "msg" and m.get("cid")}
+    assert got["b"] == first and got["c"] not in (first, got["d"]) and got["d"] != first
+    assert rig.agent.topics == [first, first, got["c"], got["d"]]
+
+
+async def test_items_published_while_a_run_works_belong_to_its_topic(tmp_path):
+    """Every chat item carries the topic it happened in (SPEC §4.1); a topic change reaches the app as a `topic`
+    item."""
+    from aha_local import topics
+
+    rig = Rig(tmp_path)
+    _, phone = await rig.pair()
+    acct = rig.accounts.find("Ana")
+    await phone.send({"t": "sync_request", "after": 0})  # the phone is online
+    phone.inbox()
+    n = topics.new(acct)
+    token = topics.TOPIC.set(n)
+    try:
+        await rig.channel.message(acct, "hello")
+        await rig.channel.act(acct, "Searched the web")
+    finally:
+        topics.TOPIC.reset(token)
+    shown = [m for m in phone.inbox() if m.get("t") in ("msg", "act")]
+    assert len(shown) == 2 and all(m["topic"] == n for m in shown)
+    await rig.channel.publish(acct, {"t": "topic", **topics.for_app(topics.set_title(acct, n, "Dinner"))})
+    last = phone.inbox()[-1]
+    assert last["t"] == "topic" and last["title"] == "Dinner" and last["topic"] == n
 
 
 async def test_one_persons_slow_message_doesnt_hold_up_anothers(tmp_path, monkeypatch):

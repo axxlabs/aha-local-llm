@@ -100,20 +100,36 @@ def test_a_length_deletes_older_history_everywhere_on_the_computer(tmp_path):
     assert again.history_days == 7  # kept in account.json
 
 
-def test_a_topic_entry_replaces_its_earlier_one_and_earlier_topics_turns_leave(tmp_path):
+def test_a_topic_entry_replaces_its_earlier_one_and_quiet_old_topics_turns_leave(tmp_path):
+    """SPEC §4.1, §5.4: each topic keeps one memory entry; turns are kept per topic: an active topic's always, a
+    quiet one's for 30 days."""
+    from aha_local import topics
+
     accounts = Accounts(Vault(tmp_path, os.urandom(32)))
     acct = accounts.create("Ana")
     now = time.time()
-    old = {"role": "user", "content": "old topic", "t": now - 3 * 3600}
-    acct.save_context({"turns": [old], "topics": []})
-    context.save_topic(acct, 5, now - 60, "Parcel", "Tracking H01")
-    context.save_topic(acct, 5, now - 60, "Evri parcel", "Tracking H01, collect 26/11/2026")
+    context.save_topic(acct, 5, "Parcel", "Tracking H01", now - 60)
+    context.save_topic(acct, 5, "Evri parcel", "Tracking H01, collect 26/11/2026", now - 60)
     conv = acct.load_context()
     assert conv["topics"] == [
-        {"id": "t5", "from": 5, "title": "Evri parcel", "text": "Tracking H01, collect 26/11/2026", "ts": now - 60}
+        {"id": "t5", "n": 5, "title": "Evri parcel", "text": "Tracking H01, collect 26/11/2026", "ts": now - 60}
     ]
-    assert conv["turns"] == []  # the earlier topic's turns left the context; its entry stays
-    context.save_topic(acct, 5, now - 60, "Evri parcel", "")  # nothing worth keeping: no entry
+    waiting, quiet = topics.new(acct), topics.new(acct)
+    topics.wait_on_person(acct, waiting, "Which day?")
+    month = now - 40 * 86400
+    acct.save_context(
+        {
+            **conv,
+            "turns": [
+                {"role": "user", "content": "old and quiet", "t": month, "topic": quiet},
+                {"role": "user", "content": "old but waiting", "t": month, "topic": waiting},
+            ],
+        }
+    )
+    context.record_turn(acct, topics.new(acct), "hi", "hello")  # in another topic
+    kept = [t["content"] for t in acct.load_context()["turns"]]
+    assert kept == ["old but waiting", "hi", "hello"]
+    context.save_topic(acct, 5, "Evri parcel", "")  # nothing worth keeping: no entry
     assert acct.load_context()["topics"] == []
     acct.clear_history()
     assert acct.load_context() == {"turns": [], "topics": []}
@@ -173,7 +189,7 @@ def test_every_fact_is_in_view_and_earlier_topics_are_searched(tmp_path):
     accounts = Accounts(Vault(tmp_path, os.urandom(32)))
     acct = accounts.create("Ana")
     for i in range(80):
-        context.save_topic(acct, 100 + i, time.time() - (80 - i) * 60, f"Topic {i}", f"Tracking CODE{i:03d}")
+        context.save_topic(acct, 100 + i, f"Topic {i}", f"Tracking CODE{i:03d}", time.time() - (80 - i) * 60)
         memory.add_fact(acct, f"Fact {i}")
     block = context.build(acct, [], "Europe/London", "Home", 100_000)[1]["content"]
     assert all(f"Fact {i}" in block for i in range(80)) and "CODE" not in block

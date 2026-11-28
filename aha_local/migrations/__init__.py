@@ -33,6 +33,7 @@ from . import (
     m0008_task_no_until,
     m0009_task_no_grant,
     m0010_part_numbers,
+    m0011_topics,
 )
 
 if TYPE_CHECKING:
@@ -69,6 +70,7 @@ MIGRATIONS = tuple(
         m0008_task_no_until,
         m0009_task_no_grant,
         m0010_part_numbers,
+        m0011_topics,
     )
 )
 LATEST = MIGRATIONS[-1].number

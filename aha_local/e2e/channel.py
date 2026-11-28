@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import __version__, actions, diagnostics, folding, messages, numbers, reports
+from .. import __version__, actions, diagnostics, folding, messages, reports, topics
 from ..accounts import TASK, Account, Accounts, Device
 from ..certs import needs_renewal
 from ..items import Image
@@ -219,8 +219,6 @@ class Channel:
             item["image"] = image.to_dict()
         if open:  # "stopped": the app keeps it unfolded after a break (SPEC §7.4 "Folding")
             item["open"] = open
-        if task:  # a background task's note: {"kind","title","prompt","every"}, a box (SPEC §7.4 "Task notes")
-            item["task"] = task
         await self.publish(account, item, notify=True)
 
     async def act(self, account: Account, text: str) -> None:
@@ -228,23 +226,10 @@ class Channel:
         happened among the messages and cards, written by the code from the tool call, never by the model."""
         await self.publish(account, {"t": "act", "text": text})
 
-    async def cut(self, account: Account) -> None:
-        """What's going on folds now, on every device, as with the person's [collapse] (SPEC §7.4 "Folding"). Not
-        when nothing is open since the last cut: a background check folds before each run, and quiet ones would
-        pile up cuts."""
-        items = account.recent_items()
-        last_cut = max((it["seq"] for it in items if it.get("t") == "cut"), default=0)
-        if any(it.get("t") in folding.SHOWN and it["seq"] > last_cut for it in items):
-            await self.publish(account, {"t": "cut"})
-
-    async def title(self, account: Account, start: int, text: str, new: bool = False, waiting: int = 0) -> None:
-        """The title of the conversation since item `start`, shown when the app folds it (SPEC §7.4); `new`: a new
-        subject starts there, so the part before it folds now; `waiting`: sha's message (its seq) that waits for
-        the person's reply, so it stays open."""
-        extra = {**({"new": True} if new else {}), **({"waiting": waiting} if waiting else {})}
-        # Its part's number (SPEC §7.4 "Topic numbers"): given with the first title, sent, never stored in the item.
-        n = numbers.part(account, start)
-        await self.publish(account, {"t": "title", "from": start, "text": text, **extra}, live={"n": n})
+    def topic_changed(self, account: Account, entry: dict) -> None:
+        """A topic's title, state or schedule changed (topics.WATCHERS): every device gets its `topic` item, which
+        replaces the one before it (SPEC §4.1, §6.5)."""
+        self._spawn(self.publish(account, {"t": "topic", **topics.for_app(entry)}))
 
     async def steps(self, account: Account) -> None:
         """The request's Details line (SPEC §7.4 "Details"): a chat item, no push, once per task, where its work
@@ -293,11 +278,17 @@ class Channel:
 
     async def typing(self, account: Account, on: bool, queued: bool = False) -> None:
         """ "sha is working…", or, while it waits for another person's request to finish, that it's queued."""
-        await self.to_devices(account, {"t": "typing", "on": on, **({"queued": True} if queued else {})})
+        topic = topics.TOPIC.get()  # the topic it works in: the app shows "working…" there (SPEC §4.1)
+        await self.to_devices(
+            account,
+            {"t": "typing", "on": on, **({"queued": True} if queued else {}), **({"topic": topic} if topic else {})},
+        )
 
     async def publish(self, account: Account, item: dict, notify: bool = False, live: dict | None = None) -> dict:
         """Number the item, keep it in the transcript, send it to every device of the account. `live`: what the
         devices get with it that the transcript doesn't keep (a title's part number)."""
+        if item.get("t") in folding.SHOWN and "topic" not in item and (topic := topics.TOPIC.get()):
+            item["topic"] = topic  # every chat item belongs to the topic it happened in (SPEC §4.1)
         item = {**item, "seq": account.next_seq(), "ts": int(time.time())}
         account.transcript({"kind": "item", "item": item})
         live = {
@@ -455,12 +446,14 @@ class Channel:
             return
         if not text.strip() and image is None:
             return
-        echo = {"t": "msg", "role": "me", "text": text, "cid": cid}
+        # The topic open in the app, or a new one when every topic was collapsed (SPEC §4.1 "Routing").
+        topic = topics.route(r.account, r.msg.get("topic"), first=r.account.seq + 1)
+        echo = {"t": "msg", "role": "me", "text": text, "cid": cid, "topic": topic}
         if image is not None:
             echo["image"] = image.to_dict()
         await self.publish(r.account, echo)
         if self.agent is not None:
-            await self.agent.inbound(r.account, text, image)
+            await self.agent.inbound(r.account, text, image, topic)
 
     async def _approval_reply(self, r: Request) -> None:
         decision = r.msg.get("decision")
@@ -482,10 +475,6 @@ class Channel:
     async def _stop(self, r: Request) -> None:
         if self.agent is not None:
             await self.agent.stop(r.account)
-
-    async def _cut(self, r: Request) -> None:
-        """[collapse]: the part going on folds now, on every device (SPEC §7.4 "Folding")."""
-        await self.cut(r.account)
 
     async def _sync(self, r: Request) -> None:
         after = r.msg.get("after")
@@ -556,42 +545,37 @@ class Channel:
             actions.forget_memory(r.account, clean_text(r.msg.get("id"), 64) or "", via="settings")
         await r.reply({"t": "memories", "items": actions.memories(r.account), "topics": actions.topics(r.account)})
 
-    def _tasks_message(self, account: Account) -> dict:
-        agent = self.agent
-        checking = {s.background for s in agent.sessions.values()} if agent is not None else set()
-        return {
-            "t": "tasks",
-            "items": [{**t, "running": t["id"] in checking} for t in background.listing(account)],
-            "idle_since": int(agent.last_input) if agent is not None else 0,
-            "idle_after": background.IDLE_AFTER,
-            "busy": agent.working() if agent is not None else False,
-        }
-
-    async def _background(self, r: Request) -> None:
-        """The Tasks panel (SPEC §3.4 "Background tasks", §7.4): the person's background tasks and the idle time
-        the checks wait for. Cancel is the person's own action, so no card; the list then goes to every device
-        (tasks_changed)."""
-        task_id, t = clean_text(r.msg.get("id"), 64) or "", r.msg.get("t")
-        if t == "task_cancel" and actions.cancel_background(r.account, task_id, via="settings"):
+    async def _topic(self, r: Request) -> None:
+        """A topic's strip (SPEC §4.1 "No Tasks pane"): Run now, Edit its schedule, Stop. The person's own actions,
+        so no card; the topic's new `topic` item goes to every device. `topic_idle`: the idle line's numbers."""
+        n, t = r.msg.get("topic"), r.msg.get("t")
+        if t == "topic_idle" or not isinstance(n, int):
+            agent = self.agent
+            await r.reply(
+                {
+                    "t": "topic_idle",
+                    "idle_since": int(agent.last_input) if agent is not None else 0,
+                    "idle_after": background.IDLE_AFTER,
+                    "busy": agent.working() if agent is not None else False,
+                }
+            )
             return
-        if t == "task_edit":
+        if t == "topic_stop" and actions.stop_topic(r.account, n, via="topic"):
+            return
+        if t == "topic_edit":
             changes = {k: r.msg[k] for k in background.EDITABLE if k in r.msg}
             for k in ("title", "prompt", "done_when"):
                 if k in changes:
                     changes[k] = clean_text(changes[k], background.MAX_PROMPT) or ""
-            if not actions.edit_background(r.account, task_id, changes, via="settings"):
-                return  # the computer sends the new list to every device
+            if not actions.edit_topic(r.account, n, changes, via="topic"):
+                return
             await r.reply({"t": "error", "code": "bad_value"})
             return
-        if t == "task_run" and actions.run_background_now(r.account, task_id, via="settings"):
+        if t == "topic_run" and actions.run_topic_now(r.account, n, via="topic"):
             if self.background is not None:
                 self._spawn(self.background.tick())  # now, not at the next 30-second look
             return
-        await r.reply(self._tasks_message(r.account))
-
-    def tasks_changed(self, account: Account) -> None:
-        """An account's tasks changed: their open Tasks panels get the new list now (background.WATCHERS)."""
-        self._spawn(self.to_devices(account, self._tasks_message(account)))
+        await r.reply({"t": "error", "code": "bad_value"})
 
     async def _browser(self, r: Request) -> None:
         """Settings → Your browser (SPEC §3.4, §5.7, §5.8, §7.4): what it remembers, trust, saved logins."""
@@ -778,7 +762,6 @@ HANDLERS: dict[str, Callable[[Channel, Request], Awaitable[None]]] = {
     "say": Channel._say,
     "approval_reply": Channel._approval_reply,
     "stop": Channel._stop,
-    "cut": Channel._cut,
     "sync_request": Channel._sync,
     "history_request": Channel._history,
     "history_settings_request": Channel._history_settings,
@@ -789,11 +772,11 @@ HANDLERS: dict[str, Callable[[Channel, Request], Awaitable[None]]] = {
     "trace_request": Channel._trace,
     "memories_request": Channel._memories,
     "memory_forget": Channel._memories,
-    "tasks_request": Channel._background,
     "stats_watch": Channel._stats_watch,
-    "task_cancel": Channel._background,
-    "task_run": Channel._background,
-    "task_edit": Channel._background,
+    "topic_idle": Channel._topic,
+    "topic_stop": Channel._topic,
+    "topic_run": Channel._topic,
+    "topic_edit": Channel._topic,
     "browser_request": Channel._browser,
     "browser_forget": Channel._browser,
     "browser_clear": Channel._browser,

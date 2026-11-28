@@ -111,29 +111,18 @@ async def test_out_of_steps_says_what_was_done_not_the_models_last_words(agent, 
 
 async def test_every_change_shows_under_the_answer_even_the_ones_the_answer_leaves_out(agent, llm, chat, accounts):
     """Seen 2026-11-26: a background task was started, cancelled and started again in one request; the answer said
-    only that one was set up. The receipt is the tool calls', so nothing done is left out (SPEC §4)."""
+    only that one was set up. The receipt is the tool calls', so what was done shows, in the tool's words (SPEC §4)."""
     from aha_local.tools import background
 
     background.register(agent.registry)
-    task = {"title": "Reply from Natalia", "prompt": "Check WhatsApp for Natalia's reply", "every_minutes": 30}
-    llm.call("task_create", done_when="it happened", **task)
-    llm.call("task_cancel", id="ID")
-    llm.answer("I've set up a background task.")
-    await say(agent, "wait for Natalia's reply")
+    wait = {"waiting_for": "Reply from Natalia", "prompt": "Check WhatsApp for Natalia's reply", "every_minutes": 30}
+    llm.call("topic_defer", done_when="it happened", **wait)
+    llm.answer("I'll keep an eye out.")
+    await say(agent, "wait for Natalia's reply", new=True)
     card = await chat.next()
-    real = llm.chat
-
-    async def cancel_the_one_started(messages, *a, **kw):
-        reply = await real(messages, *a, **kw)
-        for c in reply.tool_calls:
-            if c.name == "task_cancel":
-                c.arguments = c.arguments.replace("ID", background.load(person(accounts))[0]["id"])
-        return reply
-
-    llm.chat = cancel_the_one_started
     await say(agent, "ok", button=card.buttons[0].id)
     await settle(agent)
     answer = chat.sent[-1]
-    assert answer.text == "I've set up a background task."
-    assert [line.split(" ", 2)[:2] for line in answer.record] == [["Started", "the"], ["Cancelled", "the"]]
-    assert all("Reply from Natalia" in line for line in answer.record)
+    assert answer.text == "I'll keep an eye out."
+    assert [line.split(" ", 2)[:2] for line in answer.record] == [["Set", "topic"]]
+    assert "Reply from Natalia" in answer.record[0]

@@ -24,7 +24,7 @@ import time
 from functools import cache
 from pathlib import Path
 
-from . import dates
+from . import dates, topics
 from .accounts import Account, turn_time
 from .tools import memory
 
@@ -86,14 +86,22 @@ def context_block(account: Account, timezone: str, household: str, now: dt.datet
         f"The next 14 days: {days_ahead(now)}.\n\n"
         "What you remember about them (each fact approved by them):\n"
         f"{memory.for_context(account)}\n\n"
-        "Earlier topics of this conversation aren't shown here: find them with conversation_search.\n"
+        f"{active_topics(account)}"
+        "Other topics of this conversation aren't shown here: find them with conversation_search, or read one by "
+        "its number with topic_read.\n"
         "</context>"
     )
 
 
-def topic_turns(turns: list[dict], since: float) -> list[dict]:
-    """The turns of the topic going on: recorded at or after `since`, the newest that fit the budget."""
-    kept = [t for t in turns if turn_time(t) >= since]
+def active_topics(account: Account) -> str:
+    """The topics that go on without the person in them, so the model knows they exist (SPEC §4.1 "Context")."""
+    lines = topics.context_lines(account)
+    return ("Topics going on in the background:\n" + "\n".join(lines) + "\n\n") if lines else ""
+
+
+def topic_turns(turns: list[dict], topic: int) -> list[dict]:
+    """The turns of topic `topic`, the newest that fit the budget."""
+    kept = [t for t in turns if t.get("topic") == topic]
     while kept and estimate(kept) > TURNS_BUDGET:
         kept = kept[2:]
     return kept
@@ -106,11 +114,11 @@ def build(
     household: str,
     context_tokens: int,
     now: dt.datetime | None = None,
-    topic: tuple[int, float] | None = None,
+    topic: int = 0,
     model: str = "",
 ) -> list[dict]:
-    """`topic`: (first chat item, when) of the topic going on (folding.segment_start): only its turns are shown."""
-    turns = topic_turns(account.load_context()["turns"], topic[1] if topic else 0)
+    """`topic`: the topic the run works in: only its turns are shown (SPEC §4.1)."""
+    turns = topic_turns(account.load_context()["turns"], topic)
     head = [
         {"role": "system", "content": system_prompt(model)},
         {"role": "user", "content": context_block(account, timezone, household, now)},
@@ -160,37 +168,42 @@ def strip(m: dict) -> dict:
     return {k: v for k, v in m.items() if not k.startswith("_")}
 
 
-def record_turn(account: Account, user_text: str, answer: str, record: list[str] | None = None) -> dict:
-    """`record`: what the request changed (SPEC §4 "What a request did"), shown with the answer to later requests."""
+KEEP_TURNS = 30 * 86400  # a quiet topic's turns are kept this long; an active one's (scheduled, waiting) always
+
+
+def record_turn(account: Account, topic: int, user_text: str, answer: str, record: list[str] | None = None) -> dict:
+    """One exchange in topic `topic`. `record`: what the request changed (SPEC §4 "What a request did"), shown with
+    the answer to later requests in the topic."""
     conv = account.load_context()
     now = time.time()
     stamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     conv["turns"].extend(
         [
-            {"role": "user", "content": user_text, "ts": stamp, "t": now},
+            {"role": "user", "content": user_text, "ts": stamp, "t": now, "topic": topic},
             {
                 "role": "assistant",
                 "content": answer,
                 "ts": stamp,
                 "t": now,
+                "topic": topic,
                 **({"record": record[-MAX_RECORD:]} if record else {}),
             },
         ]
     )
+    live = {e["n"] for e in topics.active(account)} | {topic}
+    conv["turns"] = [t for t in conv["turns"] if t.get("topic") in live or turn_time(t) >= now - KEEP_TURNS]
     account.save_context(conv)
     return conv
 
 
-def save_topic(account: Account, start: int, started: float, title: str, text: str) -> None:
-    """The topic starting at chat item `start` has this memory entry now, replacing its earlier one (SPEC §5.4);
-    the turns of earlier topics leave the context."""
+def save_topic(account: Account, n: int, title: str, text: str, started: float = 0) -> None:
+    """Topic n's memory entry, replacing its earlier one (SPEC §5.4)."""
     conv = account.load_context()
-    topics = [e for e in conv["topics"] if e.get("from") != start]
+    entries = [e for e in conv["topics"] if e.get("n") != n]
     text = text.strip()[:TOPIC_CHARS]
     if text:
-        topics.append({"id": f"t{start}", "from": start, "title": title, "text": text, "ts": started})
-    conv["topics"] = topics
-    conv["turns"] = [t for t in conv["turns"] if turn_time(t) >= started]
+        entries.append({"id": f"t{n}", "n": n, "title": title, "text": text, "ts": started or time.time()})
+    conv["topics"] = entries
     account.save_context(conv)
 
 

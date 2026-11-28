@@ -42,8 +42,8 @@ class Decision:
     values: list[str] = field(default_factory=list)
     note: str = ""
     reason: str = ""  # declined | stopped | message (the person wrote instead)
-    card: str = ""  # the card it answered (a background task keeps it: the topic that started it, SPEC §7.4)
-    always: bool = False  # "Always allow for this task" was ticked (SPEC §5.3)
+    card: str = ""  # the card it answered (a topic's schedule keeps the one that set it up, SPEC §4.1)
+    always: bool = False  # "Always allow for this topic" was ticked (SPEC §5.3)
 
 
 @dataclass
@@ -56,8 +56,7 @@ class Pending:
     image: Image | None
     future: asyncio.Future
     why: str = ""  # why this card is shown (the (i)); "" → the kind's own reason (KINDS)
-    always: bool = False  # it offers "Always allow for this task" (an action's card; not one the person fills in)
-    task: dict | None = None  # raised in a background task's check: {"id", "title"}, drawn in the task's box
+    always: bool = False  # it offers "Always allow for this topic" (an action's card; not one the person fills in)
 
 
 class Out(Protocol):
@@ -108,8 +107,8 @@ KINDS = {
     "task": Kind(
         "⏳",
         ("Start", "Edit", "Don't"),
-        "A background task checks on its own later, while you're not using sha, without you there, so it always "
-        "asks first. You can change what it checks, how often and what ends it.",
+        "This topic will check on its own later, while you're not using sha, without you there, so it always asks "
+        "first. You can change what it checks, how often and what ends it.",
     ),
     "memory": Kind(
         "🧠",
@@ -165,10 +164,8 @@ def card(p: Pending) -> dict:
         out["image"] = p.image.to_dict()
     if why := p.why or kind.why:
         out["why"] = why
-    if p.always:  # the tick's words are the app's: "Always allow for this task" (SPEC §5.3)
+    if p.always:  # the tick's words are the app's: "Always allow for this topic" (SPEC §5.3)
         out["always"] = True
-    if p.task:  # a background task's check asks: the app draws the card in that task's box (SPEC §7.4)
-        out["task"] = p.task
     return out
 
 
@@ -212,13 +209,11 @@ class Approvals:
         image: Image | None = None,
         why: str = "",
         always: bool = False,
-        task: dict | None = None,
     ) -> Decision:
         p = Pending(
             secrets.token_hex(4), account, kind, title, fields, image, asyncio.get_running_loop().create_future()
         )
         p.why, p.always = why, always and not KINDS.get(kind, KINDS["action"]).open_inputs
-        p.task = task
         self._pending[account.address] = p
         account.audit(
             {"approval": p.id, "kind": kind, "title": title, "asked": masked(fields, [f.value for f in fields])}

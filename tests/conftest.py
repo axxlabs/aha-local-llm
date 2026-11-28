@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from aha_local import topics
 from aha_local.accounts import Accounts
 from aha_local.agent import Agent
 from aha_local.config import Config
@@ -84,7 +85,7 @@ class FakeLLM:
         pass
 
     async def chat(self, messages, tools=None, max_tokens=4096, who=None, tool_choice="auto", thinking=True) -> Reply:
-        if tool_choice == "none" and "NEW:" in str(messages[-1].get("content")):  # a title: not part of the script
+        if tool_choice == "none" and "TITLE:" in str(messages[-1].get("content")):  # a title: not part of the script
             self.titles.append(messages)
             return Reply(self.topic_reply)
         self.requests.append({"messages": messages, "tools": tools})
@@ -106,25 +107,28 @@ class Chat:
         self.read = 0  # messages already returned by next()
         self.typed: list[bool] = []  # typing on/off, in order
         self.states: list[tuple[str, str]] = []
-        self.titles: list[tuple[int, str]] = []
-        self.waiting: list[int] = []  # answers the topic call said wait for the person
         self.acts: list[str] = []  # what requests did, in the chat as it happened
         self.order: list[tuple[str, str]] = []  # messages, cards and actions, as they reached the chat
         self.tools: list[str] = []  # the tools' labels its Details line shows, as they happened (SPEC §7.4)
         self.events: list[dict] = []  # the records sent live, for the Details line
         self.details = 0  # Details lines
-        self.cuts: list[int] = []  # the folds sha made (a background task's note starts a topic)
 
     async def message(self, account, text, image=None, open="", task=None, record=None, run="") -> None:
         self.order.append(("msg", text))
+        topic = topics.TOPIC.get()  # the topic it was sent in, as the real channel tags it (SPEC §4.1)
         self.sent.append(
             SimpleNamespace(
-                text=text, buttons=[], image=image, card=None, open=open, task=task, record=record or [], run=run
+                text=text,
+                buttons=[],
+                image=image,
+                card=None,
+                open=open,
+                task=task,
+                record=record or [],
+                run=run,
+                topic=topic,
             )
         )
-
-    async def cut(self, account) -> None:
-        self.cuts.append(len(self.sent))  # where it folded: before the next message
 
     async def act(self, account, text) -> None:
         self.acts.append(text)
@@ -137,11 +141,6 @@ class Chat:
         self.events.append(event)
         if event.get("kind") == "tool" and event.get("label") and (not self.tools or self.tools[-1] != event["label"]):
             self.tools.append(event["label"])  # what the Details line says it used, in order
-
-    async def title(self, account, start, text, new=False, waiting=0) -> None:
-        self.titles.append((start, text) if not new else (start, text, "new"))
-        if waiting:
-            self.waiting.append(waiting)
 
     async def text(self, account, text) -> None:
         await self.message(account, text)
@@ -222,15 +221,17 @@ def person(accounts: Accounts):
     return accounts.all()[0]
 
 
-async def say(agent: Agent, text: str = "", button: str | None = None) -> None:
-    """What the channel does with a device's message: a typed text, or a tap on an approval card's button."""
+async def say(agent: Agent, text: str = "", button: str | None = None, new: bool = False) -> None:
+    """What the channel does with a device's message: a typed text, or a tap on an approval card's button. Typed
+    in the newest topic, as if it were open in the app; `new`: with every topic collapsed (SPEC §4.1)."""
     account = person(agent.accounts)
     if button is not None:
         _, approval_id, action = button.split("-")
         decision = {"yes": "approve", "no": "decline"}[action]
         await agent.approval_reply(account, approval_id, decision)
     else:
-        await agent.inbound(account, text)
+        newest = max((e["n"] for e in topics.all_topics(account)), default=0)
+        await agent.inbound(account, text, topic=0 if new else newest)
 
 
 async def settle(agent: Agent, timeout: float = 3) -> None:
